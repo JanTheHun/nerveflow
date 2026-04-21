@@ -1,6 +1,6 @@
 {
   "name": "nerveflow",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Deterministic control layer for AI workflows",
   "license": "MIT",
   "type": "module",
@@ -31,7 +31,11 @@
   "files": [
     "src/",
     "docs/",
-    "examples/",
+    "examples/minimal-web-host/server.js",
+    "examples/minimal-web-host/README.md",
+    "examples/minimal-web-host/workflow.nrv",
+    "examples/minimal-web-host/package.json",
+    "examples/minimal-web-host/public/index.html",
     "LICENSE",
     "README.md",
     "CHANGELOG.md",

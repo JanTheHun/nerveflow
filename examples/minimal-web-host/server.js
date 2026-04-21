@@ -12,6 +12,11 @@ const __dirname = dirname(__filename)
 const exampleScriptPath = resolve(join(__dirname, 'workflow.nrv'))
 
 app.use(express.json())
+app.use(express.static(join(__dirname, 'public')))
+
+app.get('/', (_req, res) => {
+  res.sendFile(join(__dirname, 'public', 'index.html'))
+})
 
 function createHostAdapter() {
   return {

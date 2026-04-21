@@ -144,7 +144,7 @@ Nerve is built by getting the core right first.
 npm install nerveflow
 ```
 
-### 2. Run the example web host
+### 2. Run the example host
 
 ```bash
 cd node_modules/nerveflow/examples/minimal-web-host
@@ -152,7 +152,7 @@ npm install
 node server.js
 ```
 
-Open `http://localhost:3000` and start building workflows.
+Open `http://127.0.0.1:4173` in your browser. Write scripts, run them, inspect state and execution events.
 
 ### 3. Use in your code
 
@@ -161,7 +161,7 @@ import { runNextVScript } from 'nerveflow'
 
 const result = await runNextVScript(`
 state.count = state.count + 1
-output text "count=\${state.count}"
+output text "count=${state.count}"
 `, {
   state: { count: 0 },
 })

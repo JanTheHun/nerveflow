@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nerve - Workflow Runtime</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { 
+      font-family: system-ui, -apple-system, sans-serif; 
+      max-width: 1200px; 
+      margin: 0 auto; 
+      padding: 20px; 
+      background: #fafafa;
+      color: #333;
+    }
+    h1 { margin: 0 0 30px 0; color: #0066cc; }
+    .container { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .panel { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    h2 { margin-top: 0; font-size: 18px; color: #0066cc; }
+    textarea { 
+      width: 100%; 
+      height: 350px; 
+      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; 
+      padding: 12px; 
+      border: 1px solid #ddd; 
+      border-radius: 4px;
+      font-size: 14px;
+      resize: vertical;
+    }
+    .button-group { margin-top: 15px; display: flex; gap: 10px; }
+    button { 
+      padding: 12px 24px; 
+      background: #0066cc; 
+      color: white; 
+      border: none; 
+      border-radius: 4px;
+      cursor: pointer; 
+      font-size: 14px;
+      font-weight: 500;
+    }
+    button:hover { background: #0052a3; }
+    button:active { transform: scale(0.98); }
+    .output { 
+      background: #f9f9f9; 
+      padding: 15px; 
+      border-radius: 4px; 
+      overflow-y: auto; 
+      max-height: 500px; 
+      border: 1px solid #eee;
+      font-size: 13px;
+    }
+    pre { 
+      margin: 0; 
+      white-space: pre-wrap; 
+      word-wrap: break-word;
+      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    }
+    .state-display { background: #e8f4f8; padding: 10px; border-radius: 3px; margin-top: 10px; }
+    .error { color: #d32f2f; }
+    .success { color: #388e3c; }
+    .info { color: #0066cc; }
+    @media (max-width: 800px) {
+      .container { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <h1>🧠 Nerve - Deterministic Workflows</h1>
+  
+  <div class="container">
+    <div class="panel">
+      <h2>Write a Script</h2>
+      <textarea id="script" placeholder="Enter a .nrv script...">state.count = state.count + 1
+output text "Count: ${state.count}"</textarea>
+      <div class="button-group">
+        <button onclick="runScript()">▶ Run</button>
+        <button onclick="loadExample()" style="background: #666;">📚 Example</button>
+      </div>
+    </div>
+    
+    <div class="panel">
+      <h2>Execution Result</h2>
+      <div class="output" id="results">
+        <div class="info">Ready to run...</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function loadExample() {
+      document.getElementById('script').value = `on external "user_message"
+  emit("classify", event.value)
+end
+
+on "classify"
+  state.messages = state.messages || []
+  state.messages += event.value
+  output text "Added message. Total: ${state.messages}"
+end`;
+    }
+
+    async function runScript() {
+      const source = document.getElementById('script').value.trim();
+      const resultsDiv = document.getElementById('results');
+      
+      if (!source) {
+        resultsDiv.innerHTML = '<div class="error">Script is empty. Write something or click "Example".</div>';
+        return;
+      }
+      
+      try {
+        resultsDiv.innerHTML = '<div class="info">Running...</div>';
+        
+        const res = await fetch('/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            source, 
+            state: { count: 0, messages: [] }
+          })
+        });
+        
+        const data = await res.json();
+        
+        if (data.ok) {
+          const events = (data.runtimeEvents || [])
+            .filter(e => e.kind === 'output')
+            .map(e => e.payload?.text || JSON.stringify(e.payload))
+            .join('\n');
+            
+          resultsDiv.innerHTML = `
+            <div class="success">✓ Success</div>
+            ${events ? `<div><strong>Output:</strong><pre>${escapeHtml(events)}</pre></div>` : ''}
+            <div class="state-display">
+              <strong>State:</strong>
+              <pre>${escapeHtml(JSON.stringify(data.state, null, 2))}</pre>
+            </div>
+            <details style="margin-top: 10px;">
+              <summary>Full Response</summary>
+              <pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre>
+            </details>
+          `;
+        } else {
+          resultsDiv.innerHTML = `<div class="error">Error: ${escapeHtml(data.error)}</div>`;
+        }
+      } catch (err) {
+        resultsDiv.innerHTML = `<div class="error">Error: ${escapeHtml(err.message)}</div>`;
+      }
+    }
+    
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+    
+    // Load example on page load
+    window.addEventListener('load', () => {
+      loadExample();
+    });
+  </script>
+</body>
+</html>

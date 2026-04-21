@@ -2,7 +2,19 @@
 
 All notable changes to this project are documented in this file.
 
-## [1.0.0] - 2026-04-21
+## [0.1.1] - 2026-04-21
+
+### Added
+
+- Interactive browser UI for `examples/minimal-web-host` at `public/index.html`.
+
+### Changed
+
+- Minimal web host now serves static assets from an absolute `public/` path.
+- Minimal web host now serves `GET /` with `index.html`.
+- README getting-started instructions updated to match the host behavior and port `4173`.
+
+## [0.1.0] - 2026-04-21
 
 ### Added
 

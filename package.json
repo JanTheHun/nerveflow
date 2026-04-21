@@ -1,0 +1,40 @@
+{
+  "name": "nerveflow",
+  "version": "0.1.0",
+  "description": "Deterministic control layer for AI workflows",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "homepage": "https://github.com/janthehun/nerveflow",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/janthehun/nerveflow.git"
+  },
+  "keywords": [
+    "nextv",
+    "nerveflow",
+    "workflow",
+    "deterministic",
+    "event-driven",
+    "state-machine",
+    "runtime"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "src/",
+    "docs/",
+    "examples/",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md",
+    ".npmignore"
+  ]
+}

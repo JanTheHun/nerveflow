@@ -1,0 +1,203 @@
+# Nerve
+
+**Deterministic control for AI workflows.**
+
+Nerve defines how your system actually runs — with explicit control flow, visible state, and predictable behavior.
+
+Instead of hiding logic inside prompts or agent loops, Nerve makes routing, state, and side effects explicit. Your workflow is a script. Every step is inspectable. Every decision has a place.
+
+---
+
+## What Nerve does
+
+- deterministic execution of workflows
+- explicit event routing (`on`, `emit`)
+- persistent, inspectable state (`state.*`)
+- structured orchestration of agents and tools
+
+## What Nerve does *not* do
+
+- manage databases or persistence layers
+- define how APIs, files, or images are transported
+- hide behavior inside autonomous agent loops
+
+Those responsibilities belong to your **host environment**.
+Nerve stays focused on control.
+
+---
+
+## Hello Nerve
+
+```wfs
+on external "user_message"
+  state.count = state.count + 1
+  print "(${state.count}) You said: ${event.value}"
+end
+```
+
+A workflow is just a script that runs on every event.
+
+---
+
+## Example: simple router
+
+```wfs
+on external "user_message"
+  emit("triage", event.value)
+end
+
+on "triage"
+  result = agent("classifier", event.value, format="json")
+
+  if result.intent == "chat"
+    emit("chat_flow", event.value)
+  else if result.intent == "search"
+    emit("search_flow", event.value)
+  else
+    emit("fallback", event.value)
+  end
+end
+
+on "chat_flow"
+  reply = agent("chat", event.value)
+  emit("user_output", reply)
+end
+
+on "search_flow"
+  reply = agent("searcher", event.value)
+  emit("user_output", reply)
+end
+
+on "fallback"
+  emit("user_output", "I didn't understand that.")
+end
+
+on "user_output"
+  output text event.value
+end
+```
+
+Routing is explicit.
+State is explicit.
+Nothing is hidden inside prompts.
+
+---
+
+## Runtime vs Host
+
+**Nerve runtime**
+
+- deterministic execution
+- event routing
+- explicit state (`state.*`)
+- agent / tool orchestration
+
+**Host (your app)**
+
+- persistence (files, DB, etc.)
+- APIs and integrations
+- input formats (text, images, files)
+- deployment (CLI, web, backend)
+
+---
+
+## Philosophy & Scope
+
+### What Nerve focuses on
+
+Nerve is intentionally focused on **control flow and execution semantics**.
+
+It defines:
+
+- how workflows run
+- how state evolves
+- how decisions are routed
+
+Everything else — integrations, persistence layers, external APIs, multimodal inputs — belongs to the host environment.
+
+### What's evolving around it
+
+Additional layers are being built around the core:
+
+- host integrations (APIs, databases, external systems)
+- persistence adapters (file, DB, distributed state)
+- testing and evaluation tooling for workflows
+
+These evolve **without changing how workflows are written**.
+
+Because workflows are deterministic and state is explicit, Nerve is designed to support reproducible testing and evaluation. Tooling around this is under active development.
+
+### Why this approach
+
+If the core is right, everything else can grow around it.
+If the core is wrong, features won't fix it.
+
+Nerve is built by getting the core right first.
+
+---
+
+## Getting started
+
+### 1. Install
+
+```bash
+npm install nerveflow
+```
+
+### 2. Run the example web host
+
+```bash
+cd node_modules/nerveflow/examples/minimal-web-host
+npm install
+node server.js
+```
+
+Open `http://localhost:3000` and start building workflows.
+
+### 3. Use in your code
+
+```js
+import { runNextVScript } from 'nerveflow'
+
+const result = await runNextVScript(`
+state.count = state.count + 1
+output text "count=\${state.count}"
+`, {
+  state: { count: 0 },
+})
+
+console.log(result.state.count)
+```
+
+---
+
+## Learn more
+
+- [Full documentation](./docs/)
+- [Language reference](./docs/03-language-reference.md)
+- [Host integration guide](./docs/04-host-integration.md)
+- [Example workflows](./docs/examples/)
+
+---
+
+## Run tests
+
+```bash
+npm test
+```
+
+---
+
+## Status
+
+Nerve is a stable, early-stage project focused on the core runtime and workflow model.
+
+The execution model, state handling, and DSL are production-ready.
+Integrations, persistence adapters, and testing tools are evolving around it.
+
+---
+
+## License
+
+MIT
+

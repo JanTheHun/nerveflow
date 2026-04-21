@@ -1,0 +1,14 @@
+state.last_message = ""
+state.total_messages = state.total_messages + 1
+
+on external "user_message"
+  state.last_message = event.value
+  state.now = tool("get_time")
+  output json {
+    status: "ready",
+    action: "echo",
+    message: state.last_message,
+    total: state.total_messages,
+    timestamp: state.now,
+  }
+end

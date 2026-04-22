@@ -43,7 +43,7 @@ The reference preview host supports transport surface toggles via environment va
 
 The studio preview host supports HTTP and SSE surfaces. WebSocket transport is provided by the dedicated `ws-simple-host` example.
 
-Example command payload (for websocket hosts):
+Example command payload (for WebSocket hosts):
 
 ```json
 {
@@ -52,7 +52,7 @@ Example command payload (for websocket hosts):
 }
 ```
 
-Supported websocket command types map directly to protocol v1 commands:
+Supported WebSocket command types map directly to protocol v1 commands:
 
 - `start`
 - `stop`
@@ -109,6 +109,6 @@ Workspace tool policy is loaded from host config and applied before any tool exe
 
 See `examples/minimal-web-host/server.js`.
 
-For a studio-independent websocket host example with a single-file browser UI, see `examples/ws-simple-host/server.js` and `examples/ws-simple-host/public/index.html`.
+For a studio-independent WebSocket host example with a single-file browser UI, see `examples/ws-simple-host/server.js` and `examples/ws-simple-host/public/index.html`.
 
 Host-side shared modules are documented in `src/host_core/README.md`.

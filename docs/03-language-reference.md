@@ -160,7 +160,8 @@ Host-owned responsibilities include:
 
 This reference is intentionally implementation-aligned.
 
-For canonical wording and evolution policy, align with:
+For canonical behavior details, align this document with:
 
-- DSL surface contract in this workspace (`docs/dsl-surface-contract-v1.md`)
-- execution semantics reference (`docs/nextv-execution-model.md`)
+- [02-getting-started.md](02-getting-started.md)
+- [04-host-integration.md](04-host-integration.md)
+- runtime tests under [../tests/](../tests/) for executable semantics

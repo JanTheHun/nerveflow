@@ -1,32 +1,32 @@
-# Nerve
+# Nerveflow
 
 **Deterministic control for AI workflows.**
 
-Nerve defines how your system actually runs — with explicit control flow, visible state, and predictable behavior.
+Nerveflow defines how your system actually runs, with explicit control flow, visible state, and predictable behavior.
 
-Instead of hiding logic inside prompts or agent loops, Nerve makes routing, state, and side effects explicit. Your workflow is a script. Every step is inspectable. Every decision has a place.
+Instead of hiding logic inside prompts or agent loops, Nerveflow makes routing, state, and side effects explicit. Your workflow is a script. Every step is inspectable. Every decision has a place.
 
 ---
 
-## What Nerve does
+## What Nerveflow does
 
 - deterministic execution of workflows
 - explicit event routing (`on`, `emit`)
 - persistent, inspectable state (`state.*`)
 - structured orchestration of agents and tools
 
-## What Nerve does *not* do
+## What Nerveflow does *not* do
 
 - manage databases or persistence layers
 - define how APIs, files, or images are transported
 - hide behavior inside autonomous agent loops
 
 Those responsibilities belong to your **host environment**.
-Nerve stays focused on control.
+Nerveflow stays focused on control.
 
 ---
 
-## Hello Nerve
+## Hello Nerveflow
 
 ```wfs
 on external "user_message"
@@ -85,7 +85,7 @@ Nothing is hidden inside prompts.
 
 ## Runtime vs Host
 
-**Nerve runtime**
+**Nerveflow runtime**
 
 - deterministic execution
 - event routing
@@ -103,9 +103,9 @@ Nothing is hidden inside prompts.
 
 ## Philosophy & Scope
 
-### What Nerve focuses on
+### What Nerveflow focuses on
 
-Nerve is intentionally focused on **control flow and execution semantics**.
+Nerveflow is intentionally focused on **control flow and execution semantics**.
 
 It defines:
 
@@ -125,14 +125,14 @@ Additional layers are being built around the core:
 
 These evolve **without changing how workflows are written**.
 
-Because workflows are deterministic and state is explicit, Nerve is designed to support reproducible testing and evaluation. Tooling around this is under active development.
+Because workflows are deterministic and state is explicit, Nerveflow is designed to support reproducible testing and evaluation. Tooling around this is under active development.
 
 ### Why this approach
 
 If the core is right, everything else can grow around it.
 If the core is wrong, features won't fix it.
 
-Nerve is built by getting the core right first.
+Nerveflow is built by getting the core right first.
 
 ---
 
@@ -190,7 +190,7 @@ npm test
 
 ## Status
 
-Nerve is a stable, early-stage project focused on the core runtime and workflow model.
+Nerveflow is a stable, early-stage project focused on the core runtime and workflow model.
 
 The execution model, state handling, and DSL are production-ready.
 Integrations, persistence adapters, and testing tools are evolving around it.

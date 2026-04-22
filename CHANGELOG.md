@@ -19,7 +19,7 @@ All notable changes to this project are documented in this file.
 	- `runtime_session.js` for host adapter orchestration (`callAgent`, `callTool`, `callScript`, operator resolution)
 	- `event_bus.js` for transport-agnostic runtime event fanout/subscription.
 - New supported npm host embedding subpath exports: `nerveflow/host_core` and `nerveflow/host_core/protocol`.
-- New studio-independent WebSocket host example under `examples/ws-simple-host/` with a single-file HTML+JS UI (`public/index.html`) and standalone server wiring to host_core.
+- New studio-independent WebSocket host example under `examples/ws-simple-host/` with a single-file HTML+JS UI (`public/index.html`) and standalone server wiring to `host_core`.
 
 ### Changed
 

@@ -1,0 +1,6 @@
+state.last = ""
+
+on external "user_message"
+  state.last = event.value
+  output text "echo=${state.last}"
+end

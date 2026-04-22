@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ws-simple-host</title>
+</head>
+<body>
+  <h1>ws-simple-host</h1>
+
+  <div>
+    <label>Workspace dir (repo-relative):
+      <input id="workspaceDir" value="examples/ws-simple-host" />
+    </label>
+  </div>
+
+  <div>
+    <label>Entrypoint (optional):
+      <input id="entrypointPath" placeholder="workflow.nrv" />
+    </label>
+  </div>
+
+  <div>
+    <button id="startBtn">start</button>
+    <button id="stopBtn">stop</button>
+    <button id="snapshotBtn">snapshot</button>
+  </div>
+
+  <div>
+    <label>Message:
+      <input id="messageInput" value="hello websocket" />
+    </label>
+    <button id="sendBtn">send user_message</button>
+  </div>
+
+  <hr />
+
+  <div>
+    <strong>Command JSON helper</strong>
+  </div>
+  <div>
+    <label>Command type:
+      <select id="commandType">
+        <option value="start">start</option>
+        <option value="snapshot">snapshot</option>
+        <option value="stop">stop</option>
+        <option value="enqueue_event">enqueue_event</option>
+      </select>
+    </label>
+    <button id="copyCommandBtn">copy command JSON</button>
+  </div>
+  <pre id="commandPreview"></pre>
+
+  <p id="status">status: connecting...</p>
+  <pre id="log" aria-live="polite"></pre>
+
+  <script>
+    (() => {
+      const statusEl = document.getElementById('status')
+      const logEl = document.getElementById('log')
+      const workspaceDirEl = document.getElementById('workspaceDir')
+      const entrypointPathEl = document.getElementById('entrypointPath')
+      const messageInputEl = document.getElementById('messageInput')
+      const startBtn = document.getElementById('startBtn')
+      const stopBtn = document.getElementById('stopBtn')
+      const snapshotBtn = document.getElementById('snapshotBtn')
+      const sendBtn = document.getElementById('sendBtn')
+      const commandTypeEl = document.getElementById('commandType')
+      const copyCommandBtn = document.getElementById('copyCommandBtn')
+      const commandPreviewEl = document.getElementById('commandPreview')
+
+      let ws = null
+      let requestCounter = 0
+
+      function nextRequestId() {
+        requestCounter += 1
+        return `req-${requestCounter}`
+      }
+
+      function appendLog(value) {
+        const line = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+        logEl.textContent += `${line}\n`
+        logEl.scrollTop = logEl.scrollHeight
+      }
+
+      function setStatus(text) {
+        statusEl.textContent = `status: ${text}`
+      }
+
+      function sendCommand(type, payload) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          appendLog('socket is not open')
+          return
+        }
+
+        const envelope = {
+          type,
+          requestId: nextRequestId(),
+          payload,
+        }
+
+        ws.send(JSON.stringify(envelope))
+      }
+
+      function buildCommandEnvelopeForType(commandType) {
+        const requestId = nextRequestId()
+        const workspaceDir = String(workspaceDirEl.value || '').trim()
+        const entrypointPath = String(entrypointPathEl.value || '').trim()
+        const message = String(messageInputEl.value || '')
+
+        if (commandType === 'start') {
+          const payload = {}
+          if (workspaceDir) payload.workspaceDir = workspaceDir
+          if (entrypointPath) payload.entrypointPath = entrypointPath
+          return { type: 'start', requestId, payload }
+        }
+
+        if (commandType === 'enqueue_event') {
+          return {
+            type: 'enqueue_event',
+            requestId,
+            payload: {
+              eventType: 'user_message',
+              value: message,
+              source: 'browser',
+            },
+          }
+        }
+
+        if (commandType === 'snapshot') {
+          return { type: 'snapshot', requestId, payload: {} }
+        }
+
+        return { type: 'stop', requestId, payload: {} }
+      }
+
+      async function copyCommandEnvelope() {
+        const commandType = String(commandTypeEl.value || 'snapshot').trim()
+        const envelope = buildCommandEnvelopeForType(commandType)
+        const text = JSON.stringify(envelope, null, 2)
+        commandPreviewEl.textContent = text
+
+        try {
+          await navigator.clipboard.writeText(text)
+          appendLog(`copied ${commandType} envelope to clipboard`)
+        } catch {
+          appendLog('clipboard copy failed; use preview text below')
+        }
+      }
+
+      function connect() {
+        const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+        const url = `${protocol}://${window.location.host}/api/nextv/ws`
+        ws = new WebSocket(url)
+
+        ws.addEventListener('open', () => {
+          setStatus(`connected (${url})`)
+          appendLog('connected')
+        })
+
+        ws.addEventListener('message', (event) => {
+          try {
+            const parsed = JSON.parse(String(event.data || ''))
+            appendLog(parsed)
+          } catch {
+            appendLog(String(event.data || ''))
+          }
+        })
+
+        ws.addEventListener('close', () => {
+          setStatus('disconnected')
+          appendLog('disconnected')
+        })
+
+        ws.addEventListener('error', (err) => {
+          setStatus('error')
+          appendLog(`socket error: ${String(err.message || err)}`)
+        })
+      }
+
+      startBtn.addEventListener('click', () => {
+        const workspaceDir = String(workspaceDirEl.value || '').trim()
+        const entrypointPath = String(entrypointPathEl.value || '').trim()
+        const payload = {}
+        if (workspaceDir) payload.workspaceDir = workspaceDir
+        if (entrypointPath) payload.entrypointPath = entrypointPath
+        sendCommand('start', payload)
+      })
+
+      stopBtn.addEventListener('click', () => {
+        sendCommand('stop', {})
+      })
+
+      snapshotBtn.addEventListener('click', () => {
+        sendCommand('snapshot', {})
+      })
+
+      sendBtn.addEventListener('click', () => {
+        const message = String(messageInputEl.value || '')
+        sendCommand('enqueue_event', {
+          eventType: 'user_message',
+          value: message,
+          source: 'browser',
+        })
+      })
+
+      copyCommandBtn.addEventListener('click', () => {
+        copyCommandEnvelope()
+      })
+
+      connect()
+    })()
+  </script>
+</body>
+</html>

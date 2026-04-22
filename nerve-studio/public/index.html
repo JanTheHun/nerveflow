@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>nerve-studio</title>
+  <link rel="stylesheet" href="styles.css?v=20260419b">
+  <script src="/htmx.js"></script>
+</head>
+<body class="mode-nextv">
+
+  <header>
+    <span class="brand">nerve-studio</span>
+    <div class="header-controls">
+      <div id="chat-header-controls" class="chat-header-controls">
+        <span class="sep">|</span>
+        <label>model
+          <input id="model-input" type="text" autocomplete="off" spellcheck="false" />
+        </label>
+        <button id="model-set-btn" onclick="setModel()">set</button>
+        <span class="sep">|</span>
+        <button
+          id="clear-chat-btn"
+          hx-post="/api/chat/clear"
+          hx-trigger="click"
+          hx-swap="none"
+          hx-on::after-request="onChatCleared(event)"
+        >clear chat</button>
+      </div>
+      <details id="settings-menu" class="settings-menu">
+        <summary id="settings-btn" class="settings-btn" title="settings" aria-label="settings">⚙</summary>
+        <div class="settings-popover" role="menu" aria-label="settings">
+          <div class="settings-group-label">mode</div>
+          <button id="chat-mode-btn" type="button" class="settings-item" role="menuitem" onclick="setChatMode()">chat mode</button>
+          <button id="script-mode-btn" type="button" class="settings-item" role="menuitem" onclick="setScriptMode()">script mode</button>
+          <button id="nextv-mode-btn" type="button" class="settings-item" role="menuitem" onclick="setNextVMode()">nextv mode</button>
+        </div>
+      </details>
+    </div>
+  </header>
+
+  <main id="workspace" aria-live="polite">
+    <section id="script-panel" aria-label="Script panel">
+      <div class="script-controls panel-controls">
+        <div class="footer-row script-row">
+          <span class="row-label">script</span>
+          <input id="script-path" type="text" placeholder="path/to/script.nrv (or .wfs)" autocomplete="off" spellcheck="false" />
+          <label class="check-label">
+            <input type="checkbox" id="script-autoallow"> auto-allow
+          </label>
+          <button type="button" onclick="loadScriptPreview()">load</button>
+          <button type="button" onclick="saveScriptBuffer()">save</button>
+          <button onclick="runScript()">run</button>
+          <button id="cancel-script-btn" type="button" onclick="cancelScriptRun()" disabled>cancel run</button>
+        </div>
+        <div class="footer-row script-input-row">
+          <span class="row-label">inputs</span>
+          <div id="script-inputs"></div>
+          <button type="button" onclick="addScriptInputRow()">add input</button>
+        </div>
+        <div class="footer-row nextv-config-row">
+          <input id="nextv-workspace-dir" type="text" placeholder="workspace folder (optional)" autocomplete="off" spellcheck="false" />
+          <button type="button" onclick="openNextVWorkspace()">open</button>
+          <span class="row-label">entrypoint</span>
+          <input id="nextv-entrypoint" type="text" placeholder="path/to/main.nrv (or .wfs)" autocomplete="off" spellcheck="false" />
+          <button type="button" id="nextv-start-btn" onclick="startNextVRuntime()">start</button>
+          <button type="button" id="nextv-stop-btn" onclick="stopNextVRuntime()" disabled>stop</button>
+          <button id="toggle-user-io-btn" type="button" onclick="toggleUserIOPanel()" aria-pressed="false">input</button>
+        </div>
+      </div>
+      <div id="script-section" class="panel-section">
+        <div class="panel-header nextv-primary-header">
+          <span id="script-header-title">script</span>
+          <div id="nextv-primary-tabs" class="panel-tabs" role="tablist" aria-label="nextv primary views">
+            <button id="nextv-view-editor" type="button" class="panel-tab" role="tab" aria-selected="true" onclick="setNextVPrimaryView('editor')">editor</button>
+            <button id="nextv-view-graph" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="setNextVPrimaryView('graph')">graph</button>
+          </div>
+          <div class="nextv-view-actions">
+            <button id="toggle-nextv-dev-console-btn" type="button" class="panel-action" onclick="toggleNextVDevConsole()" aria-pressed="true">hide console</button>
+            <button id="toggle-nextv-state-diff-btn" type="button" class="panel-action" onclick="toggleNextVStateDiff()" aria-pressed="false">show state</button>
+          </div>
+        </div>
+        <div id="file-manager-shell" class="file-manager-shell nextv-primary-view">
+          <div id="file-tree-pane" class="file-tree-pane">
+            <div class="panel-subheader">
+              <button type="button" id="nextv-files-refresh-btn" class="panel-action panel-icon-btn" onclick="refreshNextVWorkspaceTree()" title="refresh workspace files" aria-label="refresh workspace files">↻</button>
+              <span id="nextv-files-label">Workspace</span>
+              <button type="button" id="toggle-nextv-files-btn" class="panel-action panel-icon-btn" onclick="toggleNextVFileDrawer()" title="collapse file drawer" aria-label="collapse file drawer">◂</button>
+            </div>
+            <div id="file-tree" class="panel-scroll file-tree"></div>
+          </div>
+          <!-- Context menu for file tree operations -->
+          <div id="filetree-ctx-menu" class="filetree-ctx-menu" style="display:none" role="menu" aria-label="File tree actions">
+            <button type="button" class="filetree-ctx-item" id="ctx-new-file" onclick="ctxMenuNewFile()">New File</button>
+            <button type="button" class="filetree-ctx-item" id="ctx-new-folder" onclick="ctxMenuNewFolder()">New Folder</button>
+            <div class="filetree-ctx-sep"></div>
+            <button type="button" class="filetree-ctx-item filetree-ctx-danger" id="ctx-delete" onclick="ctxMenuDelete()">Delete</button>
+          </div>
+          <div id="filetree-delete-confirm" class="filetree-delete-modal" style="display:none" role="dialog" aria-modal="true" aria-labelledby="filetree-delete-title" onclick="onDeleteConfirmCancel()">
+            <div class="filetree-delete-modal-card" onclick="event.stopPropagation()">
+              <div id="filetree-delete-title" class="filetree-delete-modal-title">Confirm Delete</div>
+              <div id="filetree-delete-desc" class="filetree-delete-modal-desc">Delete this item?</div>
+              <div class="filetree-delete-modal-timer">Auto-cancel in <span id="filetree-delete-timer">3.0</span>s</div>
+              <div class="confirm-buttons">
+                <button type="button" class="allow-btn" onclick="onDeleteConfirmApprove()">Confirm Delete</button>
+                <button type="button" class="deny-btn" onclick="onDeleteConfirmCancel()">Cancel</button>
+              </div>
+            </div>
+          </div>
+          <div id="file-tree-splitter" class="panel-hsplitter" role="separator" aria-label="Resize file tree and editor panes"></div>
+          <div id="script-editor-pane" class="file-editor-pane">
+            <div id="open-file-tabs-row" class="panel-subheader open-file-tabs-row">
+              <button type="button" id="nextv-open-drawer-btn" class="panel-icon-btn" onclick="toggleNextVFileDrawer()" title="show workspace drawer" aria-label="show workspace drawer">▸</button>
+              <div id="open-file-tabs" class="open-file-tabs" aria-label="open file tabs"></div>
+              <label class="check-label nextv-autosave-toggle">
+                <input type="checkbox" id="nextv-autosave"> auto-save
+              </label>
+              <button type="button" class="panel-action" onclick="saveAllNextVFiles()">save all</button>
+              <button type="button" class="panel-action" onclick="saveNextVEntrypoint()">save</button>
+            </div>
+            <div id="script-view-shell" class="panel-editor-shell">
+              <div id="script-line-gutter" class="script-editor-gutter" aria-hidden="true"></div>
+              <div id="script-view-mirror" class="script-editor-mirror" aria-hidden="true"></div>
+              <textarea
+                id="script-view"
+                class="panel-editor panel-editor-overlay"
+                placeholder="# Load a script file, edit here, then click run"
+                spellcheck="false"
+              ></textarea>
+            </div>
+          </div>
+        </div>
+        <div id="nextv-graph-shell" class="panel-scroll nextv-graph-shell nextv-primary-view" role="tabpanel" aria-labelledby="nextv-view-graph">
+          <div id="nextv-graph-output" class="panel-scroll"></div>
+          <div id="nextv-state-diff-splitter" class="panel-hsplitter" role="separator" aria-label="Resize graph and state diff panels"></div>
+          <div id="nextv-state-diff-panel" class="nextv-state-diff-panel">
+            <div class="nextv-state-diff-header">
+              <span class="nextv-state-diff-title">state diff</span>
+              <button type="button" class="panel-action" onclick="clearNextVStateDiff()">clear</button>
+              <button type="button" class="panel-icon-btn" onclick="toggleNextVStateDiff()" title="close state diff" aria-label="close state diff">✕</button>
+            </div>
+            <div id="nextv-state-diff-feed" class="nextv-state-diff-feed panel-scroll"></div>
+          </div>
+        </div>
+      </div>
+      <div id="script-vsplit-1" class="panel-vsplitter" role="separator" aria-label="Resize script and logs panes"></div>
+      <div id="logs-section" class="panel-section">
+        <div class="panel-header"><span id="logs-header-title">script logs</span> <span id="logs-header-badge" class="panel-badge badge-logs">events</span> <button type="button" class="panel-action" onclick="clearScriptLogsPanel()">clear</button></div>
+        <div id="script-logs" class="panel-scroll"></div>
+      </div>
+      <div id="script-vsplit-2" class="panel-vsplitter" role="separator" aria-label="Resize logs and output panes"></div>
+      <div id="output-section" class="panel-section">
+        <div class="panel-header">
+          <span id="output-header-title">script output</span>
+          <div id="nextv-dev-tabs" class="panel-tabs" role="tablist" aria-label="nextv dev console tabs">
+            <button id="nextv-tab-events" type="button" class="panel-tab" role="tab" aria-selected="true" onclick="setNextVDevTab('events')">events</button>
+            <button id="nextv-tab-trace" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="setNextVDevTab('trace')">trace</button>
+            <button id="nextv-tab-state" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="setNextVDevTab('state')">state</button>
+            <button id="nextv-tab-console" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="setNextVDevTab('console')">console</button>
+          </div>
+          <div id="nextv-dev-options" class="nextv-dev-options">
+            <label class="check-label">
+              <input type="checkbox" id="nextv-trace-enabled" checked> trace
+            </label>
+            <label class="check-label">
+              <input type="checkbox" id="nextv-trace-state"> state snapshots
+            </label>
+          </div>
+          <span id="output-header-badge" class="panel-badge badge-output">text</span>
+          <button type="button" class="panel-action" onclick="clearOutputPanel()">clear</button>
+        </div>
+        <div id="nextv-events-output" class="panel-scroll" role="tabpanel" aria-labelledby="nextv-tab-events"></div>
+        <div id="trace-shell" class="trace-shell panel-scroll" role="tabpanel" aria-labelledby="nextv-tab-trace">
+          <div id="trace-list" class="panel-scroll trace-list"></div>
+          <div id="trace-detail" class="panel-scroll trace-detail"></div>
+        </div>
+        <div id="script-output" class="panel-scroll" role="tabpanel" aria-labelledby="nextv-tab-state"></div>
+        <div id="nextv-console-output" class="panel-scroll" role="tabpanel" aria-labelledby="nextv-tab-console"></div>
+      </div>
+    </section>
+    <div id="panel-splitter" aria-label="Resize panels" role="separator"></div>
+    <section id="conversation-panel" aria-label="Conversation panel">
+      <div class="panel-header">conversation</div>
+      <div id="transcript"></div>
+      <div class="conversation-controls panel-controls">
+        <form id="chat-form" onsubmit="handleSubmit(event)">
+          <textarea
+            id="prompt-input"
+            placeholder="Enter prompt… (Shift+Enter for newline)"
+            rows="3"
+            autofocus
+            autocomplete="off"
+            spellcheck="false"
+          ></textarea>
+          <button type="submit" id="send-btn">send</button>
+        </form>
+
+        <div class="footer-row images-row">
+          <span class="row-label">images</span>
+          <label class="file-label">
+            attach
+            <input type="file" id="img-upload" accept="image/png,image/jpeg,image/webp,image/gif" onchange="uploadImage(this)" hidden>
+          </label>
+          <button
+            hx-post="/api/images/clear"
+            hx-trigger="click"
+            hx-swap="none"
+            hx-on::after-request="onImagesCleared(event)"
+          >clear</button>
+          <span id="image-count" class="dim">0 attached</span>
+        </div>
+      </div>
+    </section>
+    <section id="script-editor-panel" aria-label="User I/O panel">
+      <div class="panel-header user-io-panel-header">
+        <span>I/O</span>
+        <button type="button" class="panel-icon-btn" style="margin-left:auto" onclick="setUserIOPanelOpen(false)" title="close panel" aria-label="close panel">✕</button>
+      </div>
+      <div id="user-input-section" class="panel-section user-input-section">
+        <div class="panel-header">
+          <span>input</span>
+        </div>
+        <div id="nextv-input-external-pane" class="nextv-input-pane" role="tabpanel">
+          <div class="panel-controls">
+            <div class="footer-row nextv-external-row">
+              <span class="row-label">event</span>
+              <input id="nextv-event-value" type="text" placeholder="payload value" autocomplete="off" spellcheck="false" />
+              <input id="nextv-event-type" type="text" placeholder="event type (optional)" autocomplete="off" spellcheck="false" />
+              <input id="nextv-event-source" type="text" placeholder="source (optional)" autocomplete="off" spellcheck="false" />
+              <button type="button" onclick="sendNextVEvent()">enqueue</button>
+              <button type="button" onclick="refreshNextVSnapshot()">snapshot</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="user-panel-splitter" class="panel-vsplitter" role="separator" aria-label="Split user input and output panes"></div>
+      <div id="user-output-section" class="panel-section">
+        <div class="panel-header">
+          <span>user output</span>
+          <span class="panel-badge badge-output">text</span>
+          <button type="button" class="panel-action" onclick="clearUserOutputPanel()">clear</button>
+        </div>
+        <div id="user-output" class="panel-scroll"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="dagre.min.js"></script>
+  <script src="app.js?v=20260419b"></script>
+</body>
+</html>

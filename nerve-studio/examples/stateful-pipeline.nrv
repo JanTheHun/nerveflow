@@ -1,0 +1,12 @@
+state.total = state.total + 1
+state.last = ""
+
+on external "item"
+  state.last = event.value
+  output json {
+    status: "ready",
+    action: "processed",
+    total: state.total,
+    last: state.last,
+  }
+end

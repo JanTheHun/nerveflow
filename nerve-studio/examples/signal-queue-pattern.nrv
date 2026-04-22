@@ -1,0 +1,18 @@
+state.received = 0
+state.completed = 0
+
+on external "start"
+  emit("work", "a")
+  emit("work", "b")
+  emit("work", "c")
+end
+
+on "work"
+  state.received = state.received + 1
+  emit("done", event.value)
+end
+
+on "done"
+  state.completed = state.completed + 1
+  output text "done=${state.completed}"
+end

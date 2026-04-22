@@ -48,10 +48,10 @@ const result = await runNextVScript(source, {
   state: { count: 0 },
   event: { type: 'user_message', value: 'hello' },
   hostAdapter: {
-    async callTool(name, args) {
+    async callTool({ name, args }) {
       return { name, args }
     },
-    async callAgent(prompt) {
+    async callAgent({ prompt }) {
       return JSON.stringify({ status: 'ready', prompt })
     },
   },

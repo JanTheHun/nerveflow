@@ -81,6 +81,12 @@ Recognized integration calls:
 - `script(path, ...)`
 - `operator(id, input?)`
 
+Tool policy behavior:
+
+- tool permissions are host-enforced, not DSL-enforced
+- when workspace tool policy is configured, alias resolution happens before allow-list checks
+- denied tools raise host policy errors; allowed but unimplemented tools raise host unavailable errors
+
 IR lowering note:
 
 - `tool(...) -> tool_call`

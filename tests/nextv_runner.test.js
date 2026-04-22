@@ -114,6 +114,9 @@ test('runner reports errors and halts by default', async () => {
     assert.equal(errors.length, 1)
     assert.equal(snapshot.running, false)
     assert.equal(snapshot.executionCount, 0)
+    assert.equal(snapshot.failedExecutionCount, 1)
+    assert.equal(typeof snapshot.lastError?.message, 'string')
+    assert.match(snapshot.lastError?.message ?? '', /missing/i)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -148,6 +151,8 @@ test('runner can continue after errors when haltOnError=false', async () => {
     assert.equal(errors.length, 1)
     assert.equal(snapshot.state.counter, 1)
     assert.equal(snapshot.executionCount, 1)
+    assert.equal(snapshot.failedExecutionCount, 1)
+    assert.equal(snapshot.lastError, null)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

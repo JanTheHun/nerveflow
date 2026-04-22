@@ -829,6 +829,24 @@ test('direct callTool hook overrides hostAdapter fallback', async () => {
   assert.equal(result.state.now, 'direct-hook')
 })
 
+test('tool() surfaces hostAdapter policy errors', async () => {
+  await assert.rejects(
+    () => runNextVScript('state.now = tool("blocked_tool")', {
+      hostAdapter: {
+        callTool: async () => {
+          throw new Error('Tool "blocked_tool" is not allowed by workspace tools policy.')
+        },
+      },
+      state: {},
+    }),
+    (err) => {
+      assert.equal(err instanceof Error, true)
+      assert.match(err.message, /not allowed by workspace tools policy/)
+      return true
+    },
+  )
+})
+
 test('agent() delegates to runtime agent hook', async () => {
   const calls = []
   const result = await runNextVScript('summary = agent("research", "summarize this")', {

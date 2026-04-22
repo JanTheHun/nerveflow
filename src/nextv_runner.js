@@ -40,7 +40,9 @@ export class NextVEventRunner {
     this.idleWaiters = []
     this.pendingEvents = 0
     this.executionCount = 0
+    this.failedExecutionCount = 0
     this.lastExecution = null
+    this.lastError = null
     this.initPending = this.emitInitOnStart
   }
 
@@ -102,10 +104,12 @@ export class NextVEventRunner {
       queueLength: this.queue.length,
       pendingEvents: this.pendingEvents,
       executionCount: this.executionCount,
+      failedExecutionCount: this.failedExecutionCount,
       statePath: this.statePath,
       persistenceEnabled: this.persistenceEnabled,
       state: cloneState(this.state),
       lastExecution: this.lastExecution,
+      lastError: this.lastError,
     }
   }
 
@@ -220,6 +224,7 @@ export class NextVEventRunner {
         this.state = cloneState(result.state)
         this._savePersistedState()
         this.executionCount += 1
+        this.lastError = null
         this.lastExecution = {
           event,
           stopped: result.stopped === true,
@@ -239,6 +244,15 @@ export class NextVEventRunner {
           this.running = false
         }
       } catch (err) {
+        this.failedExecutionCount += 1
+        this.lastError = {
+          message: String(err?.message ?? err ?? 'Unknown runner error'),
+          line: Number.isFinite(Number(err?.line)) ? Number(err.line) : null,
+          kind: String(err?.kind ?? ''),
+          code: String(err?.code ?? ''),
+          statement: String(err?.statement ?? ''),
+          event,
+        }
         if (this.onError) {
           this.onError(err)
         }

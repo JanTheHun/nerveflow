@@ -11,6 +11,7 @@ let activeVerticalResize = null
 let activeScriptAbortController = null
 let activeScriptRunId = ''
 let nextVRuntimeRunning = false
+let isRemoteMode = false
 let nextVEventSource = null
 let nextVHasLiveRuntimeEvents = false
 let visualOutputWindow = null
@@ -30,8 +31,6 @@ const storageKeys = {
   nextVWorkspaceDir: 'local-agent.nextv.workspaceDir',
   nextVEntrypoint: 'local-agent.nextv.entrypointPath',
   nextVAutoSave: 'local-agent.nextv.autoSave',
-  nextVTraceEnabled: 'local-agent.nextv.traceEnabled',
-  nextVTraceState: 'local-agent.nextv.traceState',
   nextVPrimaryView: 'local-agent.nextv.primaryView',
   nextVDevTab: 'local-agent.nextv.devTab',
   nextVDevConsoleOpen: 'local-agent.nextv.devConsoleOpen',
@@ -138,7 +137,6 @@ const outputHeaderBadge = document.getElementById('output-header-badge')
 const nextVDevTabs = document.getElementById('nextv-dev-tabs')
 const nextVTabEvents = document.getElementById('nextv-tab-events')
 const nextVTabTrace = document.getElementById('nextv-tab-trace')
-const nextVTabState = document.getElementById('nextv-tab-state')
 const nextVTabConsole = document.getElementById('nextv-tab-console')
 const nextVPrimaryTabs = document.getElementById('nextv-primary-tabs')
 const nextVViewEditor = document.getElementById('nextv-view-editor')
@@ -155,13 +153,12 @@ const toggleNextVFilesBtn = document.getElementById('toggle-nextv-files-btn')
 const nextVWorkspaceDirInput = document.getElementById('nextv-workspace-dir')
 const nextVEntrypointInput = document.getElementById('nextv-entrypoint')
 const nextVAutoSaveInput = document.getElementById('nextv-autosave')
-const nextVTraceEnabledInput = document.getElementById('nextv-trace-enabled')
-const nextVTraceStateInput = document.getElementById('nextv-trace-state')
 const nextVEventValueInput = document.getElementById('nextv-event-value')
 const nextVEventTypeInput = document.getElementById('nextv-event-type')
 const nextVEventSourceInput = document.getElementById('nextv-event-source')
 const nextVStartBtn = document.getElementById('nextv-start-btn')
 const nextVStopBtn = document.getElementById('nextv-stop-btn')
+const remoteModeBadge = document.getElementById('remote-mode-badge')
 const userOutput = document.getElementById('user-output')
 const userInputText = document.getElementById('user-input-text')
 const cancelScriptBtn = document.getElementById('cancel-script-btn')
@@ -180,6 +177,9 @@ const nextVGraphOutput = document.getElementById('nextv-graph-output')
 const nextVStateDiffSplitter = document.getElementById('nextv-state-diff-splitter')
 const nextVStateDiffPanel = document.getElementById('nextv-state-diff-panel')
 const nextVStateDiffFeed = document.getElementById('nextv-state-diff-feed')
+const nextVStateSnapshotPane = document.getElementById('nextv-state-snapshot-pane')
+const nextVStateDiffTabDiff = document.getElementById('nextv-state-diff-tab-diff')
+const nextVStateDiffTabState = document.getElementById('nextv-state-diff-tab-state')
 const nextVConsoleOutput = document.getElementById('nextv-console-output')
 const settingsMenu = document.getElementById('settings-menu')
 const scriptEditorPanel = document.getElementById('script-editor-panel')
@@ -486,28 +486,27 @@ function setNextVGraphDirection(direction, options = {}) {
   }
 }
 
+function setNextVStateDiffTab(tab) {
+  const nextTab = tab === 'state' ? 'state' : 'diff'
+  if (nextVStateDiffTabDiff) {
+    nextVStateDiffTabDiff.classList.toggle('active', nextTab === 'diff')
+    nextVStateDiffTabDiff.setAttribute('aria-selected', nextTab === 'diff' ? 'true' : 'false')
+  }
+  if (nextVStateDiffTabState) {
+    nextVStateDiffTabState.classList.toggle('active', nextTab === 'state')
+    nextVStateDiffTabState.setAttribute('aria-selected', nextTab === 'state' ? 'true' : 'false')
+  }
+  if (nextVStateDiffFeed) nextVStateDiffFeed.classList.toggle('active-state-pane', nextTab === 'diff')
+  if (nextVStateSnapshotPane) nextVStateSnapshotPane.classList.toggle('active-state-pane', nextTab === 'state')
+  const clearBtn = document.getElementById('nextv-state-diff-clear-btn')
+  if (clearBtn) clearBtn.style.visibility = nextTab === 'diff' ? '' : 'hidden'
+}
+
 function setNextVDevTab(tab, options = {}) {
   const { persist = true } = options
-  const requestedTab = ['events', 'trace', 'state', 'console'].includes(tab) ? tab : 'events'
-  const traceEnabled = nextVTraceEnabledInput?.checked === true
-  const stateSnapshotsEnabled = traceEnabled && nextVTraceStateInput?.checked === true
-
-  if (nextVTabTrace) {
-    nextVTabTrace.disabled = !traceEnabled
-    nextVTabTrace.setAttribute('aria-disabled', traceEnabled ? 'false' : 'true')
-  }
-  if (nextVTabState) {
-    nextVTabState.disabled = !stateSnapshotsEnabled
-    nextVTabState.setAttribute('aria-disabled', stateSnapshotsEnabled ? 'false' : 'true')
-  }
+  const requestedTab = ['events', 'trace', 'console'].includes(tab) ? tab : 'events'
 
   let nextTab = requestedTab
-  if (requestedTab === 'trace' && !traceEnabled) {
-    nextTab = 'events'
-  }
-  if (requestedTab === 'state' && !stateSnapshotsEnabled) {
-    nextTab = traceEnabled ? 'trace' : 'events'
-  }
   tracePanelState.currentTab = nextTab
 
   if (nextVTabEvents) {
@@ -517,10 +516,6 @@ function setNextVDevTab(tab, options = {}) {
   if (nextVTabTrace) {
     nextVTabTrace.classList.toggle('active', nextTab === 'trace')
     nextVTabTrace.setAttribute('aria-selected', nextTab === 'trace' ? 'true' : 'false')
-  }
-  if (nextVTabState) {
-    nextVTabState.classList.toggle('active', nextTab === 'state')
-    nextVTabState.setAttribute('aria-selected', nextTab === 'state' ? 'true' : 'false')
   }
   if (nextVTabConsole) {
     nextVTabConsole.classList.toggle('active', nextTab === 'console')
@@ -538,8 +533,8 @@ function setNextVDevTab(tab, options = {}) {
   }
 
   if (scriptOutput) {
-    const showState = !isNextVMode() || nextTab === 'state'
-    scriptOutput.classList.toggle('active-tab-pane', showState)
+    const showScript = !isNextVMode()
+    scriptOutput.classList.toggle('active-tab-pane', showScript)
   }
 
   if (nextVConsoleOutput) {
@@ -695,10 +690,15 @@ function setNextVMode() {
   refreshNextVGraph({ silent: true })
 }
 
+function updateRemoteModeBadge() {
+  if (!remoteModeBadge) return
+  remoteModeBadge.hidden = isRemoteMode !== true
+}
+
 function setNextVRunControls() {
   const hasEntrypoint = Boolean(normalizeRelativePath(nextVEntrypointInput?.value ?? ''))
-  if (nextVStartBtn) nextVStartBtn.disabled = nextVRuntimeRunning || isBusy || !hasEntrypoint
-  if (nextVStopBtn) nextVStopBtn.disabled = !nextVRuntimeRunning || isBusy
+  if (nextVStartBtn) nextVStartBtn.disabled = isRemoteMode || nextVRuntimeRunning || isBusy || !hasEntrypoint
+  if (nextVStopBtn) nextVStopBtn.disabled = isRemoteMode || !nextVRuntimeRunning || isBusy
 }
 
 function appendPanelLogRow(panel, line, cls = '') {
@@ -1250,12 +1250,9 @@ function compactNextVGraphFileLabel(pathValue) {
   if (!normalized) return '(entrypoint)'
   const parts = normalized.split('/').filter(Boolean)
   if (parts.length === 0) return '(entrypoint)'
-  if (parts.length === 1) return parts[0]
-
-  // Hide workspace root segment (for example: chatbot/...), keep only useful file suffix.
-  const trimmed = parts.slice(1)
-  if (trimmed.length <= 2) return trimmed.join('/')
-  return trimmed.slice(-2).join('/')
+  // Path is already workspace-relative; keep up to 2 trailing segments for compact display.
+  if (parts.length <= 2) return parts.join('/')
+  return parts.slice(-2).join('/')
 }
 
 function getNextVGraphNodeGroupKey(nodeObj, entrypointPath = '') {
@@ -1410,6 +1407,40 @@ function updateNextVGraphRuntimeStep(nodeName) {
     nextVGraphState.runtimeSequence += 1
     nextVGraphState.runtimeStepByNode.set(normalizedNode, nextVGraphState.runtimeSequence)
   }
+}
+
+function inferNextVGraphFallbackHandler(eventType) {
+  const sourceEventType = String(eventType ?? '').trim()
+  if (!sourceEventType) return ''
+
+  const sourceHandlerId = `handler:${sourceEventType}`
+  if (!nextVGraphState.nodeElements.has(sourceHandlerId)) return ''
+
+  const transition = nextVGraphState.transitions.find((entry) => String(entry?.eventType ?? '') === sourceEventType)
+  const isThinExternalIngress = (
+    transition?.subscriptionKind === 'external'
+    && transition?.classification === 'pure'
+    && Array.isArray(transition?.outputs)
+    && transition.outputs.length === 0
+    && Array.isArray(transition?.tools)
+    && transition.tools.length === 0
+  )
+
+  if (!isThinExternalIngress) return sourceHandlerId
+
+  const emittedTargets = nextVGraphState.edges
+    .filter((edge) => edge?.type === 'emit' && String(edge?.from ?? '') === sourceHandlerId)
+    .map((edge) => String(edge?.to ?? '').trim())
+    .filter(Boolean)
+
+  if (emittedTargets.length !== 1) return sourceHandlerId
+
+  const internalHandlerId = `handler:${emittedTargets[0]}`
+  if (nextVGraphState.nodeElements.has(internalHandlerId)) {
+    return internalHandlerId
+  }
+
+  return sourceHandlerId
 }
 
 function markNextVGraphRuntimeWarning(nodeName) {
@@ -3490,15 +3521,11 @@ function persistNextVConfig() {
   const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
   const entrypointPath = normalizeRelativePath(nextVEntrypointInput?.value ?? '')
   const autoSaveEnabled = nextVAutoSaveInput?.checked !== false
-  const traceEnabled = nextVTraceEnabledInput?.checked === true
-  const traceState = nextVTraceStateInput?.checked === true
   const graphDirection = normalizeNextVGraphDirection(nextVGraphState.layoutDirection)
 
   localStorage.setItem(storageKeys.nextVWorkspaceDir, workspaceDir)
   localStorage.setItem(storageKeys.nextVEntrypoint, entrypointPath)
   localStorage.setItem(storageKeys.nextVAutoSave, autoSaveEnabled ? '1' : '0')
-  localStorage.setItem(storageKeys.nextVTraceEnabled, traceEnabled ? '1' : '0')
-  localStorage.setItem(storageKeys.nextVTraceState, traceState ? '1' : '0')
   localStorage.setItem(storageKeys.nextVGraphDirection, graphDirection)
 }
 
@@ -3509,20 +3536,14 @@ function restoreNextVConfig() {
   const primaryView = storedPrimaryView === 'graph' ? 'graph' : 'editor'
   const storedAutoSave = localStorage.getItem(storageKeys.nextVAutoSave)
   const autoSaveEnabled = storedAutoSave == null ? false : storedAutoSave === '1'
-  const storedTraceEnabled = localStorage.getItem(storageKeys.nextVTraceEnabled)
-  const traceEnabled = storedTraceEnabled == null ? true : storedTraceEnabled === '1'
-  const traceState = localStorage.getItem(storageKeys.nextVTraceState) === '1'
   const storedDevTab = localStorage.getItem(storageKeys.nextVDevTab)
-  const devTab = ['events', 'trace', 'state', 'console'].includes(storedDevTab) ? storedDevTab : 'events'
+  const devTab = ['events', 'trace', 'console'].includes(storedDevTab) ? storedDevTab : 'events'
   const devConsoleOpen = localStorage.getItem(storageKeys.nextVDevConsoleOpen) !== '0'
   const graphDirection = normalizeNextVGraphDirection(localStorage.getItem(storageKeys.nextVGraphDirection) ?? 'TB')
 
   if (nextVWorkspaceDirInput) nextVWorkspaceDirInput.value = workspaceDir
   if (nextVEntrypointInput) nextVEntrypointInput.value = entrypointPath
   if (nextVAutoSaveInput) nextVAutoSaveInput.checked = autoSaveEnabled
-  if (nextVTraceEnabledInput) nextVTraceEnabledInput.checked = traceEnabled
-  if (nextVTraceStateInput) nextVTraceStateInput.checked = traceEnabled && traceState
-  if (nextVTraceStateInput) nextVTraceStateInput.disabled = !traceEnabled
   tracePanelState.currentTab = devTab
   nextVViewState.currentView = primaryView
   nextVPanelState.devConsoleOpen = devConsoleOpen
@@ -3850,10 +3871,7 @@ function renderTraceList() {
   traceList.innerHTML = ''
 
   if (tracePanelState.rows.length === 0) {
-    const traceEnabled = nextVTraceEnabledInput?.checked === true
-    traceList.innerHTML = traceEnabled
-      ? '<div class="trace-empty">No trace rows captured yet.</div>'
-      : '<div class="trace-empty">Trace capture is disabled. Enable trace in the dev console header before starting the runtime.</div>'
+    traceList.innerHTML = '<div class="trace-empty">No trace rows captured yet.</div>'
     renderTraceDetail()
     return
   }
@@ -3998,8 +4016,7 @@ function renderNextVSnapshot(snapshot, options = {}) {
   }
 
   const stateBlock = JSON.stringify(snapshot.state ?? {}, null, 2)
-  clearScriptOutput()
-  appendScriptOutputLine(stateBlock)
+  if (nextVStateSnapshotPane) nextVStateSnapshotPane.textContent = stateBlock
   nextVLastKnownState = snapshot.state ?? {}
 }
 
@@ -4086,10 +4103,12 @@ function openNextVStream() {
         appendTraceRows(payload?.events)
       }
       if (eventType && nextVGraphState.runtimeSequence === 0) {
-        updateNextVGraphRuntimeStep(`handler:${eventType}`)
-        // Mark both event node and handler node at initial dispatch.
+        const fallbackHandlerId = inferNextVGraphFallbackHandler(eventType) || `handler:${eventType}`
+        updateNextVGraphRuntimeStep(fallbackHandlerId)
+        nextVGraphState.runtimeLastDispatchedNode = fallbackHandlerId
+        // Mark both the queued event node and the inferred active handler node.
         nextVGraphState.runtimeActiveNodes.add(eventType)
-        nextVGraphState.runtimeActiveNodes.add(`handler:${eventType}`)
+        nextVGraphState.runtimeActiveNodes.add(fallbackHandlerId)
       }
       applyNextVGraphRuntimeVisuals()
       fadeNextVGraphActiveHighlights(760)
@@ -4177,19 +4196,23 @@ async function syncNextVRuntimeState() {
     const res = await fetch('/api/nextv/snapshot')
     if (!res.ok) {
       nextVRuntimeRunning = false
+      updateRemoteModeBadge()
       closeNextVStream()
       setNextVRunControls()
       return
     }
     const data = await res.json().catch(() => ({}))
+    isRemoteMode = data?.remoteMode === true
+    updateRemoteModeBadge()
     renderNextVSnapshot(data.snapshot)
-    if (data?.snapshot?.running === true) {
+    if (isRemoteMode || data?.snapshot?.running === true) {
       openNextVStream()
     } else {
       closeNextVStream()
     }
   } catch {
     nextVRuntimeRunning = false
+    updateRemoteModeBadge()
     closeNextVStream()
     setNextVRunControls()
   }
@@ -4198,8 +4221,8 @@ async function syncNextVRuntimeState() {
 async function startNextVRuntime() {
   const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
   const entrypointPath = normalizeRelativePath(nextVEntrypointInput?.value ?? '')
-  const emitTrace = nextVTraceEnabledInput?.checked === true
-  const emitTraceState = emitTrace && nextVTraceStateInput?.checked === true
+  const emitTrace = true
+  const emitTraceState = true
   if (!entrypointPath) {
     setStatus('nextv entrypoint required', 'responding')
     return
@@ -6065,26 +6088,6 @@ if (nextVAutoSaveInput) {
     } else {
       clearNextVAutoSaveTimer()
     }
-  })
-}
-
-if (nextVTraceEnabledInput) {
-  nextVTraceEnabledInput.addEventListener('change', () => {
-    if (!nextVTraceEnabledInput.checked && nextVTraceStateInput) {
-      nextVTraceStateInput.checked = false
-    }
-    if (nextVTraceStateInput) {
-      nextVTraceStateInput.disabled = !nextVTraceEnabledInput.checked
-    }
-    persistNextVConfig()
-    setNextVDevTab(tracePanelState.currentTab)
-  })
-}
-
-if (nextVTraceStateInput) {
-  nextVTraceStateInput.addEventListener('change', () => {
-    persistNextVConfig()
-    setNextVDevTab(tracePanelState.currentTab)
   })
 }
 

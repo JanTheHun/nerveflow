@@ -22,12 +22,15 @@ import {
   validateOutputContract,
 } from '../src/index.js'
 import {
+  getDeclaredEffectChannels as getDeclaredEffectChannelsCore,
   getDeclaredExternals as getDeclaredExternalsCore,
   loadWorkspaceNextVConfig as loadWorkspaceNextVConfigCore,
 } from '../src/host_core/workspace_config.js'
 import {
   areJsonStatesEqual as areJsonStatesEqualCore,
   hasMeaningfulNextVExecutionEvents as hasMeaningfulNextVExecutionEventsCore,
+  normalizeEffectsPolicy as normalizeEffectsPolicyCore,
+  validateDeclaredEffectBindings as validateDeclaredEffectBindingsCore,
 } from '../src/host_core/runtime_policy.js'
 import {
   clearTimerHandles,
@@ -46,6 +49,45 @@ import {
 import {
   createNextVRuntimeController,
 } from '../src/host_core/runtime_controller.js'
+import { createMqttRemoteBridge } from './mqtt-remote-bridge.js'
+import { connect as mqttConnect } from 'mqtt'
+
+function parseCliOptions(argv) {
+  const options = {
+    remote: false,
+    remoteMqtt: '',
+    remoteMqttTopicPrefix: '',
+  }
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = String(argv[index] ?? '').trim()
+    if (token === '--remote') {
+      options.remote = true
+      continue
+    }
+    if (token === '--remote-mqtt' || token === '--remote-mqtt-topic-prefix') {
+      const value = String(argv[index + 1] ?? '').trim()
+      if (!value || value.startsWith('--')) {
+        throw new Error(`${token} requires a value`)
+      }
+      if (token === '--remote-mqtt') options.remoteMqtt = value
+      else options.remoteMqttTopicPrefix = value
+      index += 1
+      continue
+    }
+    throw new Error(`Unknown argument: ${token}`)
+  }
+
+  return options
+}
+
+let cliOptions
+try {
+  cliOptions = parseCliOptions(process.argv.slice(2))
+} catch (err) {
+  console.error(`nerve-studio argument error: ${err?.message ?? err}`)
+  process.exit(1)
+}
 
 const PORT = Number(process.env.PORT || 4173)
 const __filename = fileURLToPath(import.meta.url)
@@ -57,6 +99,20 @@ const MAX_EDITOR_BYTES = 512 * 1024
 const MAX_SCRIPT_BYTES = 1024 * 1024
 const WORKSPACE_TREE_IGNORED_NAMES = new Set(['.git', 'node_modules', 'logs'])
 const ENABLED_SURFACES = parseEnabledSurfaces(process.env.NERVE_STUDIO_SURFACES ?? 'http,sse')
+const REMOTE_MODE_REQUESTED = cliOptions.remote === true || Boolean(cliOptions.remoteMqtt)
+const REMOTE_MQTT_URL = String(
+  REMOTE_MODE_REQUESTED
+    ? (cliOptions.remoteMqtt || process.env.NERVE_STUDIO_REMOTE_MQTT || '')
+    : '',
+).trim()
+const REMOTE_MQTT_TOPIC_PREFIX = String(
+  cliOptions.remoteMqttTopicPrefix || process.env.NERVE_STUDIO_REMOTE_MQTT_TOPIC_PREFIX || 'nextv/event',
+).trim()
+
+if (REMOTE_MODE_REQUESTED && !REMOTE_MQTT_URL) {
+  console.error('nerve-studio argument error: remote mode requires a broker URL via --remote-mqtt <url> or NERVE_STUDIO_REMOTE_MQTT')
+  process.exit(1)
+}
 
 const MIME_BY_EXT = {
   '.html': 'text/html; charset=utf-8',
@@ -92,6 +148,16 @@ const FILE_KIND_RULES = {
 }
 
 const eventBus = createEventBus()
+
+const isRemoteMode = Boolean(REMOTE_MQTT_URL)
+if (isRemoteMode) {
+  createMqttRemoteBridge({
+    brokerUrl: REMOTE_MQTT_URL,
+    topicPrefix: REMOTE_MQTT_TOPIC_PREFIX,
+    eventBus,
+    createClient: (url) => mqttConnect(url),
+  })
+}
 
 function sendJson(res, statusCode, payload) {
   const body = JSON.stringify(payload)
@@ -373,7 +439,10 @@ const runtimeController = createNextVRuntimeController({
   toWorkspaceDisplayPath,
   resolvePathFromBaseDirectory,
   existsSync,
+  getDeclaredEffectChannels: getDeclaredEffectChannelsCore,
   getDeclaredExternals: getDeclaredExternalsCore,
+  normalizeEffectsPolicy: normalizeEffectsPolicyCore,
+  validateDeclaredEffectBindings: validateDeclaredEffectBindingsCore,
   areJsonStatesEqual: areJsonStatesEqualCore,
   hasMeaningfulNextVExecutionEvents: hasMeaningfulNextVExecutionEventsCore,
   normalizeInputEvent: normalizeInputEventCore,
@@ -591,6 +660,12 @@ async function handleApi(req, res, url) {
       })
       const configExternals = getDeclaredExternalsCore(workspaceConfig)
       const graph = extractEventGraph(ast, { declaredExternals: configExternals })
+      const wsAbsDir = workspaceDir.absolutePath
+      for (const node of graph.nodes) {
+        if (node.sourcePath && !node.sourcePath.startsWith('(')) {
+          node.sourcePath = relative(wsAbsDir, node.sourcePath).replace(/\\/g, '/')
+        }
+      }
       const { cycles } = detectCycles(graph)
       const timerNodes = workspaceConfig.nextv.timers.map((timer) => ({
         id: `timer:${timer.event}`,
@@ -604,7 +679,7 @@ async function handleApi(req, res, url) {
       return sendJson(res, 200, {
         ok: true,
         workspaceDir: workspaceDir.relativePath,
-        entrypointPath: entrypoint.relativePath,
+        entrypointPath: relative(wsAbsDir, entrypoint.absolutePath).replace(/\\/g, '/'),
         nodes: graph.nodes,
         edges: graph.edges,
         transitions: graph.transitions,
@@ -626,6 +701,9 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/nextv/start') {
+    if (isRemoteMode) {
+      return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
+    }
     let body
     try {
       body = await readRequestBody(req)
@@ -645,6 +723,9 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/nextv/stop') {
+    if (isRemoteMode) {
+      return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
+    }
     if (!runtimeController.isActive()) {
       return sendJson(res, 404, { error: 'nextV runtime not active' })
     }
@@ -654,6 +735,9 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/nextv/event') {
+    if (isRemoteMode) {
+      return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
+    }
     if (!runtimeController.isActive()) {
       return sendJson(res, 404, { error: 'nextV runtime not active' })
     }
@@ -674,6 +758,9 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/nextv/snapshot') {
+    if (isRemoteMode) {
+      return sendJson(res, 200, { ok: true, running: false, snapshot: null, remoteMode: true })
+    }
     const snapshot = runtimeController.getSnapshot()
     return sendJson(res, 200, {
       ok: true,

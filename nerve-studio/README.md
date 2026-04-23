@@ -64,6 +64,32 @@ Open:
 http://localhost:4173
 ```
 
+### Run as remote MQTT observability surface
+
+Remote mode is explicit per launch.
+
+```bash
+node nerve-studio/preview-server.js --remote --remote-mqtt mqtt://localhost:1883
+```
+
+Optional topic prefix override:
+
+```bash
+node nerve-studio/preview-server.js --remote --remote-mqtt mqtt://localhost:1883 --remote-mqtt-topic-prefix nextv/event
+```
+
+You can also use environment fallback for the broker URL:
+
+```powershell
+$env:NERVE_STUDIO_REMOTE_MQTT = 'mqtt://localhost:1883'
+node nerve-studio/preview-server.js --remote
+```
+
+Notes:
+
+- without `--remote`, nerve-studio runs in local mode
+- remote mode is read-only (start/stop/enqueue are disabled in UI and return 405 on API)
+
 ---
 
 ## Workspaces

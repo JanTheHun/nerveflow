@@ -11,6 +11,7 @@
 
   <header>
     <span class="brand">nerve-studio</span>
+    <span id="remote-mode-badge" class="remote-mode-badge" hidden>remote MQTT runtime</span>
     <div class="header-controls">
       <div id="chat-header-controls" class="chat-header-controls">
         <span class="sep">|</span>
@@ -135,11 +136,15 @@
           <div id="nextv-state-diff-splitter" class="panel-hsplitter" role="separator" aria-label="Resize graph and state diff panels"></div>
           <div id="nextv-state-diff-panel" class="nextv-state-diff-panel">
             <div class="nextv-state-diff-header">
-              <span class="nextv-state-diff-title">state diff</span>
-              <button type="button" class="panel-action" onclick="clearNextVStateDiff()">clear</button>
+              <div id="nextv-state-diff-tabs" class="panel-tabs" role="tablist" aria-label="state panel tabs">
+                <button id="nextv-state-diff-tab-diff" type="button" class="panel-tab active" role="tab" aria-selected="true" onclick="setNextVStateDiffTab('diff')">state diff</button>
+                <button id="nextv-state-diff-tab-state" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="setNextVStateDiffTab('state')">state</button>
+              </div>
+              <button id="nextv-state-diff-clear-btn" type="button" class="panel-action" onclick="clearNextVStateDiff()">clear</button>
               <button type="button" class="panel-icon-btn" onclick="toggleNextVStateDiff()" title="close state diff" aria-label="close state diff">✕</button>
             </div>
-            <div id="nextv-state-diff-feed" class="nextv-state-diff-feed panel-scroll"></div>
+            <div id="nextv-state-diff-feed" class="nextv-state-diff-feed panel-scroll active-state-pane"></div>
+            <div id="nextv-state-snapshot-pane" class="nextv-state-snapshot-pane panel-scroll"></div>
           </div>
         </div>
       </div>
@@ -155,16 +160,7 @@
           <div id="nextv-dev-tabs" class="panel-tabs" role="tablist" aria-label="nextv dev console tabs">
             <button id="nextv-tab-events" type="button" class="panel-tab" role="tab" aria-selected="true" onclick="setNextVDevTab('events')">events</button>
             <button id="nextv-tab-trace" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="setNextVDevTab('trace')">trace</button>
-            <button id="nextv-tab-state" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="setNextVDevTab('state')">state</button>
             <button id="nextv-tab-console" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="setNextVDevTab('console')">console</button>
-          </div>
-          <div id="nextv-dev-options" class="nextv-dev-options">
-            <label class="check-label">
-              <input type="checkbox" id="nextv-trace-enabled" checked> trace
-            </label>
-            <label class="check-label">
-              <input type="checkbox" id="nextv-trace-state"> state snapshots
-            </label>
           </div>
           <span id="output-header-badge" class="panel-badge badge-output">text</span>
           <button type="button" class="panel-action" onclick="clearOutputPanel()">clear</button>
@@ -174,7 +170,7 @@
           <div id="trace-list" class="panel-scroll trace-list"></div>
           <div id="trace-detail" class="panel-scroll trace-detail"></div>
         </div>
-        <div id="script-output" class="panel-scroll" role="tabpanel" aria-labelledby="nextv-tab-state"></div>
+        <div id="script-output" class="panel-scroll" role="tabpanel" aria-labelledby="nextv-tab-events"></div>
         <div id="nextv-console-output" class="panel-scroll" role="tabpanel" aria-labelledby="nextv-tab-console"></div>
       </div>
     </section>

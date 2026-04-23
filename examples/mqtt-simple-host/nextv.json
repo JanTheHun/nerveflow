@@ -1,0 +1,4 @@
+{
+  "entrypointPath": "workflow.nrv",
+  "externals": ["sensor_reading", "reset"]
+}

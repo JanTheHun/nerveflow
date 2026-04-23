@@ -1,0 +1,14 @@
+state.count = 0
+state.last = ""
+
+on external "sensor_reading"
+  state.count = state.count + 1
+  state.last = event.value
+  output text "reading #${state.count}: ${state.last}"
+end
+
+on external "reset"
+  state.count = 0
+  state.last = ""
+  output text "state reset"
+end

@@ -192,7 +192,7 @@ npm test
 
 Nerveflow is a stable, early-stage project focused on the core runtime and workflow model.
 
-The execution model, state handling, and DSL are production-ready.
+The execution model, state handling, and DSL are stable and maturing.
 Integrations, persistence adapters, and testing tools are evolving around it.
 
 ---

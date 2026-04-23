@@ -1,0 +1,11 @@
+{
+  "name": "nerveflow-mqtt-simple-host",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node ./mqtt-host.js"
+  },
+  "dependencies": {
+    "mqtt": "^5.10.1"
+  }
+}

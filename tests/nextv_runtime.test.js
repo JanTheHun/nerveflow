@@ -575,7 +575,60 @@ test('output statement emits text events', async () => {
   assert.equal(result.events.length, 1)
   assert.equal(result.events[0].type, 'output')
   assert.equal(result.events[0].format, 'text')
+  assert.equal(result.events[0].channel, 'text')
   assert.equal(result.events[0].content, 'Hello')
+  assert.equal(result.events[0].payload, 'Hello')
+})
+
+test('output event includes effectChannelId when declared effect matches channel', async () => {
+  const result = await runNextVScript('output text "Hello"', {
+    effectChannels: {
+      text: {
+        format: 'text',
+      },
+    },
+  })
+
+  assert.equal(result.events.length, 1)
+  assert.equal(result.events[0].type, 'output')
+  assert.equal(result.events[0].format, 'text')
+  assert.equal(result.events[0].channel, 'text')
+  assert.equal(result.events[0].effectChannelId, 'text')
+})
+
+test('output accepts declared custom effect channel and preserves channel identity', async () => {
+  const result = await runNextVScript('output heartbeat "tick"', {
+    effectChannels: {
+      heartbeat: {
+        format: 'text',
+      },
+    },
+  })
+
+  assert.equal(result.events.length, 1)
+  assert.equal(result.events[0].type, 'output')
+  assert.equal(result.events[0].channel, 'heartbeat')
+  assert.equal(result.events[0].format, 'text')
+  assert.equal(result.events[0].effectChannelId, 'heartbeat')
+  assert.equal(result.events[0].content, 'tick')
+})
+
+test('declared custom output channel defaults to json formatting when format is omitted', async () => {
+  const result = await runNextVScript('output heartbeat { ok: true }', {
+    effectChannels: {
+      heartbeat: {
+        kind: 'mqtt',
+      },
+    },
+  })
+
+  assert.equal(result.events.length, 1)
+  assert.equal(result.events[0].type, 'output')
+  assert.equal(result.events[0].channel, 'heartbeat')
+  assert.equal(result.events[0].format, 'json')
+  assert.equal(result.events[0].effectChannelId, 'heartbeat')
+  assert.equal(result.events[0].value.ok, true)
+  assert.equal(typeof result.events[0].content, 'string')
 })
 
 test('output console emits console format events', async () => {

@@ -9,6 +9,8 @@ export {
 export {
   areJsonStatesEqual,
   hasMeaningfulNextVExecutionEvents,
+  normalizeEffectsPolicy,
+  validateDeclaredEffectBindings,
 } from './runtime_policy.js'
 
 export {
@@ -22,6 +24,7 @@ export {
 } from './runtime_lifecycle.js'
 
 export {
+  getDeclaredEffectChannels,
   getDeclaredExternals,
   loadWorkspaceNextVConfig,
 } from './workspace_config.js'

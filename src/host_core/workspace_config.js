@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+const BUILTIN_OUTPUT_CHANNELS = new Set(['text', 'console', 'voice', 'visual', 'json', 'interaction'])
+
 function parseProfilesMap(raw, sourceLabel) {
   const map = (raw && typeof raw === 'object' && !Array.isArray(raw) && raw.profiles && typeof raw.profiles === 'object' && !Array.isArray(raw.profiles))
     ? raw.profiles
@@ -121,6 +123,69 @@ function parseOperatorsMap(raw, sourceLabel) {
   return map
 }
 
+function parseEffectsMap(raw, sourceLabel) {
+  if (Array.isArray(raw)) {
+    const map = {}
+    for (const channelNameRaw of raw) {
+      const channelName = String(channelNameRaw ?? '').trim()
+      if (!channelName) {
+        throw new Error(`${sourceLabel}: effect channel names must be non-empty strings.`)
+      }
+      map[channelName] = {}
+    }
+    return map
+  }
+
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`${sourceLabel} must be an array of strings or an object map of channel -> config.`)
+  }
+
+  const map = {}
+  for (const [channelNameRaw, channelConfigRaw] of Object.entries(raw)) {
+    const channelName = String(channelNameRaw ?? '').trim()
+    if (!channelName) {
+      throw new Error(`${sourceLabel}: effect channel names must be non-empty strings.`)
+    }
+    if (!channelConfigRaw || typeof channelConfigRaw !== 'object' || Array.isArray(channelConfigRaw)) {
+      throw new Error(`${sourceLabel}: effect channel "${channelName}" config must be an object.`)
+    }
+
+    const channelConfig = { ...channelConfigRaw }
+    if (channelConfig.kind != null && typeof channelConfig.kind !== 'string') {
+      throw new Error(`${sourceLabel}: effect channel "${channelName}.kind" must be a string when provided.`)
+    }
+    if (channelConfig.format != null) {
+      if (typeof channelConfig.format !== 'string') {
+        throw new Error(`${sourceLabel}: effect channel "${channelName}.format" must be a string when provided.`)
+      }
+      const normalizedFormat = channelConfig.format.trim()
+      if (!normalizedFormat || !BUILTIN_OUTPUT_CHANNELS.has(normalizedFormat)) {
+        throw new Error(
+          `${sourceLabel}: effect channel "${channelName}.format" must be one of ${[...BUILTIN_OUTPUT_CHANNELS].join(', ')}.`,
+        )
+      }
+      channelConfig.format = normalizedFormat
+    }
+
+    map[channelName] = channelConfig
+  }
+
+  return map
+}
+
+function parseEffectsPolicy(raw, sourceLabel) {
+  if (raw == null) return undefined
+  if (typeof raw !== 'string') {
+    throw new Error(`${sourceLabel} must be either "warn" or "strict" when provided.`)
+  }
+
+  const normalizedPolicy = raw.trim().toLowerCase()
+  if (!normalizedPolicy || (normalizedPolicy !== 'warn' && normalizedPolicy !== 'strict')) {
+    throw new Error(`${sourceLabel} must be either "warn" or "strict" when provided.`)
+  }
+  return normalizedPolicy
+}
+
 export function loadWorkspaceNextVConfig({
   workspaceDir,
   toWorkspaceDisplayPath,
@@ -154,11 +219,21 @@ export function loadWorkspaceNextVConfig({
       source: toWorkspaceDisplayPath(operatorsPath),
       map: {},
     },
+    effects: {
+      status: 'missing',
+      file: `${nextVDisplayPath}#effects`,
+      source: `${nextVDisplayPath}#effects`,
+      map: {},
+    },
   }
 
   if (existsSync(nextVPath)) {
     config.nextv.config = readJsonObjectFile(nextVPath)
     config.nextv.status = 'loaded'
+
+    if (Object.prototype.hasOwnProperty.call(config.nextv.config, 'effectsPolicy')) {
+      config.nextv.config.effectsPolicy = parseEffectsPolicy(config.nextv.config.effectsPolicy, 'nextv.json#effectsPolicy')
+    }
 
     if (config.nextv.config.agents != null) {
       config.agents.profiles = parseProfilesMap(config.nextv.config.agents, 'nextv.json#agents')
@@ -178,6 +253,12 @@ export function loadWorkspaceNextVConfig({
       config.operators.map = parseOperatorsMap(config.nextv.config.operators, 'nextv.json#operators')
       config.operators.status = 'loaded'
       config.operators.source = `${nextVDisplayPath}#operators`
+    }
+
+    if (config.nextv.config.effects != null) {
+      config.effects.map = parseEffectsMap(config.nextv.config.effects, 'nextv.json#effects')
+      config.effects.status = 'loaded'
+      config.effects.source = `${nextVDisplayPath}#effects`
     }
 
     const rawTimers = config.nextv.config.timers
@@ -272,4 +353,10 @@ export function getDeclaredExternals(workspaceConfig) {
     ? workspaceConfig.nextv.timers.map((timer) => String(timer?.event ?? '').trim()).filter(Boolean)
     : []
   return [...new Set([...declared, ...timerEvents])]
+}
+
+export function getDeclaredEffectChannels(workspaceConfig) {
+  const declared = workspaceConfig?.effects?.map
+  if (!declared || typeof declared !== 'object' || Array.isArray(declared)) return {}
+  return { ...declared }
 }

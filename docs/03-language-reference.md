@@ -16,7 +16,7 @@ Supported statements:
 - assignment: `x = expr`
 - append assignment: `x += expr`
 - state assignment: `state.path = expr`
-- output: `output <format> expr`
+- output: `output <channel> expr`
 - print alias: `print expr` (alias of `output text expr`)
 - event subscription: `on "event_type" ... end`
 - external event subscription: `on external "event_type" ... end`
@@ -112,7 +112,7 @@ External ingress model:
 
 ## 6. Output Model
 
-Supported output formats:
+Built-in output channels:
 
 - `text`
 - `console`
@@ -120,6 +120,17 @@ Supported output formats:
 - `visual`
 - `json`
 - `interaction` (supported for compatibility)
+
+Declared output channels:
+
+- workspaces may declare additional channels in `nextv.json#effects`
+- declared channels are emitted through the same `output` statement
+- if a declared channel omits `format`, runtime defaults emitted formatting to `json`
+
+Examples:
+
+- `output text "hello"`
+- `output heartbeat "tick"` (when `heartbeat` is declared in `nextv.json#effects`)
 
 Recommendations:
 

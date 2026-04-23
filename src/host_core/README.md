@@ -72,6 +72,19 @@ Behavior highlights:
 - emits canonical runtime lifecycle events through event_bus
 - lets HTTP/SSE/WebSocket/SDK surfaces share one deterministic control layer
 
+Startup effect policy behavior:
+
+- reads `nextv.json#effectsPolicy` (`warn` default, `strict` optional)
+- validates declared effect channels that define `kind` via optional `validateEffectBindings` hook
+- `warn` mode publishes `nextv_warning` with `code: "UNSUPPORTED_EFFECT_BINDING"` and continues startup
+- `strict` mode fails startup when unsupported bindings are detected
+
+`validateEffectBindings` contract:
+
+- called with `{ channelId, channelConfig }`
+- return `true`/`undefined` to accept binding
+- return `false`, string message, or `{ ok: false, reason?, message? }` to reject binding
+
 ### loadWorkspaceNextVConfig (workspace_config.js)
 
 Loads nextV workspace config from:
@@ -96,6 +109,8 @@ These keep host path and timer semantics deterministic and reusable.
 
 - hasMeaningfulNextVExecutionEvents
 - areJsonStatesEqual
+- normalizeEffectsPolicy
+- validateDeclaredEffectBindings
 
 Used by hosts to suppress no-op noise while preserving meaningful execution events.
 
@@ -119,3 +134,70 @@ Typical host usage:
 5. publish host events through event_bus
 
 See nerve-studio/preview-server.js for a reference host composition.
+
+## Multi-Surface Attachment Model
+
+Nerveflow supports a **single active runtime session** with **multiple dynamically attached surfaces**.
+
+Key principles:
+
+- **Single execution authority** — One runtime session owns execution, state, event queue, and effect emissions
+- **Multiple surfaces** — Any number of transports or clients can attach to observe, control, or realize effects
+- **Dynamic attachment** — Surfaces may attach or detach at any time without interrupting runtime execution
+- **Failure isolation** — A surface failure (handler throw, transport disconnect, client crash) does not affect other surfaces or runtime integrity
+
+Surface roles:
+
+- **Control surface** — Sends protocol commands (`start`, `stop`, `enqueue_event`, `snapshot`)
+- **Observability surface** — Subscribes to runtime event streams for graph animation, state inspection, execution tracking
+- **Effect surface** — Binds and realizes declared effect channels (e.g., MQTT publish, GPIO write)
+
+Attachment lifecycle:
+
+- At startup, a transport creates the event bus and controller (these own the runtime)
+- Other transports may attach later by subscribing to the same event bus
+- Surfaces can unsubscribe and disconnect without affecting runtime or other subscribed surfaces
+- Runtime continues executing until explicitly stopped via `stop` command
+
+## Embedded host pattern
+
+For headless or embedded surfaces (MQTT, CLI, IPC), the minimal wiring is:
+
+```js
+import { createEventBus, createNextVRuntimeController } from 'nerveflow/host_core'
+import { buildHostProtocolEvent, validateHostProtocolCommand } from 'nerveflow/host_core/protocol'
+
+// One event bus and controller per runtime session (shared by all attached surfaces)
+const eventBus = createEventBus()
+const controller = createNextVRuntimeController({ eventBus, /* ...resolvers */ })
+
+// SURFACE 1: Control transport (e.g., MQTT command subscriber)
+transport1.onCommand(async (raw) => {
+  const command = validateHostProtocolCommand(raw)
+  if (command.type === 'start') await controller.start(command.payload)
+  if (command.type === 'enqueue_event') controller.enqueue(command.payload)
+  // ... other command types
+})
+
+// SURFACE 2: Observability transport (e.g., logging sink)
+eventBus.subscribe((eventName, payload) => {
+  logger.info({ eventName, payload })
+})
+
+// SURFACE 3: Effect transport (e.g., MQTT publisher for effects)
+eventBus.subscribe((eventName, payload) => {
+  if (eventName === 'nextv_execution' && payload.result?.outputs) {
+    for (const output of payload.result.outputs) {
+      if (output.effectChannelId === 'heartbeat') {
+        transport3.publish('device/heartbeat', output.content)
+      }
+    }
+  }
+})
+
+// Note: Handler throws are caught and isolated; one surface failure doesn't affect others.
+```
+
+The event bus fan-outs to all subscribed handlers simultaneously. If a handler throws, it is automatically removed from the subscriber set; other handlers continue receiving events and the runtime continues operating.
+
+Filter events before subscribing using `hasMeaningfulNextVExecutionEvents` (suppresses no-op timer ticks) or a custom predicate. See `examples/mqtt-simple-host/mqtt-host.js` for a complete embedded MQTT host reference demonstrating control + observability + effect surface patterns.

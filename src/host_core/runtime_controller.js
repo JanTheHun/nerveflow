@@ -22,7 +22,11 @@ export function createNextVRuntimeController({
   toWorkspaceDisplayPath,
   resolvePathFromBaseDirectory,
   existsSync,
+  getDeclaredEffectChannels = () => ({}),
+  validateEffectBindings = null,
   getDeclaredExternals,
+  normalizeEffectsPolicy = () => 'warn',
+  validateDeclaredEffectBindings = () => [],
   areJsonStatesEqual,
   hasMeaningfulNextVExecutionEvents,
   normalizeInputEvent,
@@ -78,6 +82,24 @@ export function createNextVRuntimeController({
     const workspaceConfig = loadWorkspaceConfig(workspaceDir)
     const entrypoint = resolveEntrypoint(workspaceDir, requestedEntrypointPath, workspaceConfig)
     const suppressTimerNoOps = workspaceConfig?.nextv?.config?.suppressTimerNoOps !== false
+    const declaredEffectChannels = getDeclaredEffectChannels(workspaceConfig)
+    const effectsPolicy = normalizeEffectsPolicy(workspaceConfig?.nextv?.config?.effectsPolicy)
+    const effectBindingIssues = validateDeclaredEffectBindings({
+      declaredEffectChannels,
+      validateEffectBindings,
+    })
+    if (effectBindingIssues.length > 0) {
+      const message = `Detected ${effectBindingIssues.length} unsupported declared effect binding(s).`
+      if (effectsPolicy === 'strict') {
+        throw new Error(`${message} Set nextv.json#effectsPolicy to "warn" to allow startup.`)
+      }
+      eventBus.publish('nextv_warning', {
+        code: 'UNSUPPORTED_EFFECT_BINDING',
+        message,
+        policy: effectsPolicy,
+        issues: effectBindingIssues,
+      })
+    }
 
     const runtimePathFromConfig = String(
       workspaceConfig.nextv.config?.runtimeStatePath
@@ -183,6 +205,7 @@ export function createNextVRuntimeController({
         emitTrace,
         emitTraceState,
         declaredExternals: getDeclaredExternals(workspaceConfig),
+        effectChannels: declaredEffectChannels,
         hostAdapter: runtimeCallHooks,
       },
       onEvent: ({ event, runtimeEvent, snapshot }) => {
@@ -253,6 +276,11 @@ export function createNextVRuntimeController({
       trace: {
         enabled: emitTrace,
         includeState: emitTraceState,
+      },
+      effects: {
+        policy: effectsPolicy,
+        declared: Object.keys(declaredEffectChannels).length,
+        unsupportedBindings: effectBindingIssues.length,
       },
       snapshot,
     }

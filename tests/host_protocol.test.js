@@ -154,6 +154,7 @@ test('protocol constants include required v1 values', () => {
   assert.deepEqual(HOST_EVENT_NAMES, [
     'nextv_started',
     'nextv_stopped',
+    'nextv_warning',
     'nextv_runtime_event',
     'nextv_execution',
     'nextv_error',

@@ -657,15 +657,6 @@ export function parseNextVScript(source, options = {}) {
         // to be parsed by assignment handling below.
       } else {
         const format = outputMatch[1]
-        if (!OUTPUT_FORMATS.has(format)) {
-          throw nextvError({
-            line,
-            kind: 'parse',
-            code: 'INVALID_OUTPUT_FORMAT',
-            statement,
-            message: `Unsupported output format "${format}". Supported formats: text, console, voice, visual, json, interaction.`,
-          })
-        }
 
         statements.push({
           type: 'output',
@@ -1762,6 +1753,28 @@ function normalizeRuntimeOptions(options = {}) {
   return runtimeOptions
 }
 
+function resolveDeclaredEffectChannel(channelName, effectChannelsRaw) {
+  if (!effectChannelsRaw || typeof effectChannelsRaw !== 'object' || Array.isArray(effectChannelsRaw)) {
+    return null
+  }
+
+  const normalizedChannelName = String(channelName ?? '').trim()
+  if (!normalizedChannelName) return null
+
+  for (const [channelIdRaw, channelConfigRaw] of Object.entries(effectChannelsRaw)) {
+    const channelId = String(channelIdRaw ?? '').trim()
+    if (!channelId || channelId !== normalizedChannelName) continue
+
+    if (!channelConfigRaw || typeof channelConfigRaw !== 'object' || Array.isArray(channelConfigRaw)) {
+      return { id: channelId, config: {} }
+    }
+
+    return { id: channelId, config: channelConfigRaw }
+  }
+
+  return null
+}
+
 export async function runNextVScript(source, options = {}) {
   const runtimeOptions = normalizeRuntimeOptions(options)
   const statements = parseNextVScript(source, { baseDir: runtimeOptions.baseDir })
@@ -1957,21 +1970,47 @@ export async function runNextVScript(source, options = {}) {
       }
 
       if (instr.op === 'emit') {
+        const channelName = String(instr.format ?? '').trim()
+        const declaredChannel = resolveDeclaredEffectChannel(channelName, runtimeOptions.effectChannels)
+        const usesBuiltinOutputChannel = OUTPUT_FORMATS.has(channelName)
+        if (!usesBuiltinOutputChannel && !declaredChannel) {
+          const declaredNames = (
+            runtimeOptions.effectChannels && typeof runtimeOptions.effectChannels === 'object' && !Array.isArray(runtimeOptions.effectChannels)
+          )
+            ? Object.keys(runtimeOptions.effectChannels)
+            : []
+          throw nextvError({
+            line: instr.line,
+            kind: 'runtime',
+            code: 'INVALID_OUTPUT_FORMAT',
+            statement: instr.statement,
+            message: `Unsupported output channel "${channelName}". Supported built-ins: ${[...OUTPUT_FORMATS].join(', ')}${declaredNames.length > 0 ? `; declared channels: ${declaredNames.join(', ')}` : ''}.`,
+          })
+        }
+
+        const effectiveFormat = usesBuiltinOutputChannel
+          ? channelName
+          : String(declaredChannel?.config?.format ?? 'json').trim() || 'json'
         const value = await evaluateExpression(instr.src, ctx)
-        const roleWarning = getRoleWarningForOutput(executionRole, instr.format)
+        const roleWarning = getRoleWarningForOutput(executionRole, channelName)
         if (roleWarning) {
           await ctx.emitWarning({
             code: roleWarning.code,
             message: roleWarning.message,
-            format: instr.format,
+            format: channelName,
           })
         }
         const outputPayload = {
           type: 'output',
-          format: instr.format,
-          content: formatOutputContent(value, instr.format, ctx),
+          format: effectiveFormat,
+          channel: channelName,
+          content: formatOutputContent(value, effectiveFormat, ctx),
+          payload: value,
         }
-        if (instr.format === 'json' || instr.format === 'interaction') {
+        if (declaredChannel?.id) {
+          outputPayload.effectChannelId = declaredChannel.id
+        }
+        if (effectiveFormat === 'json' || effectiveFormat === 'interaction') {
           outputPayload.value = value
         }
         await ctx.emitEvent(outputPayload)

@@ -19,14 +19,17 @@ import {
   createEventBus,
   createHostAdapter,
   createNextVRuntimeController,
+  getDeclaredEffectChannels,
   getDeclaredExternals,
   hasMeaningfulNextVExecutionEvents,
   loadWorkspaceNextVConfig,
+  normalizeEffectsPolicy,
   normalizeInputEvent,
   resolveDiscoveredStatePath,
   resolveOptionalStatePath,
   resolveStateDiscoveryBaseDir,
   startTimerHandles,
+  validateDeclaredEffectBindings,
 } from '../../src/host_core/index.js'
 
 import {
@@ -184,7 +187,10 @@ const runtimeController = createNextVRuntimeController({
   toWorkspaceDisplayPath,
   resolvePathFromBaseDirectory,
   existsSync,
+  getDeclaredEffectChannels,
   getDeclaredExternals,
+  normalizeEffectsPolicy,
+  validateDeclaredEffectBindings,
   areJsonStatesEqual,
   hasMeaningfulNextVExecutionEvents,
   normalizeInputEvent,

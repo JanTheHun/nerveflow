@@ -1,3 +1,43 @@
+/**
+ * Host protocol v1.0 — Transport-agnostic envelope for command/response/event communication.
+ *
+ * Multi-Surface Semantics:
+ * 
+ * Nerveflow supports a single runtime session with multiple dynamically attached surfaces.
+ * Surfaces attach via 'subscribe' and detach via 'unsubscribe' commands.
+ * 
+ * - subscribe: Surface attachment request. Handler receives all subsequent runtime events.
+ * - unsubscribe: Surface detachment. Handler is removed; no more events delivered to it.
+ * - Handler failures (throws) are caught and isolated; failing handler is removed automatically.
+ *   Other subscribed surfaces continue receiving events.
+ * 
+ * Command types:
+ * - start: Create and run runtime in workspace
+ * - stop: Halt runtime
+ * - enqueue_event: Feed input event to runtime
+ * - snapshot: Get current runtime state
+ * - subscribe: Attach surface to runtime events
+ * - unsubscribe: Detach surface from runtime events
+ * 
+ * Event names are published by runtime to all subscribed surfaces:
+ * - nextv_started: Runtime initialized
+ * - nextv_stopped: Runtime halted
+ * - nextv_warning: Policy or effect binding warning
+ * - nextv_runtime_event: Input event received
+ * - nextv_execution: Script execution complete
+ * - nextv_error: Execution error
+ * - nextv_timer_pulse: Periodic timer fired
+ * - nextv_event_queued: Event added to queue
+ * 
+ * Error codes indicate protocol or policy violations:
+ * - policy_denied: Tool/effect not allowed
+ * - unavailable: Tool/effect not implemented
+ * - validation_error: Malformed command
+ * - runtime_error: Execution failure
+ * - not_active: Runtime not running
+ * - already_active: Runtime already started
+ */
+
 const HOST_PROTOCOL_VERSION = '1.0'
 
 const HOST_COMMAND_TYPES = Object.freeze([
@@ -12,6 +52,7 @@ const HOST_COMMAND_TYPES = Object.freeze([
 const HOST_EVENT_NAMES = Object.freeze([
   'nextv_started',
   'nextv_stopped',
+  'nextv_warning',
   'nextv_runtime_event',
   'nextv_execution',
   'nextv_error',

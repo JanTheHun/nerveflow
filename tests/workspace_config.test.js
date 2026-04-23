@@ -186,3 +186,96 @@ test('rejects tools aliases with self-reference', () => {
     rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
   }
 })
+
+test('loads minimal effects declaration from nextv.json', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      effects: ['heartbeat', 'gpio_write'],
+    }),
+  })
+
+  try {
+    const config = loadConfig(workspaceDir)
+    assert.equal(config.effects.status, 'loaded')
+    assert.deepEqual(Object.keys(config.effects.map), ['heartbeat', 'gpio_write'])
+  } finally {
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})
+
+test('loads bound effects declaration from nextv.json', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      effects: {
+        heartbeat: {
+          kind: 'mqtt',
+          topic: 'pulse',
+          format: 'text',
+        },
+      },
+    }),
+  })
+
+  try {
+    const config = loadConfig(workspaceDir)
+    assert.equal(config.effects.status, 'loaded')
+    assert.equal(config.effects.map.heartbeat.kind, 'mqtt')
+    assert.equal(config.effects.map.heartbeat.topic, 'pulse')
+    assert.equal(config.effects.map.heartbeat.format, 'text')
+  } finally {
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})
+
+test('rejects invalid effects declaration format', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      effects: {
+        heartbeat: {
+          format: 'html',
+        },
+      },
+    }),
+  })
+
+  try {
+    assert.throws(
+      () => loadConfig(workspaceDir),
+      /nextv\.json#effects: effect channel "heartbeat\.format" must be one of text, console, voice, visual, json, interaction\./,
+    )
+  } finally {
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})
+
+test('normalizes effectsPolicy from nextv.json', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      effectsPolicy: '  STRICT  ',
+    }),
+  })
+
+  try {
+    const config = loadConfig(workspaceDir)
+    assert.equal(config.nextv.config.effectsPolicy, 'strict')
+  } finally {
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})
+
+test('rejects invalid effectsPolicy in nextv.json', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      effectsPolicy: 'ignore',
+    }),
+  })
+
+  try {
+    assert.throws(
+      () => loadConfig(workspaceDir),
+      /nextv\.json#effectsPolicy must be either "warn" or "strict" when provided\./,
+    )
+  } finally {
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})

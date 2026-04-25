@@ -226,6 +226,22 @@ test('extractEventGraph returns declaredExternals in result', () => {
   assert.deepEqual(graph.declaredExternals.sort(), ['entry', 'other'])
 })
 
+test('extractEventGraph detects emit nested in arithmetic expressions', () => {
+  const ast = parseNextVScript([
+    'on "alpha"',
+    '  state.value = emit("beta", event.value) * 2',
+    'end',
+    'on "beta"',
+    '  state.done = true',
+    'end',
+  ].join('\n'))
+
+  const graph = extractEventGraph(ast)
+  const emitEdges = graph.edges.filter((edge) => edge.type === 'emit').map((edge) => [edge.from, edge.to])
+
+  assert.deepEqual(emitEdges, [['handler:alpha', 'beta']])
+})
+
 test('extractEventGraph no contract warnings for a fully wired graph', () => {
   const ast = parseNextVScript([
     'on external "first"',

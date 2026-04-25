@@ -99,6 +99,12 @@ function walkExpr(expr, visitor) {
     return
   }
 
+  if (expr.type === 'binary') {
+    walkExpr(expr.left, visitor)
+    walkExpr(expr.right, visitor)
+    return
+  }
+
   if (expr.type === 'logical') {
     walkExpr(expr.left, visitor)
     walkExpr(expr.right, visitor)

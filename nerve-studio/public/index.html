@@ -94,6 +94,7 @@
           <div id="filetree-ctx-menu" class="filetree-ctx-menu" style="display:none" role="menu" aria-label="File tree actions">
             <button type="button" class="filetree-ctx-item" id="ctx-new-file" onclick="ctxMenuNewFile()">New File</button>
             <button type="button" class="filetree-ctx-item" id="ctx-new-folder" onclick="ctxMenuNewFolder()">New Folder</button>
+            <button type="button" class="filetree-ctx-item" id="ctx-rename" onclick="ctxMenuRename()">Rename</button>
             <div class="filetree-ctx-sep"></div>
             <button type="button" class="filetree-ctx-item filetree-ctx-danger" id="ctx-delete" onclick="ctxMenuDelete()">Delete</button>
           </div>
@@ -146,6 +147,39 @@
             <div id="nextv-state-diff-feed" class="nextv-state-diff-feed panel-scroll active-state-pane"></div>
             <div id="nextv-state-snapshot-pane" class="nextv-state-snapshot-pane panel-scroll"></div>
           </div>
+          <div id="nextv-user-io-splitter" class="panel-hsplitter" role="separator" aria-label="Resize state and input panels"></div>
+          <section id="script-editor-panel" aria-label="User I/O panel">
+            <div class="panel-header user-io-panel-header">
+              <span>I/O</span>
+              <button type="button" class="panel-icon-btn" style="margin-left:auto" onclick="setUserIOPanelOpen(false)" title="close panel" aria-label="close panel">✕</button>
+            </div>
+            <div id="user-input-section" class="panel-section user-input-section">
+              <div class="panel-header">
+                <span>input</span>
+              </div>
+              <div id="nextv-input-external-pane" class="nextv-input-pane" role="tabpanel">
+                <div class="panel-controls">
+                  <div class="footer-row nextv-external-row">
+                    <span class="row-label">event</span>
+                    <input id="nextv-event-value" type="text" placeholder="payload value" autocomplete="off" spellcheck="false" />
+                    <input id="nextv-event-type" type="text" placeholder="event type (optional)" autocomplete="off" spellcheck="false" />
+                    <input id="nextv-event-source" type="text" placeholder="source (optional)" autocomplete="off" spellcheck="false" />
+                    <button type="button" onclick="sendNextVEvent()">enqueue</button>
+                    <button type="button" onclick="refreshNextVSnapshot()">snapshot</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div id="user-panel-splitter" class="panel-vsplitter" role="separator" aria-label="Split user input and output panes"></div>
+            <div id="user-output-section" class="panel-section">
+              <div class="panel-header">
+                <span>user output</span>
+                <span class="panel-badge badge-output">text</span>
+                <button type="button" class="panel-action" onclick="clearUserOutputPanel()">clear</button>
+              </div>
+              <div id="user-output" class="panel-scroll"></div>
+            </div>
+          </section>
         </div>
       </div>
       <div id="script-vsplit-1" class="panel-vsplitter" role="separator" aria-label="Resize script and logs panes"></div>
@@ -205,38 +239,6 @@
           >clear</button>
           <span id="image-count" class="dim">0 attached</span>
         </div>
-      </div>
-    </section>
-    <section id="script-editor-panel" aria-label="User I/O panel">
-      <div class="panel-header user-io-panel-header">
-        <span>I/O</span>
-        <button type="button" class="panel-icon-btn" style="margin-left:auto" onclick="setUserIOPanelOpen(false)" title="close panel" aria-label="close panel">✕</button>
-      </div>
-      <div id="user-input-section" class="panel-section user-input-section">
-        <div class="panel-header">
-          <span>input</span>
-        </div>
-        <div id="nextv-input-external-pane" class="nextv-input-pane" role="tabpanel">
-          <div class="panel-controls">
-            <div class="footer-row nextv-external-row">
-              <span class="row-label">event</span>
-              <input id="nextv-event-value" type="text" placeholder="payload value" autocomplete="off" spellcheck="false" />
-              <input id="nextv-event-type" type="text" placeholder="event type (optional)" autocomplete="off" spellcheck="false" />
-              <input id="nextv-event-source" type="text" placeholder="source (optional)" autocomplete="off" spellcheck="false" />
-              <button type="button" onclick="sendNextVEvent()">enqueue</button>
-              <button type="button" onclick="refreshNextVSnapshot()">snapshot</button>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div id="user-panel-splitter" class="panel-vsplitter" role="separator" aria-label="Split user input and output panes"></div>
-      <div id="user-output-section" class="panel-section">
-        <div class="panel-header">
-          <span>user output</span>
-          <span class="panel-badge badge-output">text</span>
-          <button type="button" class="panel-action" onclick="clearUserOutputPanel()">clear</button>
-        </div>
-        <div id="user-output" class="panel-scroll"></div>
       </div>
     </section>
   </main>

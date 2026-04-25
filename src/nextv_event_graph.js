@@ -18,6 +18,12 @@ function walkExpr(expr, visitor) {
     return
   }
 
+  if (expr.type === 'binary') {
+    walkExpr(expr.left, visitor)
+    walkExpr(expr.right, visitor)
+    return
+  }
+
   if (expr.type === 'array') {
     for (const element of expr.elements ?? []) {
       walkExpr(element, visitor)

@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   unlinkSync,
@@ -50,6 +51,7 @@ import {
   createNextVRuntimeController,
 } from '../src/host_core/runtime_controller.js'
 import { createMqttRemoteBridge } from './mqtt-remote-bridge.js'
+import { createWsRemoteBridge } from './ws-remote-bridge.js'
 import { connect as mqttConnect } from 'mqtt'
 
 function parseCliOptions(argv) {
@@ -57,6 +59,7 @@ function parseCliOptions(argv) {
     remote: false,
     remoteMqtt: '',
     remoteMqttTopicPrefix: '',
+    remoteWs: '',
   }
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -65,12 +68,13 @@ function parseCliOptions(argv) {
       options.remote = true
       continue
     }
-    if (token === '--remote-mqtt' || token === '--remote-mqtt-topic-prefix') {
+    if (token === '--remote-mqtt' || token === '--remote-mqtt-topic-prefix' || token === '--remote-ws') {
       const value = String(argv[index + 1] ?? '').trim()
       if (!value || value.startsWith('--')) {
         throw new Error(`${token} requires a value`)
       }
       if (token === '--remote-mqtt') options.remoteMqtt = value
+      else if (token === '--remote-ws') options.remoteWs = value
       else options.remoteMqttTopicPrefix = value
       index += 1
       continue
@@ -99,19 +103,125 @@ const MAX_EDITOR_BYTES = 512 * 1024
 const MAX_SCRIPT_BYTES = 1024 * 1024
 const WORKSPACE_TREE_IGNORED_NAMES = new Set(['.git', 'node_modules', 'logs'])
 const ENABLED_SURFACES = parseEnabledSurfaces(process.env.NERVE_STUDIO_SURFACES ?? 'http,sse')
-const REMOTE_MODE_REQUESTED = cliOptions.remote === true || Boolean(cliOptions.remoteMqtt)
+const REMOTE_MODE_REQUESTED = cliOptions.remote === true || Boolean(cliOptions.remoteMqtt) || Boolean(cliOptions.remoteWs)
 const REMOTE_MQTT_URL = String(
-  REMOTE_MODE_REQUESTED
-    ? (cliOptions.remoteMqtt || process.env.NERVE_STUDIO_REMOTE_MQTT || '')
-    : '',
+  (cliOptions.remoteMqtt || (REMOTE_MODE_REQUESTED ? process.env.NERVE_STUDIO_REMOTE_MQTT : '') || '')
+).trim()
+const REMOTE_WS_URL = String(
+  (cliOptions.remoteWs || (REMOTE_MODE_REQUESTED ? process.env.NERVE_STUDIO_REMOTE_WS : '') || '')
 ).trim()
 const REMOTE_MQTT_TOPIC_PREFIX = String(
   cliOptions.remoteMqttTopicPrefix || process.env.NERVE_STUDIO_REMOTE_MQTT_TOPIC_PREFIX || 'nextv/event',
 ).trim()
 
-if (REMOTE_MODE_REQUESTED && !REMOTE_MQTT_URL) {
-  console.error('nerve-studio argument error: remote mode requires a broker URL via --remote-mqtt <url> or NERVE_STUDIO_REMOTE_MQTT')
+if (REMOTE_MQTT_URL && REMOTE_WS_URL) {
+  console.error('nerve-studio argument error: remote mode may target either MQTT or WS, not both')
   process.exit(1)
+}
+
+if (REMOTE_MODE_REQUESTED && !REMOTE_MQTT_URL && !REMOTE_WS_URL) {
+  console.error(
+    'nerve-studio argument error: remote mode requires --remote-mqtt <url>, --remote-ws <url>, or matching env fallback (NERVE_STUDIO_REMOTE_MQTT / NERVE_STUDIO_REMOTE_WS)',
+  )
+  process.exit(1)
+}
+
+const REMOTE_MODE = REMOTE_WS_URL
+  ? 'ws'
+  : (REMOTE_MQTT_URL ? 'mqtt' : 'local')
+const isRemoteMode = REMOTE_MODE !== 'local'
+const isRemoteControlMode = REMOTE_MODE === 'ws'
+const isRemoteObserveOnlyMode = REMOTE_MODE === 'mqtt'
+
+const eventBus = createEventBus()
+
+const wsRemoteBridge = isRemoteControlMode
+  ? createWsRemoteBridge({
+    wsUrl: REMOTE_WS_URL,
+    eventBus,
+  })
+  : null
+
+if (isRemoteObserveOnlyMode) {
+  createMqttRemoteBridge({
+    brokerUrl: REMOTE_MQTT_URL,
+    topicPrefix: REMOTE_MQTT_TOPIC_PREFIX,
+    eventBus,
+    createClient: (url) => mqttConnect(url),
+  })
+}
+
+function buildRemoteModeMetadata() {
+  if (!isRemoteMode) {
+    return {
+      remoteMode: false,
+      remoteControl: false,
+      remoteTransport: 'local',
+    }
+  }
+
+  if (isRemoteControlMode) {
+    return {
+      remoteMode: true,
+      remoteControl: true,
+      remoteTransport: 'ws',
+      remoteConnection: wsRemoteBridge?.getStatus() ?? null,
+    }
+  }
+
+  return {
+    remoteMode: true,
+    remoteControl: false,
+    remoteTransport: 'mqtt',
+  }
+}
+
+function mapRemoteCommandErrorStatus(errorCode) {
+  const code = String(errorCode ?? '').trim().toLowerCase()
+  if (code === 'not_active') return 404
+  if (code === 'already_active') return 409
+  if (code === 'validation_error') return 400
+  if (code === 'unavailable') return 503
+  if (code === 'policy_denied') return 403
+  return 400
+}
+
+async function sendRemoteRuntimeCommand(commandType, payload = {}) {
+  if (!wsRemoteBridge) {
+    throw new Error('remote runtime bridge is not configured')
+  }
+
+  const status = wsRemoteBridge.getStatus()
+  if (!status.connected) {
+    throw new Error('remote runtime websocket is not connected')
+  }
+
+  return wsRemoteBridge.sendCommand({
+    type: commandType,
+    payload,
+  })
+}
+
+function sendRemoteConnectionUnavailable(res, message = 'remote runtime websocket is not connected') {
+  return sendJson(res, 503, {
+    ok: false,
+    error: message,
+    ...buildRemoteModeMetadata(),
+  })
+}
+
+function sendRemoteCommandResponse(res, response, fallbackMessage) {
+  if (response?.ok === true) {
+    return null
+  }
+
+  const statusCode = mapRemoteCommandErrorStatus(response?.error?.code)
+  return sendJson(res, statusCode, {
+    ok: false,
+    code: String(response?.error?.code ?? 'runtime_error'),
+    error: String(response?.error?.message ?? fallbackMessage),
+    ...buildRemoteModeMetadata(),
+  })
 }
 
 const MIME_BY_EXT = {
@@ -145,18 +255,6 @@ const FILE_KIND_RULES = {
       '.sql', '.sh', '.ps1', '.bat', '.cmd', '.nrv', '.wfs',
     ]),
   },
-}
-
-const eventBus = createEventBus()
-
-const isRemoteMode = Boolean(REMOTE_MQTT_URL)
-if (isRemoteMode) {
-  createMqttRemoteBridge({
-    brokerUrl: REMOTE_MQTT_URL,
-    topicPrefix: REMOTE_MQTT_TOPIC_PREFIX,
-    eventBus,
-    createClient: (url) => mqttConnect(url),
-  })
 }
 
 function sendJson(res, statusCode, payload) {
@@ -571,6 +669,67 @@ async function handleApi(req, res, url) {
     }
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/file/rename') {
+    const body = await readRequestBody(req)
+    const filePath = String(body.filePath ?? '').trim()
+    const newName = String(body.newName ?? '').trim()
+    if (!filePath) return sendJson(res, 400, { error: 'filePath required' })
+    if (!newName) return sendJson(res, 400, { error: 'newName required' })
+    if (/[/\\]/.test(newName)) return sendJson(res, 400, { error: 'newName must not contain path separators' })
+
+    try {
+      const source = resolveWorkspaceRelativePath(filePath, 'editor')
+      if (!existsSync(source.absolutePath)) return sendJson(res, 404, { error: 'File not found' })
+
+      const parentPath = source.relativePath.includes('/')
+        ? source.relativePath.slice(0, source.relativePath.lastIndexOf('/'))
+        : ''
+      const targetPath = parentPath ? `${parentPath}/${newName}` : newName
+      const target = resolveWorkspaceRelativePath(targetPath, 'editor')
+
+      if (target.absolutePath === source.absolutePath) {
+        return sendJson(res, 200, { ok: true, oldPath: source.relativePath, filePath: target.relativePath })
+      }
+      if (existsSync(target.absolutePath)) return sendJson(res, 409, { error: 'Target already exists' })
+
+      renameSync(source.absolutePath, target.absolutePath)
+      return sendJson(res, 200, { ok: true, oldPath: source.relativePath, filePath: target.relativePath })
+    } catch (err) {
+      return sendJson(res, 400, { error: `Could not rename file: ${err.message}` })
+    }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/folder/rename') {
+    const body = await readRequestBody(req)
+    const folderPath = String(body.folderPath ?? '').trim()
+    const newName = String(body.newName ?? '').trim()
+    if (!folderPath) return sendJson(res, 400, { error: 'folderPath required' })
+    if (!newName) return sendJson(res, 400, { error: 'newName required' })
+    if (/[/\\]/.test(newName)) return sendJson(res, 400, { error: 'newName must not contain path separators' })
+
+    try {
+      const source = resolveWorkspaceDirectory(folderPath)
+      if (source.relativePath === '.') return sendJson(res, 400, { error: 'Cannot rename workspace root' })
+      if (!existsSync(source.absolutePath)) return sendJson(res, 404, { error: 'Folder not found' })
+
+      const parentPath = source.relativePath.includes('/')
+        ? source.relativePath.slice(0, source.relativePath.lastIndexOf('/'))
+        : ''
+      const targetPath = parentPath ? `${parentPath}/${newName}` : newName
+      const target = resolveWorkspaceDirectory(targetPath)
+
+      if (target.absolutePath === source.absolutePath) {
+        return sendJson(res, 200, { ok: true, oldPath: source.relativePath, folderPath: target.relativePath })
+      }
+      if (existsSync(target.absolutePath)) return sendJson(res, 409, { error: 'Target already exists' })
+
+      renameSync(source.absolutePath, target.absolutePath)
+      return sendJson(res, 200, { ok: true, oldPath: source.relativePath, folderPath: target.relativePath })
+    } catch (err) {
+      return sendJson(res, 400, { error: `Could not rename folder: ${err.message}` })
+    }
+  }
+
   if (req.method === 'DELETE' && url.pathname === '/api/file') {
     const body = await readRequestBody(req)
     const filePath = String(body.filePath ?? '').trim()
@@ -701,7 +860,7 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/nextv/start') {
-    if (isRemoteMode) {
+    if (isRemoteObserveOnlyMode) {
       return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
     }
     let body
@@ -711,11 +870,30 @@ async function handleApi(req, res, url) {
       return sendJson(res, 400, { error: err.message })
     }
 
+    if (isRemoteControlMode) {
+      let response
+      try {
+        response = await sendRemoteRuntimeCommand('start', body)
+      } catch (err) {
+        return sendRemoteConnectionUnavailable(res, String(err?.message ?? err))
+      }
+
+      const errorResponse = sendRemoteCommandResponse(res, response, 'failed to start remote runtime')
+      if (errorResponse) return errorResponse
+
+      return sendJson(res, 200, {
+        ok: true,
+        ...(response?.data ?? {}),
+        ...buildRemoteModeMetadata(),
+      })
+    }
+
     try {
       const runtimeStarted = await runtimeController.start(body)
       return sendJson(res, 200, {
         ok: true,
         ...runtimeStarted,
+        ...buildRemoteModeMetadata(),
       })
     } catch (err) {
       return sendJson(res, 400, { error: String(err?.message ?? err) })
@@ -723,9 +901,27 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/nextv/stop') {
-    if (isRemoteMode) {
+    if (isRemoteObserveOnlyMode) {
       return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
     }
+    if (isRemoteControlMode) {
+      let response
+      try {
+        response = await sendRemoteRuntimeCommand('stop', {})
+      } catch (err) {
+        return sendRemoteConnectionUnavailable(res, String(err?.message ?? err))
+      }
+
+      const errorResponse = sendRemoteCommandResponse(res, response, 'failed to stop remote runtime')
+      if (errorResponse) return errorResponse
+
+      return sendJson(res, 200, {
+        ok: true,
+        snapshot: response?.data?.snapshot ?? null,
+        ...buildRemoteModeMetadata(),
+      })
+    }
+
     if (!runtimeController.isActive()) {
       return sendJson(res, 404, { error: 'nextV runtime not active' })
     }
@@ -735,9 +931,34 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/nextv/event') {
-    if (isRemoteMode) {
+    if (isRemoteObserveOnlyMode) {
       return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
     }
+    if (isRemoteControlMode) {
+      let body
+      try {
+        body = await readRequestBody(req)
+      } catch (err) {
+        return sendJson(res, 400, { error: err.message })
+      }
+
+      let response
+      try {
+        response = await sendRemoteRuntimeCommand('enqueue_event', body)
+      } catch (err) {
+        return sendRemoteConnectionUnavailable(res, String(err?.message ?? err))
+      }
+
+      const errorResponse = sendRemoteCommandResponse(res, response, 'failed to enqueue remote event')
+      if (errorResponse) return errorResponse
+
+      return sendJson(res, 200, {
+        ok: true,
+        snapshot: response?.data?.snapshot ?? null,
+        ...buildRemoteModeMetadata(),
+      })
+    }
+
     if (!runtimeController.isActive()) {
       return sendJson(res, 404, { error: 'nextV runtime not active' })
     }
@@ -758,14 +979,50 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/nextv/snapshot') {
-    if (isRemoteMode) {
-      return sendJson(res, 200, { ok: true, running: false, snapshot: null, remoteMode: true })
+    if (isRemoteObserveOnlyMode) {
+      return sendJson(res, 200, {
+        ok: true,
+        running: false,
+        snapshot: null,
+        ...buildRemoteModeMetadata(),
+      })
     }
+
+    if (isRemoteControlMode) {
+      if (!wsRemoteBridge) {
+        return sendRemoteConnectionUnavailable(res, 'remote runtime bridge is not configured')
+      }
+
+      try {
+        const snapshot = await wsRemoteBridge.requestSnapshot()
+        return sendJson(res, 200, {
+          ok: true,
+          running: snapshot.running === true,
+          snapshot: snapshot.snapshot,
+          ...buildRemoteModeMetadata(),
+        })
+      } catch (err) {
+        const cachedSnapshot = wsRemoteBridge.getCachedSnapshot()
+        if (cachedSnapshot) {
+          return sendJson(res, 200, {
+            ok: true,
+            running: cachedSnapshot.running === true,
+            snapshot: cachedSnapshot,
+            staleSnapshot: true,
+            warning: String(err?.message ?? err),
+            ...buildRemoteModeMetadata(),
+          })
+        }
+        return sendRemoteConnectionUnavailable(res, String(err?.message ?? err))
+      }
+    }
+
     const snapshot = runtimeController.getSnapshot()
     return sendJson(res, 200, {
       ok: true,
       running: snapshot?.running === true,
       snapshot,
+      ...buildRemoteModeMetadata(),
     })
   }
 
@@ -794,10 +1051,14 @@ async function handleApi(req, res, url) {
     sseEvent(res, 'nextv_stream_open', {
       ok: true,
       timestamp: new Date().toISOString(),
-      active: runtimeController.isActive(),
+      active: isRemoteControlMode
+        ? (wsRemoteBridge?.getStatus()?.remoteActive === true)
+        : runtimeController.isActive(),
     })
 
-    const activeSnapshot = runtimeController.getActiveSnapshot()
+    const activeSnapshot = isRemoteControlMode
+      ? (wsRemoteBridge?.getCachedSnapshot() ?? null)
+      : runtimeController.getActiveSnapshot()
     if (activeSnapshot) {
       sseEvent(res, 'nextv_snapshot', { snapshot: activeSnapshot })
     }

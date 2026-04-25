@@ -25,6 +25,52 @@ import {
 
 This is the recommended embedding boundary for host-side orchestration.
 
+## Runtime authority API (subpath-first)
+
+Use the runtime subpath for standalone runtime authority and remote attach surfaces:
+
+```js
+import {
+  createRuntimeResolvers,
+  createRuntimeCore,
+  createRuntimeCommandRouter,
+  createRuntimeWebSocketSurface,
+} from 'nerveflow/runtime'
+```
+
+Compatibility note:
+
+- top-level runtime helper imports from `nerveflow` still work during the compatibility window
+- new integrations should import runtime authority APIs from `nerveflow/runtime`
+
+Migration example:
+
+```js
+// Before (compatibility window)
+import {
+  createRuntimeResolvers,
+  createRuntimeCore,
+  createRuntimeCommandRouter,
+  createRuntimeWebSocketSurface,
+} from 'nerveflow'
+
+// After (recommended)
+import {
+  createRuntimeResolvers,
+  createRuntimeCore,
+  createRuntimeCommandRouter,
+  createRuntimeWebSocketSurface,
+} from 'nerveflow/runtime'
+```
+
+Compatibility timeline:
+
+| Phase | `nerveflow` top-level runtime imports | `nerveflow/runtime` |
+| --- | --- | --- |
+| Current | Supported (compatibility) | Canonical for new integrations |
+| Next major | Removed | Supported |
+| Later extraction (optional) | N/A | May remain bridge path if `@nerveflow/runtime` is introduced |
+
 ## Host protocol utilities (v1)
 
 `nerveflow/host_core/protocol` provides a transport-agnostic envelope contract for multi-surface hosts.
@@ -37,24 +83,31 @@ Use these helpers to validate inbound commands and shape outbound response/event
 
 ## Surface flags in nerve-studio
 
-The reference preview host supports transport surface toggles and optional remote observability mode.
+The reference preview host supports transport surface toggles and optional remote modes.
 
 Surface toggles:
 
 - `NERVE_STUDIO_SURFACES` comma-separated list (for example: `http,sse`)
 
-Remote observability mode (MQTT-backed):
+Remote MQTT observability mode:
 
 - `--remote` enables remote mode for this launch
 - `--remote-mqtt <url>` sets broker URL explicitly (for example: `mqtt://localhost:1883`)
 - `--remote-mqtt-topic-prefix <prefix>` sets event topic prefix (default: `nextv/event`)
 - `NERVE_STUDIO_REMOTE_MQTT` is used as fallback broker URL when `--remote` is set without `--remote-mqtt`
 
+Remote WS full-control mode:
+
+- `--remote-ws <url>` attaches studio to a standalone runtime WS endpoint (for example: `ws://127.0.0.1:4190/api/runtime/ws`)
+- `NERVE_STUDIO_REMOTE_WS` is used as fallback WS URL when remote mode is requested without `--remote-ws`
+
 Behavior notes:
 
 - running without `--remote` starts in local mode even if `NERVE_STUDIO_REMOTE_MQTT` is set
-- if remote mode is requested and no broker URL is resolved, startup fails fast
-- in remote mode, runtime mutation endpoints (`start`, `stop`, `enqueue_event`) return 405 and UI controls are disabled
+- if remote mode is requested and no MQTT or WS URL is resolved, startup fails fast
+- `--remote-mqtt` and `--remote-ws` are mutually exclusive
+- MQTT remote mode is observability-only: runtime mutation endpoints (`start`, `stop`, `enqueue_event`) return 405 and UI controls are disabled
+- WS remote mode proxies runtime mutation endpoints to the remote runtime and keeps SSE/event rendering active
 
 Examples:
 
@@ -67,6 +120,13 @@ node nerve-studio/preview-server.js --remote --remote-mqtt mqtt://localhost:1883
 
 # remote mode with env fallback
 $env:NERVE_STUDIO_REMOTE_MQTT = 'mqtt://localhost:1883'
+node nerve-studio/preview-server.js --remote
+
+# remote ws full-control mode
+node nerve-studio/preview-server.js --remote-ws ws://127.0.0.1:4190/api/runtime/ws
+
+# remote ws mode with env fallback
+$env:NERVE_STUDIO_REMOTE_WS = 'ws://127.0.0.1:4190/api/runtime/ws'
 node nerve-studio/preview-server.js --remote
 ```
 
@@ -89,6 +149,49 @@ Supported WebSocket command types map directly to protocol v1 commands:
 - `snapshot`
 - `subscribe`
 - `unsubscribe`
+
+## Standalone runtime process and attach CLI
+
+Nerveflow also provides a dedicated runtime process with a WebSocket control surface and a companion attach CLI.
+
+Start a runtime process:
+
+```powershell
+node bin/nerve-runtime.js start examples/mqtt-simple-host --port 4190
+```
+
+Optional flags:
+
+- `--entrypoint <path>` override workspace entrypoint file
+- `--port <n>` HTTP/WS listen port (default `4190`)
+- `--ws-path <path>` WebSocket path (default `/api/runtime/ws`)
+
+When running, the process exposes:
+
+- `GET /health` runtime status JSON
+- `ws://<host>:<port><wsPath>` protocol v1 command/event surface
+
+Attach from another process:
+
+```powershell
+node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws snapshot
+node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws enqueue user_message hello
+node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws stop
+```
+
+Listen mode keeps the socket open and prints runtime events as they arrive:
+
+```powershell
+node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws listen
+```
+
+Notes:
+
+- `nerve-attach` uses protocol command types `snapshot`, `enqueue_event`, `stop`, `start`, and `subscribe`.
+- one-shot attach commands may print event envelopes before their final response envelope when runtime events occur concurrently.
+- disconnecting one attach client does not stop the runtime; other surfaces remain attached.
+
+Implementation notes for the runtime module itself live in `src/runtime/README.md`.
 
 ## Minimal integration shape
 

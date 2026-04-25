@@ -27,3 +27,13 @@ export {
 } from './nextv_event_graph.js'
 
 export { NextVEventRunner } from './nextv_runner.js'
+
+// Compatibility bridge: runtime authority APIs are canonically imported from
+// `nerveflow/runtime`, while top-level exports remain available during
+// the subpath-first migration window.
+export {
+  createRuntimeCommandRouter,
+  createRuntimeCore,
+  createRuntimeResolvers,
+  createRuntimeWebSocketSurface,
+} from './runtime/index.js'

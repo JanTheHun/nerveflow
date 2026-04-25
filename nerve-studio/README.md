@@ -88,7 +88,27 @@ node nerve-studio/preview-server.js --remote
 Notes:
 
 - without `--remote`, nerve-studio runs in local mode
-- remote mode is read-only (start/stop/enqueue are disabled in UI and return 405 on API)
+- MQTT remote mode is read-only (start/stop/enqueue are disabled in UI and return 405 on API)
+
+### Run as remote WS full-control surface
+
+Attach Studio directly to a standalone runtime websocket endpoint:
+
+```bash
+node nerve-studio/preview-server.js --remote-ws ws://127.0.0.1:4190/api/runtime/ws
+```
+
+Or use env fallback:
+
+```powershell
+$env:NERVE_STUDIO_REMOTE_WS = 'ws://127.0.0.1:4190/api/runtime/ws'
+node nerve-studio/preview-server.js --remote
+```
+
+Notes:
+
+- WS remote mode allows full control from Studio UI/API (start/stop/enqueue/snapshot)
+- MQTT and WS remote options are mutually exclusive per launch
 
 ---
 

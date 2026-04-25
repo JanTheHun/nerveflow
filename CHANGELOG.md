@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.1.3] - 2026-04-24
+
+### Changed
+
+- Documented subpath-first package boundary guidance:
+	- `nerveflow` for core execution and embedding APIs
+	- `nerveflow/runtime` for runtime authority and remote attach surfaces
+- Updated host integration docs to make `nerveflow/runtime` the canonical runtime import path for new integrations.
+
+### Notes
+
+- Versioning policy: this is a documentation and migration-guidance update only (patch-level change).
+- Migration guidance is intentionally centralized in `docs/04-host-integration.md` (project README is not used for the subpath migration track).
+- Compatibility window: top-level runtime helper imports from `nerveflow` remain supported for existing integrations.
+
 ## [0.1.2] - 2026-04-22
 
 ### Added

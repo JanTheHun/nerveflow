@@ -43,6 +43,53 @@ test('supports state updates and arithmetic add', async () => {
   assert.equal(result.state.last, 'done')
 })
 
+test('supports subtraction multiplication division and precedence', async () => {
+  const result = await runNextVScript([
+    'x = 1 + 2 * 3',
+    'y = (1 + 2) * 3',
+    'z = 10 - 2 * 3',
+    'q = 8 / 2 / 2',
+  ].join('\n'))
+
+  assert.equal(result.locals.x, 7)
+  assert.equal(result.locals.y, 9)
+  assert.equal(result.locals.z, 4)
+  assert.equal(result.locals.q, 2)
+})
+
+test('supports state updates with multiplication and subtraction', async () => {
+  const result = await runNextVScript([
+    'state.counter = state.counter * 2',
+    'state.counter = state.counter - 1',
+  ].join('\n'), {
+    state: { counter: 3 },
+  })
+
+  assert.equal(result.state.counter, 5)
+})
+
+test('arithmetic operators require numeric operands', async () => {
+  await assert.rejects(
+    () => runNextVScript('bad = "hello" * 2'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_ARITHMETIC_OPERAND')
+      return true
+    },
+  )
+})
+
+test('division by zero is a runtime error', async () => {
+  await assert.rejects(
+    () => runNextVScript('bad = 4 / 0'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'DIVISION_BY_ZERO')
+      return true
+    },
+  )
+})
+
 test('operator plus rejects structured values in string context', async () => {
   await assert.rejects(
     () => runNextVScript([

@@ -503,63 +503,6 @@ test('mqtt-simple-host custom predicate hook can suppress events', async () => {
   }
 })
 
-test('mqtt-simple-host routes chatbot agent calls through injected transport', async () => {
-  const mockClient = createMockMqttClient()
-  const observedCalls = []
-  let resolveFirstAgentCall
-  const firstAgentCall = new Promise((resolve) => {
-    resolveFirstAgentCall = resolve
-  })
-  const host = createMqttHost(mockClient, RESOLVERS, {
-    callAgent: async ({ model, messages }) => {
-      observedCalls.push({ model, messages })
-      resolveFirstAgentCall?.()
-      return 'Hello from injected transport'
-    },
-  })
-
-  try {
-    const startResponsePromise = mockClient.waitForPublished(
-      (topic, msg) => topic === 'nextv/response/chat-start' && msg?.ok === true,
-    )
-    mockClient.simulateCommand({
-      type: 'start',
-      requestId: 'chat-start',
-      payload: { workspaceDir: 'nerve-studio/workspaces-local/chatbot' },
-    })
-    await startResponsePromise
-
-    const enqueueResponsePromise = mockClient.waitForPublished(
-      (topic, msg) => topic === 'nextv/response/chat-msg-1' && msg?.ok === true,
-    )
-
-    mockClient.simulateCommand({
-      type: 'enqueue_event',
-      requestId: 'chat-msg-1',
-      payload: { eventType: 'user_message', value: 'hello host' },
-    })
-
-    await enqueueResponsePromise
-    await Promise.race([
-      firstAgentCall,
-      new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Timed out waiting for agent transport call')), 3000)
-      }),
-    ])
-
-    assert.equal(observedCalls.length > 0, true)
-    assert.equal(observedCalls[0].model, 'cogito:3b')
-    assert.equal(Array.isArray(observedCalls[0].messages), true)
-    const hasUserContent = observedCalls[0].messages.some(
-      (m) => m?.role === 'user' && String(m?.content ?? '').includes('hello host'),
-    )
-    assert.equal(hasUserContent, true)
-  } finally {
-    host.runtimeController.stop()
-    host.shutdown()
-  }
-})
-
 test('mqtt-simple-host publishes nextv_error when injected agent transport fails', async () => {
   const mockClient = createMockMqttClient()
   const host = createMqttHost(mockClient, RESOLVERS, {

@@ -5,10 +5,15 @@
   "license": "MIT",
   "type": "module",
   "main": "./src/index.js",
+  "bin": {
+    "nerve-runtime": "./bin/nerve-runtime.js",
+    "nerve-attach": "./bin/nerve-attach.js"
+  },
   "exports": {
     ".": "./src/index.js",
     "./host_core": "./src/host_core/index.js",
-    "./host_core/protocol": "./src/host_core/protocol.js"
+    "./host_core/protocol": "./src/host_core/protocol.js",
+    "./runtime": "./src/runtime/index.js"
   },
   "scripts": {
     "test": "node --test tests/*.test.js"
@@ -37,6 +42,8 @@
   },
   "files": [
     "src/",
+    "bin/nerve-runtime.js",
+    "bin/nerve-attach.js",
     "docs/",
     "examples/minimal-web-host/server.js",
     "examples/minimal-web-host/README.md",

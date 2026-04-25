@@ -194,6 +194,39 @@ function findTopLevelColon(input) {
   return -1
 }
 
+function isUnarySignPosition(input, index) {
+  const operator = input[index]
+  if (operator !== '+' && operator !== '-') return false
+
+  let prevIndex = index - 1
+  while (prevIndex >= 0 && /\s/.test(input[prevIndex])) {
+    prevIndex -= 1
+  }
+
+  if (prevIndex < 0) return true
+  return '([{:,+-*/!<>=&|'.includes(input[prevIndex])
+}
+
+function findTopLevelArithmetic(input, operators) {
+  const state = createDelimiterState()
+  let match = null
+
+  for (let i = 0; i < input.length; i++) {
+    if (isTopLevelState(state)) {
+      for (const operator of operators) {
+        if (!input.startsWith(operator, i)) continue
+        if ((operator === '+' || operator === '-') && isUnarySignPosition(input, i)) {
+          continue
+        }
+        match = { index: i, operator }
+      }
+    }
+    advanceDelimiterState(state, input[i])
+  }
+
+  return match
+}
+
 function hasOuterBalancedPair(text, openCh, closeCh) {
   if (!text.startsWith(openCh) || !text.endsWith(closeCh)) return false
 
@@ -402,6 +435,63 @@ function parseTerm(raw, line, statement) {
 }
 
 function parseAddExpression(raw, line, statement) {
+  const operatorMatch = findTopLevelArithmetic(String(raw ?? '').trim(), ['+', '-'])
+  if (operatorMatch) {
+    const text = String(raw ?? '').trim()
+    const leftRaw = text.slice(0, operatorMatch.index).trim()
+    const rightRaw = text.slice(operatorMatch.index + operatorMatch.operator.length).trim()
+    if (!leftRaw || !rightRaw) {
+      throw nextvError({
+        line,
+        kind: 'parse',
+        code: 'INVALID_EXPRESSION',
+        statement,
+        message: `Invalid arithmetic expression "${text}".`,
+      })
+    }
+
+    const left = parseAddExpression(leftRaw, line, statement)
+    const right = parseMultiplyExpression(rightRaw, line, statement)
+    if (operatorMatch.operator === '+') {
+      const terms = left.type === 'add' ? [...left.terms, right] : [left, right]
+      return { type: 'add', terms }
+    }
+
+    return {
+      type: 'binary',
+      operator: operatorMatch.operator,
+      left,
+      right,
+    }
+  }
+
+  return parseMultiplyExpression(raw, line, statement)
+}
+
+function parseMultiplyExpression(raw, line, statement) {
+  const text = String(raw ?? '').trim()
+  const operatorMatch = findTopLevelArithmetic(text, ['*', '/'])
+  if (operatorMatch) {
+    const leftRaw = text.slice(0, operatorMatch.index).trim()
+    const rightRaw = text.slice(operatorMatch.index + operatorMatch.operator.length).trim()
+    if (!leftRaw || !rightRaw) {
+      throw nextvError({
+        line,
+        kind: 'parse',
+        code: 'INVALID_EXPRESSION',
+        statement,
+        message: `Invalid arithmetic expression "${text}".`,
+      })
+    }
+
+    return {
+      type: 'binary',
+      operator: operatorMatch.operator,
+      left: parseMultiplyExpression(leftRaw, line, statement),
+      right: parseTerm(rightRaw, line, statement),
+    }
+  }
+
   const parts = splitTopLevel(String(raw ?? '').trim(), '+').filter(Boolean)
   if (parts.length === 0) {
     throw nextvError({
@@ -953,6 +1043,20 @@ function coerceTextValue(value, context, usage) {
   return String(value)
 }
 
+function requireArithmeticNumber(value, context, usage) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+
+  throw nextvError({
+    line: context.line,
+    kind: 'runtime',
+    code: 'INVALID_ARITHMETIC_OPERAND',
+    statement: context.statement,
+    message: `${usage} requires finite numeric operands.`,
+  })
+}
+
 function normalizeAgentMessagesValue(value, context) {
   if (value == null) return []
   if (!Array.isArray(value)) {
@@ -1146,6 +1250,26 @@ async function evaluateExpression(expr, context) {
     }
 
     return values.map((v) => coerceTextValue(v, context, 'Operator +')).join('')
+  }
+
+  if (expr.type === 'binary') {
+    const left = requireArithmeticNumber(await evaluateExpression(expr.left, context), context, `Operator ${expr.operator}`)
+    const right = requireArithmeticNumber(await evaluateExpression(expr.right, context), context, `Operator ${expr.operator}`)
+
+    if (expr.operator === '-') return left - right
+    if (expr.operator === '*') return left * right
+    if (expr.operator === '/') {
+      if (right === 0) {
+        throw nextvError({
+          line: context.line,
+          kind: 'runtime',
+          code: 'DIVISION_BY_ZERO',
+          statement: context.statement,
+          message: 'Operator / cannot divide by zero.',
+        })
+      }
+      return left / right
+    }
   }
 
   if (expr.type === 'compare') {

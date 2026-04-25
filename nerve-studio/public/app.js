@@ -7,11 +7,15 @@ let activeScriptLine = null
 let isResizing = false
 let isFileTreeResizing = false
 let isStateDiffResizing = false
+let isUserIOResizing = false
 let activeVerticalResize = null
 let activeScriptAbortController = null
 let activeScriptRunId = ''
 let nextVRuntimeRunning = false
 let isRemoteMode = false
+let isRemoteControlMode = false
+let isRemoteRuntimeConnected = true
+let remoteTransport = 'local'
 let nextVEventSource = null
 let nextVHasLiveRuntimeEvents = false
 let visualOutputWindow = null
@@ -40,6 +44,8 @@ const storageKeys = {
   nextVTreeDrawerOpen: 'local-agent.nextv.treeDrawerOpen',
   nextVStateDiffOpen: 'local-agent.nextv.stateDiffOpen',
   nextVStateDiffWidth: 'local-agent.nextv.stateDiffWidth',
+  nextVUserIOOpen: 'local-agent.nextv.userIOOpen',
+  nextVUserIOWidth: 'local-agent.nextv.userIOWidth',
   nextVGraphDirection: 'local-agent.nextv.graphDirection',
 }
 
@@ -176,6 +182,7 @@ const nextVGraphShell = document.getElementById('nextv-graph-shell')
 const nextVGraphOutput = document.getElementById('nextv-graph-output')
 const nextVStateDiffSplitter = document.getElementById('nextv-state-diff-splitter')
 const nextVStateDiffPanel = document.getElementById('nextv-state-diff-panel')
+const nextVUserIOSplitter = document.getElementById('nextv-user-io-splitter')
 const nextVStateDiffFeed = document.getElementById('nextv-state-diff-feed')
 const nextVStateSnapshotPane = document.getElementById('nextv-state-snapshot-pane')
 const nextVStateDiffTabDiff = document.getElementById('nextv-state-diff-tab-diff')
@@ -580,46 +587,43 @@ function toggleNextVDevConsole() {
   setNextVDevConsoleOpen(!nextVPanelState.devConsoleOpen)
 }
 
-function positionUserIOPanel() {
-  if (!scriptEditorPanel) return
-
-  const margin = 10
-  const topMargin = 6
-  const panelWidth = scriptEditorPanel.offsetWidth || 320
-  const panelHeight = scriptEditorPanel.offsetHeight || 420
-  const viewportWidth = window.innerWidth
-  const viewportHeight = window.innerHeight
-
-  if (!toggleUserIOBtn) {
-    const fallbackLeft = Math.max(margin, viewportWidth - panelWidth - margin)
-    scriptEditorPanel.style.left = `${fallbackLeft}px`
-    scriptEditorPanel.style.top = `${topMargin}px`
-    scriptEditorPanel.style.right = 'auto'
-    return
-  }
-
-  const anchor = toggleUserIOBtn.getBoundingClientRect()
-  let left = anchor.right + 8
-  if (left + panelWidth + margin > viewportWidth) {
-    left = anchor.left - panelWidth - 8
-  }
-  left = Math.max(margin, Math.min(left, viewportWidth - panelWidth - margin))
-
-  const top = Math.max(topMargin, Math.min(topMargin, viewportHeight - panelHeight - margin))
-
-  scriptEditorPanel.style.left = `${left}px`
-  scriptEditorPanel.style.top = `${top}px`
-  scriptEditorPanel.style.right = 'auto'
+function clampNextVUserIOWidth(value) {
+  const numeric = Number(value)
+  const maxWidth = Math.max(340, Math.min(860, Math.round(window.innerWidth * 0.72)))
+  if (!Number.isFinite(numeric)) return 320
+  return Math.max(240, Math.min(maxWidth, Math.round(numeric)))
 }
 
-function setUserIOPanelOpen(open) {
+function persistNextVUserIOWidth(width) {
+  localStorage.setItem(storageKeys.nextVUserIOWidth, String(clampNextVUserIOWidth(width)))
+}
+
+function getStoredNextVUserIOWidth() {
+  const stored = Number(localStorage.getItem(storageKeys.nextVUserIOWidth))
+  if (!Number.isFinite(stored)) return 320
+  return clampNextVUserIOWidth(stored)
+}
+
+function setUserIOPanelOpen(open, options = {}) {
+  const { persist = true } = options
   userIOPanelState.open = open !== false
   document.body.classList.toggle('user-io-open', userIOPanelState.open)
+
+  if (scriptEditorPanel) {
+    scriptEditorPanel.style.width = userIOPanelState.open ? `${getStoredNextVUserIOWidth()}px` : '0px'
+  }
+
+  if (nextVUserIOSplitter) {
+    nextVUserIOSplitter.classList.toggle('collapsed', !userIOPanelState.open)
+  }
+
   if (toggleUserIOBtn) {
+    toggleUserIOBtn.textContent = userIOPanelState.open ? 'hide input' : 'show input'
     toggleUserIOBtn.setAttribute('aria-pressed', userIOPanelState.open ? 'true' : 'false')
   }
-  if (userIOPanelState.open) {
-    window.requestAnimationFrame(positionUserIOPanel)
+
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVUserIOOpen, userIOPanelState.open ? '1' : '0')
   }
 }
 
@@ -665,9 +669,6 @@ function setAppMode(mode) {
     window.requestAnimationFrame(() => {
       applyStoredLeftPanelHeights()
       setNextVDevConsoleOpen(nextVPanelState.devConsoleOpen, { persist: false })
-      if (nextMode === 'nextv' && userIOPanelState.open) {
-        positionUserIOPanel()
-      }
     })
   }
 
@@ -693,12 +694,29 @@ function setNextVMode() {
 function updateRemoteModeBadge() {
   if (!remoteModeBadge) return
   remoteModeBadge.hidden = isRemoteMode !== true
+  if (!isRemoteMode) {
+    remoteModeBadge.textContent = 'remote runtime'
+    return
+  }
+
+  if (isRemoteControlMode) {
+    remoteModeBadge.textContent = 'remote WS runtime (control)'
+    return
+  }
+
+  if (remoteTransport === 'mqtt') {
+    remoteModeBadge.textContent = 'remote MQTT runtime'
+    return
+  }
+
+  remoteModeBadge.textContent = 'remote runtime'
 }
 
 function setNextVRunControls() {
   const hasEntrypoint = Boolean(normalizeRelativePath(nextVEntrypointInput?.value ?? ''))
-  if (nextVStartBtn) nextVStartBtn.disabled = isRemoteMode || nextVRuntimeRunning || isBusy || !hasEntrypoint
-  if (nextVStopBtn) nextVStopBtn.disabled = isRemoteMode || !nextVRuntimeRunning || isBusy
+  const remoteBlocksControl = isRemoteMode && (!isRemoteControlMode || !isRemoteRuntimeConnected)
+  if (nextVStartBtn) nextVStartBtn.disabled = remoteBlocksControl || nextVRuntimeRunning || isBusy || !hasEntrypoint
+  if (nextVStopBtn) nextVStopBtn.disabled = remoteBlocksControl || !nextVRuntimeRunning || isBusy
 }
 
 function appendPanelLogRow(panel, line, cls = '') {
@@ -1111,6 +1129,70 @@ function flashNextVGraphSignalDispatch(signalType, durationMs = 650) {
   nextVGraphState.runtimeTimers.add(timerId)
 }
 
+function formatNextVGraphEventValue(value) {
+  if (value === undefined) return ''
+  if (value === null) return 'null'
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return '""'
+    return trimmed.length > 96 ? `${trimmed.slice(0, 93)}...` : trimmed
+  }
+
+  try {
+    const text = JSON.stringify(value)
+    if (!text) return String(value)
+    return text.length > 96 ? `${text.slice(0, 93)}...` : text
+  } catch {
+    const fallback = String(value)
+    return fallback.length > 96 ? `${fallback.slice(0, 93)}...` : fallback
+  }
+}
+
+function flashNextVGraphEventValue(eventType, value, options = {}) {
+  const formatted = formatNextVGraphEventValue(value)
+  if (!formatted) return
+
+  const rawType = String(eventType ?? '').trim()
+  if (!rawType) return
+
+  const preferredNodeId = String(options.nodeId ?? '').trim()
+  const fallbackHandlerId = `handler:${rawType}`
+  const nodeId = preferredNodeId
+    || (nextVGraphState.layoutPositions.has(rawType) ? rawType : fallbackHandlerId)
+  const nodePos = nextVGraphState.layoutPositions.get(nodeId)
+  if (!nodePos) return
+
+  const canvas = nextVGraphState.canvasEl ?? getNextVGraphCanvas()
+  if (!canvas) return
+
+  const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
+  const scaledPadding = getNextVGraphScaledPadding(zoom, getNextVGraphViewport())
+  const nodeX = scaledPadding.x + (nodePos.x * zoom)
+  const nodeY = scaledPadding.y + (nodePos.y * zoom)
+
+  const badge = document.createElement('div')
+  badge.className = 'nextv-graph-emit-value-flash'
+  badge.textContent = formatted
+  badge.style.left = `${Math.round(nodeX + 14)}px`
+  badge.style.top = `${Math.round(nodeY - 10)}px`
+  canvas.appendChild(badge)
+
+  // Force transition start after first paint.
+  window.requestAnimationFrame(() => {
+    badge.classList.add('visible')
+  })
+
+  const timerId = window.setTimeout(() => {
+    nextVGraphState.runtimeTimers.delete(timerId)
+    badge.classList.remove('visible')
+    window.setTimeout(() => {
+      badge.remove()
+    }, 180)
+  }, 1400)
+
+  nextVGraphState.runtimeTimers.add(timerId)
+}
+
 function getNextVGraphEdgeKey(from, to) {
   return `${String(from ?? '').trim()}\u0000${String(to ?? '').trim()}`
 }
@@ -1485,6 +1567,7 @@ function handleNextVGraphRuntimeEvent(runtimeEvent) {
 
     nextVGraphState.runtimeLastDispatchedNode = handlerId
     applyNextVGraphRuntimeVisuals()
+    flashNextVGraphEventValue(signalType, runtimeEvent.value, { nodeId: handlerId })
     if (nextVGraphState.autoFollowEnabled && typeof nextVGraphState.setSelectedGraphNodeFn === 'function') {
       nextVGraphState.setSelectedGraphNodeFn(handlerId)
     }
@@ -1600,7 +1683,7 @@ function buildNextVGraphLayout(graphNodes, options = {}) {
   const containers = []
   const containerByKey = new Map()
   for (const [key, members] of fileGroups.entries()) {
-    const internalMembers = members.filter((n) => !externalNodeIds.has(n.id) && n.kind !== 'effect')
+    const internalMembers = members.filter((n) => !externalNodeIds.has(n.id))
     const positioned = internalMembers.filter((n) => positions.has(n.id))
     if (positioned.length === 0) continue
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
@@ -1628,34 +1711,7 @@ function buildNextVGraphLayout(graphNodes, options = {}) {
     containerByKey.set(key, box)
   }
 
-  // ── 6. Move effect nodes outside their file container (below = leaving) ───
-  const movedEffectNodeIds = new Set()
-  for (const [key, members] of fileGroups.entries()) {
-    const container = containerByKey.get(key)
-    if (!container) continue
-    const effectMembers = members.filter((nodeObj) => nodeObj?.kind === 'effect' && positions.has(nodeObj.id))
-    if (effectMembers.length === 0) continue
-
-    const isLeftToRight = layoutDirection === 'LR'
-    const usableWidth = Math.max(60, container.width - 80)
-    const usableHeight = Math.max(54, container.height - 72)
-    for (let effectIndex = 0; effectIndex < effectMembers.length; effectIndex++) {
-      const nodeObj = effectMembers[effectIndex]
-      const progress = effectMembers.length <= 1 ? 0.5 : (effectIndex / (effectMembers.length - 1))
-      const effectLabel = String(effectNodeById.get(nodeObj.id)?.label ?? '')
-      const effectVisual = getNextVGraphNodeVisual(nodeObj, effectLabel)
-      const nx = isLeftToRight
-        ? (container.x + container.width + Math.round(effectVisual.width / 2) + 38)
-        : (container.x + 40 + (usableWidth * progress))
-      const ny = isLeftToRight
-        ? (container.y + 34 + (usableHeight * progress))
-        : (container.y + container.height + 34)
-      positions.set(nodeObj.id, { x: nx, y: ny })
-      movedEffectNodeIds.add(nodeObj.id)
-    }
-  }
-
-  // Recompute layout bounds after any manual node repositioning.
+  // Recompute layout bounds after Dagre layout.
   let maxNodeX = 0
   let maxNodeY = 0
   for (const nodeObj of graphNodes) {
@@ -1671,14 +1727,6 @@ function buildNextVGraphLayout(graphNodes, options = {}) {
   for (const box of containers) {
     maxContainerX = Math.max(maxContainerX, box.x + box.width)
     maxContainerY = Math.max(maxContainerY, box.y + box.height)
-  }
-
-  // Dagre bendpoints no longer match moved effect nodes; fall back to direct edges there.
-  if (movedEffectNodeIds.size > 0) {
-    for (const edge of graphEdges) {
-      if (!movedEffectNodeIds.has(edge.from) && !movedEffectNodeIds.has(edge.to)) continue
-      edgeBendpoints.delete(getNextVGraphEdgeKey(edge.from, edge.to))
-    }
   }
 
   const graphMeta = g.graph()
@@ -2856,10 +2904,12 @@ function showFileTreeCtxMenu(event, path, type) {
 
   const deleteBtn = document.getElementById('ctx-delete')
   if (deleteBtn) deleteBtn.style.display = type === 'root' ? 'none' : ''
+  const renameBtn = document.getElementById('ctx-rename')
+  if (renameBtn) renameBtn.style.display = type === 'root' ? 'none' : ''
 
   const { clientX, clientY } = event
   const menuWidth = 160
-  const menuHeight = 110
+  const menuHeight = 150
   const left = (clientX + menuWidth > window.innerWidth) ? clientX - menuWidth : clientX
   const top = (clientY + menuHeight > window.innerHeight) ? clientY - menuHeight : clientY
   ctxMenu.el.style.left = `${left}px`
@@ -2979,6 +3029,35 @@ function ctxMenuNewFolder() {
   const parentPath = getCtxMenuParentPath()
   hideFileTreeCtxMenu()
   showInlineNameInput(parentPath, 'dir')
+}
+
+async function ctxMenuRename() {
+  const path = normalizeRelativePath(ctxMenu.targetPath)
+  const type = ctxMenu.targetType
+  hideFileTreeCtxMenu()
+  if (!path) return
+
+  const currentName = pathBasename(path)
+  const newNameRaw = window.prompt('Rename to:', currentName)
+  if (newNameRaw == null) return
+
+  const newName = String(newNameRaw).trim()
+  if (!newName) {
+    setStatus('rename cancelled: empty name', 'responding')
+    return
+  }
+  if (/[/\\]/.test(newName)) {
+    setStatus('rename failed: name must not contain / or \\', 'responding')
+    return
+  }
+
+  if (type === 'file') {
+    await doRenameFile(path, newName)
+    return
+  }
+  if (type === 'dir') {
+    await doRenameFolder(path, newName)
+  }
 }
 
 async function ctxMenuDelete() {
@@ -3160,6 +3239,125 @@ async function doDeleteFolder(folderPath) {
     await loadWorkspaceTree(nextVFileState.workspaceDir || '').catch(() => {})
   } catch (err) {
     setStatus(`delete error: ${err.message}`, 'responding')
+  }
+}
+
+function remapPathPrefix(pathValue, fromPrefix, toPrefix) {
+  const normalizedPath = normalizeRelativePath(pathValue)
+  const from = normalizeRelativePath(fromPrefix)
+  const to = normalizeRelativePath(toPrefix)
+  if (!normalizedPath || !from || !to) return normalizedPath
+  if (normalizedPath === from) return to
+  if (!normalizedPath.startsWith(`${from}/`)) return normalizedPath
+  return `${to}${normalizedPath.slice(from.length)}`
+}
+
+function remapMapKeysByPrefix(mapRef, fromPrefix, toPrefix) {
+  const entries = Array.from(mapRef.entries())
+  let changed = false
+  for (const [key, value] of entries) {
+    const remappedKey = remapPathPrefix(key, fromPrefix, toPrefix)
+    if (!remappedKey || remappedKey === key) continue
+    mapRef.delete(key)
+    mapRef.set(remappedKey, value)
+    changed = true
+  }
+  return changed
+}
+
+function remapEditorStatePaths(oldPath, newPath) {
+  const oldNormalized = normalizeRelativePath(oldPath)
+  const newNormalized = normalizeRelativePath(newPath)
+  if (!oldNormalized || !newNormalized) return
+
+  nextVFileState.openTabs = nextVFileState.openTabs.map((path) => remapPathPrefix(path, oldNormalized, newNormalized))
+  nextVFileState.openFilePath = remapPathPrefix(nextVFileState.openFilePath, oldNormalized, newNormalized)
+  scriptEditorState.path = remapPathPrefix(scriptEditorState.path, oldNormalized, newNormalized)
+
+  const remappedExpanded = new Set()
+  for (const path of nextVFileState.expandedDirs) {
+    remappedExpanded.add(remapPathPrefix(path, oldNormalized, newNormalized))
+  }
+  nextVFileState.expandedDirs = remappedExpanded
+
+  remapMapKeysByPrefix(scriptCache, oldNormalized, newNormalized)
+  remapMapKeysByPrefix(dirtyEditsCache, oldNormalized, newNormalized)
+
+  const workspaceEntrypoint = resolveNextVPath(nextVEntrypointInput?.value ?? '')
+  const remappedEntrypoint = remapPathPrefix(workspaceEntrypoint, oldNormalized, newNormalized)
+  if (workspaceEntrypoint && remappedEntrypoint !== workspaceEntrypoint && nextVEntrypointInput) {
+    nextVEntrypointInput.value = toNextVRelativePath(remappedEntrypoint)
+    persistNextVConfig()
+  }
+
+  persistNextVOpenFile(nextVFileState.openFilePath)
+  renderOpenFileTabs()
+  syncScriptBadgeState()
+}
+
+async function doRenameFile(filePath, newName) {
+  try {
+    const sourcePath = normalizeRelativePath(filePath)
+    if (!sourcePath) {
+      setStatus('rename failed: invalid file path', 'responding')
+      return
+    }
+
+    const res = await fetch('/api/file/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath: sourcePath, newName }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      setStatus(`rename failed: ${data.error ?? res.status}`, 'responding')
+      return
+    }
+
+    const oldPath = normalizeRelativePath(data.oldPath || sourcePath)
+    const renamedPath = normalizeRelativePath(data.filePath || sourcePath)
+    remapEditorStatePaths(oldPath, renamedPath)
+
+    appendScriptLogRow(`[file:rename] ${oldPath} -> ${renamedPath}`, 'result')
+    setStatus(`renamed ${pathBasename(oldPath)} to ${pathBasename(renamedPath)}`)
+    rememberExpandedPath(renamedPath)
+    await loadWorkspaceTree(nextVFileState.workspaceDir || '').catch(() => {})
+    renderWorkspaceTree()
+  } catch (err) {
+    setStatus(`rename error: ${err.message}`, 'responding')
+  }
+}
+
+async function doRenameFolder(folderPath, newName) {
+  try {
+    const sourcePath = normalizeRelativePath(folderPath)
+    if (!sourcePath) {
+      setStatus('rename failed: invalid folder path', 'responding')
+      return
+    }
+
+    const res = await fetch('/api/folder/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folderPath: sourcePath, newName }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      setStatus(`rename failed: ${data.error ?? res.status}`, 'responding')
+      return
+    }
+
+    const oldPath = normalizeRelativePath(data.oldPath || sourcePath)
+    const renamedPath = normalizeRelativePath(data.folderPath || sourcePath)
+    remapEditorStatePaths(oldPath, renamedPath)
+
+    appendScriptLogRow(`[folder:rename] ${oldPath} -> ${renamedPath}`, 'result')
+    setStatus(`renamed ${pathBasename(oldPath)} to ${pathBasename(renamedPath)}`)
+    nextVFileState.expandedDirs.add(renamedPath)
+    await loadWorkspaceTree(nextVFileState.workspaceDir || '').catch(() => {})
+    renderWorkspaceTree()
+  } catch (err) {
+    setStatus(`rename error: ${err.message}`, 'responding')
   }
 }
 
@@ -3738,14 +3936,49 @@ function setupNextVStateDiffSplitter() {
 
   window.addEventListener('mousemove', (event) => {
     if (!isStateDiffResizing) return
-    const shellRect = nextVGraphShell.getBoundingClientRect()
-    applyStateDiffWidth(shellRect.right - event.clientX)
+    const panelRect = nextVStateDiffPanel.getBoundingClientRect()
+    applyStateDiffWidth(panelRect.right - event.clientX)
   })
 
   window.addEventListener('mouseup', () => {
     if (!isStateDiffResizing) return
     isStateDiffResizing = false
     document.body.classList.remove('is-resizing-statediff')
+  })
+}
+
+function initNextVUserIOPanel() {
+  const stored = localStorage.getItem(storageKeys.nextVUserIOOpen)
+  const shouldOpen = stored === '1'
+  setUserIOPanelOpen(shouldOpen, { persist: false })
+}
+
+function setupNextVUserIOSplitter() {
+  if (!nextVUserIOSplitter || !scriptEditorPanel || !nextVGraphShell) return
+
+  const applyUserIOWidth = (pixels) => {
+    const clamped = clampNextVUserIOWidth(pixels)
+    scriptEditorPanel.style.width = `${clamped}px`
+    persistNextVUserIOWidth(clamped)
+  }
+
+  nextVUserIOSplitter.addEventListener('mousedown', (event) => {
+    if (!isNextVMode() || !userIOPanelState.open) return
+    isUserIOResizing = true
+    document.body.classList.add('is-resizing-userio')
+    event.preventDefault()
+  })
+
+  window.addEventListener('mousemove', (event) => {
+    if (!isUserIOResizing) return
+    const shellRect = nextVGraphShell.getBoundingClientRect()
+    applyUserIOWidth(shellRect.right - event.clientX)
+  })
+
+  window.addEventListener('mouseup', () => {
+    if (!isUserIOResizing) return
+    isUserIOResizing = false
+    document.body.classList.remove('is-resizing-userio')
   })
 }
 
@@ -4131,6 +4364,7 @@ function openNextVStream() {
       const source = String(payload?.event?.source ?? '')
       beginNextVGraphExecutionTrail()
       flashNextVGraphExternalEvent(eventType)
+      flashNextVGraphEventValue(eventType, payload?.event?.value, { nodeId: eventType })
       appendNextVLogRow(`[nextv:event] queued type=${eventType} source=${source}`, 'step')
     } catch {
       // ignore malformed stream payload
@@ -4194,6 +4428,15 @@ async function refreshNextVSnapshot() {
 async function syncNextVRuntimeState() {
   try {
     const res = await fetch('/api/nextv/snapshot')
+    const data = await res.json().catch(() => ({}))
+
+    isRemoteMode = data?.remoteMode === true
+    isRemoteControlMode = data?.remoteControl === true
+    remoteTransport = String(data?.remoteTransport ?? (isRemoteControlMode ? 'ws' : (isRemoteMode ? 'mqtt' : 'local')))
+    isRemoteRuntimeConnected = isRemoteControlMode
+      ? (data?.remoteConnection?.connected === true)
+      : true
+
     if (!res.ok) {
       nextVRuntimeRunning = false
       updateRemoteModeBadge()
@@ -4201,8 +4444,6 @@ async function syncNextVRuntimeState() {
       setNextVRunControls()
       return
     }
-    const data = await res.json().catch(() => ({}))
-    isRemoteMode = data?.remoteMode === true
     updateRemoteModeBadge()
     renderNextVSnapshot(data.snapshot)
     if (isRemoteMode || data?.snapshot?.running === true) {
@@ -4210,8 +4451,13 @@ async function syncNextVRuntimeState() {
     } else {
       closeNextVStream()
     }
+    nextVRuntimeRunning = data?.running === true
+    setNextVRunControls()
   } catch {
     nextVRuntimeRunning = false
+    if (isRemoteControlMode) {
+      isRemoteRuntimeConnected = false
+    }
     updateRemoteModeBadge()
     closeNextVStream()
     setNextVRunControls()
@@ -4600,9 +4846,6 @@ function setupVerticalSplitters() {
   window.addEventListener('resize', () => {
     if (activeVerticalResize) return
     applyStoredLeftPanelHeights()
-    if (userIOPanelState.open) {
-      positionUserIOPanel()
-    }
   })
 }
 
@@ -6141,6 +6384,7 @@ function initLayoutState() {
   clearUserOutputPanel()
   clearTracePanel({ silent: true })
   initNextVStateDiffPanel()
+  initNextVUserIOPanel()
   updateOpenFileLabel('')
   renderScriptMirror()
   if (scriptInputs && scriptInputs.children.length === 0) {
@@ -6160,6 +6404,7 @@ function initLayoutState() {
 setupSplitter()
 setupFileTreeSplitter()
 setupNextVStateDiffSplitter()
+setupNextVUserIOSplitter()
 setupVerticalSplitters()
 initLayoutState()
 initFileTreeCtxMenu()

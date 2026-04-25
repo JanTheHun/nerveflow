@@ -14,6 +14,7 @@ Instead of hiding logic inside prompts or agent loops, Nerveflow makes routing, 
 - explicit event routing (`on`, `emit`)
 - persistent, inspectable state (`state.*`)
 - structured orchestration of agents and tools
+- compact expression support for arithmetic, comparisons, and logical checks
 
 ## What Nerveflow does *not* do
 
@@ -31,7 +32,9 @@ Nerveflow stays focused on control.
 ```wfs
 on external "user_message"
   state.count = state.count + 1
+  doubled = state.count * 2
   print "(${state.count}) You said: ${event.value}"
+  print "double-count=${doubled}"
 end
 ```
 
@@ -161,7 +164,9 @@ import { runNextVScript } from 'nerveflow'
 
 const result = await runNextVScript(`
 state.count = state.count + 1
+remaining = 10 - state.count
 output text "count=${state.count}"
+output text "remaining=${remaining}"
 `, {
   state: { count: 0 },
 })
@@ -176,7 +181,36 @@ console.log(result.state.count)
 - [Full documentation](./docs/)
 - [Language reference](./docs/03-language-reference.md)
 - [Host integration guide](./docs/04-host-integration.md)
+- [Runtime module notes](./src/runtime/README.md)
 - [Example workflows](./docs/examples/)
+
+Expression note: Nerveflow supports `+`, `-`, `*`, `/`, comparisons, and logical operators directly in workflow expressions. See the language reference for precedence and coercion rules.
+
+---
+
+## Standalone runtime + attach
+
+Run Nerveflow as a dedicated runtime process:
+
+```bash
+node bin/nerve-runtime.js start examples/mqtt-simple-host --port 4190
+```
+
+Attach from another terminal:
+
+```bash
+node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws snapshot
+node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws enqueue user_message hello
+node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws stop
+```
+
+Stream runtime events:
+
+```bash
+node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws listen
+```
+
+See the host guide for full details and protocol semantics: [Host integration guide](./docs/04-host-integration.md).
 
 ---
 

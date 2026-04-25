@@ -40,10 +40,24 @@ Supported expression/value kinds:
 - object and array literals
 - path access (`x`, `state.foo`, `event.value`, `response.intent`)
 - string interpolation (`"hello ${name}"`)
-- operator `+` (numeric add, array concat, text concat)
+- arithmetic operators: `+`, `-`, `*`, `/`
 - comparisons: `==`, `!=`, `<`, `>`, `<=`, `>=`
 - logical operators: `&&`, `||` (aliases: `&`, `|`)
 - function calls
+
+Arithmetic rules:
+
+- `+` supports numeric addition, array concatenation, and text concatenation
+- `-`, `*`, and `/` require finite numeric operands
+- `/` raises `DIVISION_BY_ZERO` when the right-hand operand is `0`
+
+Operator precedence:
+
+- parentheses
+- multiplicative: `*`, `/`
+- additive: `+`, `-`
+- comparisons: `==`, `!=`, `<`, `>`, `<=`, `>=`
+- logical operators: `&&`, `||` (aliases: `&`, `|`)
 
 Important coercion rule:
 

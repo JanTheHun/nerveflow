@@ -138,3 +138,19 @@ test('strict compilation rejects forbidden calls nested in object literals', () 
     (err) => err.code === 'STRICT_MODE_VIOLATION',
   )
 })
+
+test('strict compilation rejects forbidden calls nested in arithmetic expressions', () => {
+  const statements = parseNextVScript('x = input() * 2')
+
+  assert.throws(
+    () => compileAST(statements, {
+      strict: true,
+      errorFactory: (partial) => {
+        const err = new Error(partial.message)
+        Object.assign(err, partial)
+        return err
+      },
+    }),
+    (err) => err.code === 'STRICT_MODE_VIOLATION',
+  )
+})

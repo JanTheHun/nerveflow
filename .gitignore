@@ -1,1 +1,3 @@
 node_modules/
+logs/
+bin/print-ollama-debug-log.js

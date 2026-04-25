@@ -6,9 +6,9 @@
   "type": "module",
   "main": "./src/index.js",
   "bin": {
-    "nerve-runtime": "./bin/nerve-runtime.js",
-    "nerve-attach": "./bin/nerve-attach.js",
-    "nerve-dev-remote": "./bin/nerve-dev-remote.js"
+    "nerve-runtime": "bin/nerve-runtime.js",
+    "nerve-attach": "bin/nerve-attach.js",
+    "nerve-dev-remote": "bin/nerve-dev-remote.js"
   },
   "exports": {
     ".": "./src/index.js",
@@ -28,7 +28,7 @@
   "homepage": "https://github.com/janthehun/nerveflow",
   "repository": {
     "type": "git",
-    "url": "https://github.com/janthehun/nerveflow.git"
+    "url": "git+https://github.com/janthehun/nerveflow.git"
   },
   "keywords": [
     "nextv",

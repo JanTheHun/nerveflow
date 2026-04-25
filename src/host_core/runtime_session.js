@@ -1,5 +1,17 @@
 import { relative, resolve } from 'node:path'
 
+function extractEventImages(event) {
+  const payload = event && typeof event === 'object' ? event.payload : null
+  const value = event && typeof event === 'object' ? event.value : null
+  const imageCarrier = [payload, value].find((candidate) => (
+    candidate && typeof candidate === 'object' && !Array.isArray(candidate) && Array.isArray(candidate.images)
+  ))
+  if (!imageCarrier) return []
+  return imageCarrier.images
+    .map((item) => String(item ?? '').trim())
+    .filter(Boolean)
+}
+
 /**
  * Creates a standard nextV host adapter for a given workspace session.
  *
@@ -26,6 +38,8 @@ export function createHostAdapter({
   validateOutputContract,
   appendAgentFormatInstructions,
   normalizeAgentFormattedOutput,
+  validateAgentReturnContract = null,
+  buildAgentReturnContractGuidance = null,
 }) {
   function resolveToolName(toolNameRaw) {
     const aliases = workspaceConfig?.tools?.aliases ?? {}
@@ -60,7 +74,7 @@ export function createHostAdapter({
       throw new Error(`Tool "${toolName}" is not available in this host yet.`)
     },
 
-    callAgent: async ({ agent, prompt, instructions, messages, format }) => {
+    callAgent: async ({ agent, prompt, instructions, messages, format, returns, validate, event }) => {
       const agentName = String(agent ?? '').trim()
       const profile = resolveAgentProfile(agentName)
       if (!profile) {
@@ -74,7 +88,11 @@ export function createHostAdapter({
 
       const profileInstructions = String(profile.instructions ?? '').trim()
       const callInstructions = String(instructions ?? '').trim()
-      const systemInstructions = [profileInstructions, callInstructions].filter(Boolean).join('\n\n')
+      const baseInstructions = [profileInstructions, callInstructions].filter(Boolean).join('\n\n')
+      const contractGuidance = (returns != null && typeof buildAgentReturnContractGuidance === 'function')
+        ? buildAgentReturnContractGuidance(returns)
+        : ''
+      const systemInstructions = [baseInstructions, contractGuidance].filter(Boolean).join('\n\n')
 
       const formattedPrompt = format ? appendAgentFormatInstructions(prompt, format) : String(prompt ?? '')
       const inputMessages = Array.isArray(messages) ? messages : []
@@ -87,10 +105,19 @@ export function createHostAdapter({
         const role = String(entry?.role ?? '').trim()
         const content = String(entry?.content ?? '').trim()
         if (!role || !content) continue
-        chatMessages.push({ role, content })
+        const msgEntry = { role, content }
+        if (Array.isArray(entry.images) && entry.images.length > 0) {
+          msgEntry.images = entry.images
+        }
+        chatMessages.push(msgEntry)
       }
       if (formattedPrompt.trim()) {
-        chatMessages.push({ role: 'user', content: formattedPrompt.trim() })
+        const eventImages = extractEventImages(event)
+        if (eventImages.length > 0) {
+          chatMessages.push({ role: 'user', content: formattedPrompt.trim(), images: eventImages })
+        } else {
+          chatMessages.push({ role: 'user', content: formattedPrompt.trim() })
+        }
       }
 
       if (chatMessages.length === 0) {
@@ -98,6 +125,14 @@ export function createHostAdapter({
       }
 
       const raw = await callAgent({ model, messages: chatMessages })
+      if (returns != null) {
+        const parsed = normalizeAgentFormattedOutput(raw, 'json')
+        if (typeof validateAgentReturnContract === 'function') {
+          const mode = String(validate ?? '').trim() || 'coerce'
+          return validateAgentReturnContract(parsed, returns, mode)
+        }
+        return parsed
+      }
       if (!format) return raw
       return normalizeAgentFormattedOutput(raw, format)
     },

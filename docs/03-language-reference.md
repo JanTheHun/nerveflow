@@ -91,7 +91,49 @@ Core built-ins:
 Recognized integration calls:
 
 - `tool(name, ...)`
-- `agent(agentName, prompt?, instructions?, messages=?, format=?)`
+- `agent(agentName, prompt?, instructions?, messages=?, format=?, returns=?, validate=?)`
+
+`messages` entries have the shape `{ role, content, images? }`. `role` and `content` are required. `images` is an optional array of base64-encoded image strings; empty strings are filtered and the field is omitted when no valid entries remain. Example:
+
+```
+history = [
+  { role: "user", content: "what is in this image?", images: [b64_string] },
+  { role: "assistant", content: "a cat" },
+]
+reply = agent("visual", messages=history)
+```
+
+`returns` accepts a JSON-like object or array contract template for structured agent output. When present, NerveFlow treats the call as JSON output mode and validates the parsed output against the contract.
+
+Contracts can also be loaded from JSON files with standard value expressions:
+
+```
+returns=from_json(file("contracts/triage.json"))
+```
+
+`file(...)` yields text. Use `from_json(...)` when loading JSON contracts. `returns=file("...")` by itself is invalid unless future runtime auto-parse support is added.
+
+`validate` controls validation behavior when `returns` is present:
+
+- `validate="coerce"` (default): fills missing declared structure from the contract recursively
+- `validate="strict"`: requires all declared fields and exact structural types with no repair
+
+Example:
+
+```
+triage = agent(
+  "classifier",
+  event.value,
+  returns={
+    intent: "",
+    confidence: 0,
+    meta: {
+      source: ""
+    }
+  },
+  validate="strict"
+)
+```
 - `script(path, ...)`
 - `operator(id, input?)`
 

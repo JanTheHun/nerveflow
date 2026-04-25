@@ -7,7 +7,8 @@
   "main": "./src/index.js",
   "bin": {
     "nerve-runtime": "./bin/nerve-runtime.js",
-    "nerve-attach": "./bin/nerve-attach.js"
+    "nerve-attach": "./bin/nerve-attach.js",
+    "nerve-dev-remote": "./bin/nerve-dev-remote.js"
   },
   "exports": {
     ".": "./src/index.js",
@@ -16,7 +17,8 @@
     "./runtime": "./src/runtime/index.js"
   },
   "scripts": {
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "dev:remote": "node bin/nerve-dev-remote.js"
   },
   "devDependencies": {
     "aedes": "^1.0.2",
@@ -44,6 +46,7 @@
     "src/",
     "bin/nerve-runtime.js",
     "bin/nerve-attach.js",
+    "bin/nerve-dev-remote.js",
     "docs/",
     "examples/minimal-web-host/server.js",
     "examples/minimal-web-host/README.md",

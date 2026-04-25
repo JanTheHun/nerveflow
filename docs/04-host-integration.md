@@ -207,6 +207,8 @@ const result = await runNextVScript(source, {
     },
     async callAgent({ agent, prompt, instructions, messages, format, state, event, locals, line, statement }) {
       // Your model runtime
+      // messages entries have the shape { role, content, images? }
+      // images is present only when the DSL message entry carried a non-empty images array
     },
     async callScript({ path, state, event, locals, executionRole, onEvent }) {
       // Nested script execution

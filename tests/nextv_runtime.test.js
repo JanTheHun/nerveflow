@@ -3,7 +3,19 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { NextVError, compileAST, normalizeAgentFormattedOutput, parseNextVScript, runNextVScript, runNextVScriptFromFile, validateOutputContract } from '../src/index.js'
+import {
+  NextVError,
+  appendAgentFormatInstructions,
+  buildAgentReturnContractGuidance,
+  compileAST,
+  normalizeAgentFormattedOutput,
+  parseNextVScript,
+  runNextVScript,
+  runNextVScriptFromFile,
+  validateAgentReturnContract,
+  validateOutputContract,
+} from '../src/index.js'
+import { createHostAdapter } from '../src/host_core/runtime_session.js'
 
 test('supports explicit assignment and interpolation', async () => {
   const result = await runNextVScript([
@@ -287,6 +299,25 @@ test('on external auto-dispatches initial host event without manual bridge', asy
   })
 
   assert.equal(result.state.last, 'payload')
+})
+
+test('on external auto-dispatch preserves initial host payload', async () => {
+  const result = await runNextVScript([
+    'on external "webhook"',
+    '  state.imageCount = event.payload.images_count',
+    'end',
+  ].join('\n'), {
+    state: {},
+    event: {
+      type: 'webhook',
+      value: '',
+      payload: {
+        images_count: 1,
+      },
+    },
+  })
+
+  assert.equal(result.state.imageCount, 1)
 })
 
 test('on external auto-dispatch does not double-fire when manual bridge already emits', async () => {
@@ -1041,6 +1072,83 @@ test('agent() rejects invalid messages payload', async () => {
   )
 })
 
+test('agent() passes per-message images in messages array', async () => {
+  const calls = []
+  await runNextVScript([
+    'history = [',
+    '  { role: "user", content: "what is this?", images: ["aGVsbG8=", "d29ybGQ="] },',
+    '  { role: "assistant", content: "a cat" }',
+    ']',
+    'answer = agent("visual", messages=history)',
+  ].join('\n'), {
+    callAgent: async ({ messages }) => {
+      calls.push({ messages })
+      return 'a cat'
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  const userMsg = calls[0].messages[0]
+  assert.deepStrictEqual(userMsg.images, ['aGVsbG8=', 'd29ybGQ='])
+  const assistantMsg = calls[0].messages[1]
+  assert.equal(Object.hasOwn(assistantMsg, 'images'), false)
+})
+
+test('agent() filters empty strings from per-message images', async () => {
+  const calls = []
+  await runNextVScript([
+    'history = [',
+    '  { role: "user", content: "look", images: ["  ", "aGVsbG8=", ""] }',
+    ']',
+    'answer = agent("visual", messages=history)',
+  ].join('\n'), {
+    callAgent: async ({ messages }) => {
+      calls.push({ messages })
+      return 'ok'
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.deepStrictEqual(calls[0].messages[0].images, ['aGVsbG8='])
+})
+
+test('agent() omits images field when per-message images array is all empty', async () => {
+  const calls = []
+  await runNextVScript([
+    'history = [',
+    '  { role: "user", content: "look", images: ["  ", ""] }',
+    ']',
+    'answer = agent("visual", messages=history)',
+  ].join('\n'), {
+    callAgent: async ({ messages }) => {
+      calls.push({ messages })
+      return 'ok'
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(Object.hasOwn(calls[0].messages[0], 'images'), false)
+})
+
+test('agent() rejects non-array images on message entry', async () => {
+  await assert.rejects(
+    () => runNextVScript([
+      'history = [',
+      '  { role: "user", content: "look", images: "aGVsbG8=" }',
+      ']',
+      'answer = agent("visual", messages=history)',
+    ].join('\n'), {
+      callAgent: async () => 'unused',
+    }),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_AGENT_MESSAGES')
+      assert.match(err.message, /images must be an array/)
+      return true
+    },
+  )
+})
+
 test('agent() preserves positional instructions when named format is used', async () => {
   const calls = []
   const result = await runNextVScript('summary = agent("research", "Summarize this", "be concise", format="text")', {
@@ -1098,6 +1206,142 @@ test('agent() rejects unsupported named format values', async () => {
     (err) => {
       assert.equal(err instanceof NextVError, true)
       assert.equal(err.code, 'INVALID_AGENT_FORMAT')
+      return true
+    },
+  )
+})
+
+test('agent() passes returns contract and defaults validate to coerce', async () => {
+  const calls = []
+  await runNextVScript([
+    'result = agent("classifier", "route this", returns={ intent: "", confidence: 0 })',
+  ].join('\n'), {
+    callAgent: async ({ returns, validate, format }) => {
+      calls.push({ returns, validate, format })
+      return { intent: 'search', confidence: 0.9 }
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].returns, { intent: '', confidence: 0 })
+  assert.equal(calls[0].validate, 'coerce')
+  assert.equal(calls[0].format, '')
+})
+
+test('agent() preserves explicit validate mode with returns contract', async () => {
+  const calls = []
+  await runNextVScript('result = agent("classifier", "route this", returns={ intent: "" }, validate="strict")', {
+    callAgent: async ({ validate }) => {
+      calls.push({ validate })
+      return { intent: 'search' }
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].validate, 'strict')
+})
+
+test('agent() rejects invalid validate mode', async () => {
+  await assert.rejects(
+    () => runNextVScript('result = agent("classifier", "route this", returns={ intent: "" }, validate="smart")', {
+      callAgent: async () => ({ intent: 'search' }),
+    }),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_AGENT_VALIDATE')
+      return true
+    },
+  )
+})
+
+test('agent() rejects non-object non-array returns contract', async () => {
+  await assert.rejects(
+    () => runNextVScript('result = agent("classifier", "route this", returns=42)', {
+      callAgent: async () => ({ intent: 'search' }),
+    }),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_AGENT_RETURNS')
+      return true
+    },
+  )
+})
+
+test('agent() returns contract works end-to-end via hostAdapter path', async () => {
+  const calls = []
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { classifier: { model: 'llama3', instructions: 'profile baseline' } } },
+      operators: { map: {} },
+    },
+    callAgent: async ({ messages }) => {
+      calls.push(messages)
+      return '{"intent":"search"}'
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions,
+    normalizeAgentFormattedOutput,
+    validateAgentReturnContract,
+    buildAgentReturnContractGuidance,
+  })
+
+  const result = await runNextVScript([
+    'triage = agent("classifier", event.value, returns={ intent: "", confidence: 0 })',
+    'state.intent = triage.intent',
+    'state.confidence = triage.confidence',
+  ].join('\n'), {
+    hostAdapter: adapter,
+    event: { type: 'user_input', value: 'route this' },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0][0].role, 'system')
+  assert.match(calls[0][0].content, /Return only valid JSON matching this structure/)
+  assert.equal(calls[0][1].role, 'user')
+  assert.equal(calls[0][1].content, 'route this')
+  assert.equal(result.state.intent, 'search')
+  assert.equal(result.state.confidence, 0)
+})
+
+test('agent() returns strict mode surfaces contract violation metadata via hostAdapter path', async () => {
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { classifier: { model: 'llama3' } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => '{"intent":null,"confidence":0.9}',
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions,
+    normalizeAgentFormattedOutput,
+    validateAgentReturnContract,
+    buildAgentReturnContractGuidance,
+  })
+
+  await assert.rejects(
+    () => runNextVScript(
+      'triage = agent("classifier", event.value, returns={ intent: "", confidence: 0 }, validate="strict")',
+      {
+        hostAdapter: adapter,
+        event: { type: 'user_input', value: 'route this' },
+      },
+    ),
+    (err) => {
+      assert.equal(err.code, 'AGENT_RETURN_CONTRACT_VIOLATION')
+      assert.equal(err.path, 'intent')
+      assert.equal(err.expected, 'string')
+      assert.equal(err.actual, 'null')
       return true
     },
   )

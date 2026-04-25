@@ -1,10 +1,12 @@
 export {
   appendAgentFormatInstructions,
+  buildAgentReturnContractGuidance,
   extractCodeOutput,
   extractJsonOutput,
   extractTextOutput,
   NEXTV_AGENT_OUTPUT_FORMATS,
   normalizeAgentFormattedOutput,
+  validateAgentReturnContract,
 } from './nextv_agent_output.js'
 
 export {

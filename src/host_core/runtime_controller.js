@@ -36,6 +36,8 @@ export function createNextVRuntimeController({
   validateOutputContract,
   appendAgentFormatInstructions,
   normalizeAgentFormattedOutput,
+  validateAgentReturnContract = null,
+  buildAgentReturnContractGuidance = null,
   callAgent,
   defaultModel = '',
 }) {
@@ -192,6 +194,8 @@ export function createNextVRuntimeController({
       validateOutputContract,
       appendAgentFormatInstructions,
       normalizeAgentFormattedOutput,
+      validateAgentReturnContract,
+      buildAgentReturnContractGuidance,
     })
     let lastObservedState = initialState
 

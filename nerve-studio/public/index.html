@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>nerve-studio</title>
-  <link rel="stylesheet" href="styles.css?v=20260419b">
+  <link rel="stylesheet" href="styles.css?v=20260425a">
   <script src="/htmx.js"></script>
 </head>
 <body class="mode-nextv">
@@ -167,6 +167,20 @@
                     <button type="button" onclick="sendNextVEvent()">enqueue</button>
                     <button type="button" onclick="refreshNextVSnapshot()">snapshot</button>
                   </div>
+                  <div class="footer-row nextv-images-row">
+                    <span class="row-label">images</span>
+                    <div id="nextv-image-dropzone" class="nextv-image-dropzone" role="button" tabindex="0" aria-label="drop images for nextv input event">
+                      <span class="nextv-image-drop-title">drop images here</span>
+                      <span class="nextv-image-drop-subtitle">or click to attach</span>
+                    </div>
+                    <label class="file-label">
+                      attach
+                      <input type="file" id="nextv-image-input" accept="image/png,image/jpeg,image/webp,image/gif" onchange="handleNextVImageInput(this)" multiple hidden>
+                    </label>
+                    <button type="button" onclick="clearNextVEventImages()">clear</button>
+                    <span id="nextv-image-count" class="dim">0 attached</span>
+                  </div>
+                  <div id="nextv-image-list" class="nextv-image-list dim" aria-live="polite"></div>
                 </div>
               </div>
             </div>
@@ -244,6 +258,6 @@
   </main>
 
   <script src="dagre.min.js"></script>
-  <script src="app.js?v=20260419b"></script>
+  <script src="app.js?v=20260425a"></script>
 </body>
 </html>

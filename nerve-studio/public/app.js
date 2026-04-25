@@ -121,6 +121,10 @@ const inputPanelState = {
   currentTab: 'ui',
 }
 
+const nextVInputImageState = {
+  entries: [],
+}
+
 // --- DOM helpers ---
 const transcript = document.getElementById('transcript')
 const promptInput = document.getElementById('prompt-input')
@@ -162,6 +166,10 @@ const nextVAutoSaveInput = document.getElementById('nextv-autosave')
 const nextVEventValueInput = document.getElementById('nextv-event-value')
 const nextVEventTypeInput = document.getElementById('nextv-event-type')
 const nextVEventSourceInput = document.getElementById('nextv-event-source')
+const nextVImageDropzone = document.getElementById('nextv-image-dropzone')
+const nextVImageInput = document.getElementById('nextv-image-input')
+const nextVImageCount = document.getElementById('nextv-image-count')
+const nextVImageList = document.getElementById('nextv-image-list')
 const nextVStartBtn = document.getElementById('nextv-start-btn')
 const nextVStopBtn = document.getElementById('nextv-stop-btn')
 const remoteModeBadge = document.getElementById('remote-mode-badge')
@@ -4567,6 +4575,7 @@ async function sendNextVEvent() {
   const value = String(nextVEventValueInput?.value ?? '')
   const eventType = String(nextVEventTypeInput?.value ?? '')
   const source = String(nextVEventSourceInput?.value ?? '').trim()
+  const attachedImages = nextVInputImageState.entries.map((entry) => entry.base64).filter(Boolean)
 
   if (!nextVRuntimeRunning) {
     setStatus('nextv runtime not running', 'responding')
@@ -4574,10 +4583,15 @@ async function sendNextVEvent() {
   }
 
   try {
+    const requestBody = { value, eventType, source }
+    if (attachedImages.length > 0) {
+      requestBody.payload = { images: attachedImages }
+    }
+
     const res = await fetch('/api/nextv/event', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ value, eventType, source }),
+      body: JSON.stringify(requestBody),
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
@@ -4588,11 +4602,127 @@ async function sendNextVEvent() {
       appendNextVLogRow(`[nextv:event] queued type=${eventType} source=${source}`, 'step')
       renderNextVSnapshot(data.snapshot)
     }
-    setStatus('nextv event queued')
+    if (attachedImages.length > 0) {
+      setStatus(`nextv event queued (${attachedImages.length} image${attachedImages.length === 1 ? '' : 's'})`)
+      clearNextVEventImages({ silent: true })
+    } else {
+      setStatus('nextv event queued')
+    }
   } catch (err) {
     appendNextVErrorLog(err)
     setStatus('nextv event failed', 'responding')
   }
+}
+
+function updateNextVEventImageUI() {
+  if (nextVImageCount) {
+    const count = nextVInputImageState.entries.length
+    nextVImageCount.textContent = `${count} attached`
+  }
+  if (nextVImageList) {
+    if (nextVInputImageState.entries.length === 0) {
+      nextVImageList.textContent = ''
+    } else {
+      nextVImageList.textContent = nextVInputImageState.entries.map((entry) => entry.name).join(' | ')
+    }
+  }
+}
+
+function readImageFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}`))
+    reader.onload = (event) => {
+      const dataUrl = String(event?.target?.result ?? '')
+      const [, base64 = ''] = dataUrl.split(',')
+      if (!base64) {
+        reject(new Error(`Could not decode ${file.name}`))
+        return
+      }
+      resolve(base64)
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
+async function addNextVEventImages(filesLike) {
+  const files = Array.from(filesLike ?? []).filter((file) => String(file?.type ?? '').startsWith('image/'))
+  if (files.length === 0) {
+    setStatus('no image files selected', 'responding')
+    return
+  }
+
+  try {
+    const loaded = []
+    for (const file of files) {
+      const base64 = await readImageFileAsBase64(file)
+      loaded.push({
+        name: String(file.name ?? 'image'),
+        base64,
+      })
+    }
+
+    nextVInputImageState.entries.push(...loaded)
+    updateNextVEventImageUI()
+    setStatus(`${loaded.length} image${loaded.length === 1 ? '' : 's'} attached to nextv input`)
+  } catch (err) {
+    appendErrorRow(String(err?.message ?? err))
+  }
+}
+
+function clearNextVEventImages(options = {}) {
+  nextVInputImageState.entries = []
+  if (nextVImageInput) nextVImageInput.value = ''
+  updateNextVEventImageUI()
+  if (!options.silent) {
+    setStatus('nextv input images cleared')
+  }
+}
+
+async function handleNextVImageInput(input) {
+  const files = input?.files
+  if (input) input.value = ''
+  if (!files || files.length === 0) return
+  await addNextVEventImages(files)
+}
+
+function setupNextVImageDropzone() {
+  if (!nextVImageDropzone) return
+
+  const activate = () => nextVImageDropzone.classList.add('is-dragging')
+  const deactivate = () => nextVImageDropzone.classList.remove('is-dragging')
+
+  nextVImageDropzone.addEventListener('click', () => {
+    nextVImageInput?.click()
+  })
+
+  nextVImageDropzone.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    nextVImageInput?.click()
+  })
+
+  nextVImageDropzone.addEventListener('dragover', (event) => {
+    event.preventDefault()
+    activate()
+  })
+
+  nextVImageDropzone.addEventListener('dragenter', (event) => {
+    event.preventDefault()
+    activate()
+  })
+
+  nextVImageDropzone.addEventListener('dragleave', () => {
+    deactivate()
+  })
+
+  nextVImageDropzone.addEventListener('drop', async (event) => {
+    event.preventDefault()
+    deactivate()
+    const files = event.dataTransfer?.files
+    if (!files || files.length === 0) return
+    await addNextVEventImages(files)
+  })
 }
 
 function setLeftPanelWidth(percent) {
@@ -6405,6 +6535,8 @@ setupSplitter()
 setupFileTreeSplitter()
 setupNextVStateDiffSplitter()
 setupNextVUserIOSplitter()
+setupNextVImageDropzone()
+updateNextVEventImageUI()
 setupVerticalSplitters()
 initLayoutState()
 initFileTreeCtxMenu()

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createServer } from 'node:http'
-import { resolve } from 'node:path'
+import { appendFileSync, mkdirSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
 
 import {
   createRuntimeCore,
@@ -62,23 +63,110 @@ function parseCliOptions(argv) {
 
 async function callOllamaAgent({ model, messages }) {
   const baseUrl = String(process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/+$/, '')
-  const response = await fetch(`${baseUrl}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      messages,
-      stream: false,
-    }),
+  const requestPayload = {
+    model,
+    messages,
+    stream: false,
+  }
+
+  appendOllamaDebugRecord({
+    source: 'nerve-runtime',
+    phase: 'request',
+    url: `${baseUrl}/api/chat`,
+    payload: requestPayload,
   })
+
+  let response
+  try {
+    response = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestPayload),
+    })
+  } catch (err) {
+    appendOllamaDebugRecord({
+      source: 'nerve-runtime',
+      phase: 'fetch_error',
+      url: `${baseUrl}/api/chat`,
+      error: String(err?.message ?? err),
+    })
+    throw err
+  }
 
   if (!response.ok) {
     const bodyText = await response.text().catch(() => '')
+    appendOllamaDebugRecord({
+      source: 'nerve-runtime',
+      phase: 'response',
+      ok: false,
+      status: response.status,
+      statusText: response.statusText,
+      bodyText,
+    })
     throw new Error(`Ollama chat failed (${response.status}): ${bodyText || response.statusText}`)
   }
 
   const payload = await response.json()
+  appendOllamaDebugRecord({
+    source: 'nerve-runtime',
+    phase: 'response',
+    ok: true,
+    status: response.status,
+    payload,
+  })
   return String(payload?.message?.content ?? payload?.response ?? '').trim()
+}
+
+function previewDebugText(value, maxLength = 240) {
+  const text = String(value ?? '')
+  if (text.length <= maxLength) return text
+  return `${text.slice(0, maxLength)}...`
+}
+
+function summarizeDebugValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => summarizeDebugValue(entry))
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value
+  }
+
+  const summary = {}
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === 'messages' && Array.isArray(entry)) {
+      summary.messages = entry.map((message) => {
+        const base = {
+          role: String(message?.role ?? ''),
+          contentLength: String(message?.content ?? '').length,
+          contentPreview: previewDebugText(message?.content ?? ''),
+        }
+        if (Array.isArray(message?.images)) {
+          base.imageCount = message.images.length
+          base.imageLengths = message.images.map((image) => String(image ?? '').length)
+        }
+        return base
+      })
+      continue
+    }
+
+    if (key === 'bodyText') {
+      summary.bodyTextLength = String(entry ?? '').length
+      summary.bodyTextPreview = previewDebugText(entry ?? '')
+      continue
+    }
+
+    if (typeof entry === 'string') {
+      summary[key] = entry.length > 400
+        ? { length: entry.length, preview: previewDebugText(entry, 240) }
+        : entry
+      continue
+    }
+
+    summary[key] = summarizeDebugValue(entry)
+  }
+
+  return summary
 }
 
 let options
@@ -90,6 +178,24 @@ try {
 }
 
 const repoRoot = resolve(process.cwd())
+const OLLAMA_DEBUG_LOG_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.OLLAMA_DEBUG_LOG ?? '').trim())
+const OLLAMA_DEBUG_SUMMARY_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.OLLAMA_DEBUG_SUMMARY ?? '').trim())
+const OLLAMA_DEBUG_LOG_PATH = String(process.env.OLLAMA_DEBUG_LOG_PATH ?? '').trim()
+  || resolve(repoRoot, 'logs', 'ollama-runtime.jsonl')
+
+function appendOllamaDebugRecord(record) {
+  if (!OLLAMA_DEBUG_LOG_ENABLED) return
+  try {
+    const payload = OLLAMA_DEBUG_SUMMARY_ENABLED
+      ? summarizeDebugValue(record)
+      : record
+    mkdirSync(dirname(OLLAMA_DEBUG_LOG_PATH), { recursive: true })
+    appendFileSync(OLLAMA_DEBUG_LOG_PATH, `${JSON.stringify({ timestamp: new Date().toISOString(), ...payload })}\n`, 'utf8')
+  } catch {
+    // Debug logging must never break runtime agent calls.
+  }
+}
+
 const resolvers = createRuntimeResolvers({ repoRoot })
 const runtimeCore = createRuntimeCore({
   resolvers,

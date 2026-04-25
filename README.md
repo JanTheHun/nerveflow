@@ -210,6 +210,22 @@ Stream runtime events:
 node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws listen
 ```
 
+Start runtime and remote Studio together:
+
+```bash
+node bin/nerve-dev-remote.js examples/mqtt-simple-host
+```
+
+This launcher auto-opens Studio in your browser when it is ready.
+
+Short form via npm:
+
+```bash
+npm run dev:remote -- examples/mqtt-simple-host
+```
+
+Use `--no-open` to suppress browser auto-open.
+
 See the host guide for full details and protocol semantics: [Host integration guide](./docs/04-host-integration.md).
 
 ---

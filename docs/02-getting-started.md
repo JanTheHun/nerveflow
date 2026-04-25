@@ -105,3 +105,19 @@ http://localhost:4173
 ```
 
 In this mode, Studio can observe and control the remote runtime (`start`, `stop`, `enqueue_event`, `snapshot`) through its existing UI and API surfaces.
+
+Helper launcher (starts both runtime and Studio together):
+
+```bash
+node bin/nerve-dev-remote.js examples/mqtt-simple-host
+```
+
+When Studio reports ready, the launcher opens `http://127.0.0.1:4173` in your default browser.
+
+Optional flags:
+
+- `--entrypoint <path>` runtime entrypoint override
+- `--runtime-port <n>` runtime HTTP/WS port (default `4190`)
+- `--studio-port <n>` Studio UI port (default `4173`)
+- `--ws-path <path>` runtime WS endpoint path (default `/api/runtime/ws`)
+- `--no-open` disable automatic browser open

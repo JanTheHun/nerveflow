@@ -5,8 +5,10 @@ import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 import {
   NextVEventRunner,
   appendAgentFormatInstructions,
+  buildAgentReturnContractGuidance,
   normalizeAgentFormattedOutput,
   runNextVScriptFromFile,
+  validateAgentReturnContract,
   validateOutputContract,
 } from '../index.js'
 
@@ -161,6 +163,8 @@ export function createRuntimeCore({
     validateOutputContract,
     appendAgentFormatInstructions,
     normalizeAgentFormattedOutput,
+    validateAgentReturnContract,
+    buildAgentReturnContractGuidance,
     callAgent,
     defaultModel,
   })

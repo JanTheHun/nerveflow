@@ -101,3 +101,337 @@ test('callTool reports unavailable when allow-list is not configured', async () 
     },
   )
 })
+
+test('callAgent includes images when event payload provides images', async () => {
+  const calls = []
+  const adapter = createHostAdapter({
+    workspaceDir: {
+      absolutePath: '/workspace',
+      relativePath: '.',
+    },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: {
+        profiles: {
+          visual: { model: 'qwen2.5vl' },
+        },
+      },
+      operators: { map: {} },
+    },
+    callAgent: async ({ model, messages }) => {
+      calls.push({ model, messages })
+      return 'ok'
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({
+      absolutePath: `${baseDir}/${pathRaw}`,
+      relativePath: pathRaw,
+    }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  const response = await adapter.callAgent({
+    agent: 'visual',
+    prompt: 'describe this image',
+    event: {
+      payload: {
+        images: ['  b64a  ', '', 'b64b'],
+      },
+    },
+  })
+
+  assert.equal(response, 'ok')
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].model, 'qwen2.5vl')
+  assert.equal(calls[0].messages.length, 1)
+  assert.equal(calls[0].messages[0].role, 'user')
+  assert.equal(calls[0].messages[0].content, 'describe this image')
+  assert.deepEqual(calls[0].messages[0].images, ['b64a', 'b64b'])
+})
+
+test('callAgent omits images when event payload does not provide images', async () => {
+  const calls = []
+  const adapter = createHostAdapter({
+    workspaceDir: {
+      absolutePath: '/workspace',
+      relativePath: '.',
+    },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: {
+        profiles: {
+          visual: { model: 'qwen2.5vl' },
+        },
+      },
+      operators: { map: {} },
+    },
+    callAgent: async ({ messages }) => {
+      calls.push(messages)
+      return 'ok'
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({
+      absolutePath: `${baseDir}/${pathRaw}`,
+      relativePath: pathRaw,
+    }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  await adapter.callAgent({
+    agent: 'visual',
+    prompt: 'describe this image',
+    event: {
+      payload: {},
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].length, 1)
+  assert.equal(Object.prototype.hasOwnProperty.call(calls[0][0], 'images'), false)
+})
+
+test('callAgent includes images when relayed event stores them in value', async () => {
+  const calls = []
+  const adapter = createHostAdapter({
+    workspaceDir: {
+      absolutePath: '/workspace',
+      relativePath: '.',
+    },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: {
+        profiles: {
+          visual: { model: 'qwen2.5vl' },
+        },
+      },
+      operators: { map: {} },
+    },
+    callAgent: async ({ messages }) => {
+      calls.push(messages)
+      return 'ok'
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({
+      absolutePath: `${baseDir}/${pathRaw}`,
+      relativePath: pathRaw,
+    }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  await adapter.callAgent({
+    agent: 'visual',
+    prompt: 'describe this image',
+    event: {
+      value: {
+        images: ['  b64a  ', '', 'b64b'],
+      },
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0][0].images, ['b64a', 'b64b'])
+})
+
+test('callAgent forwards per-message images to Ollama transport', async () => {
+  const calls = []
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { visual: { model: 'qwen2.5vl' } } },
+      operators: { map: {} },
+    },
+    callAgent: async ({ model, messages }) => {
+      calls.push({ model, messages })
+      return 'ok'
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  await adapter.callAgent({
+    agent: 'visual',
+    messages: [
+      { role: 'user', content: 'what is this?', images: ['img1', 'img2'] },
+      { role: 'assistant', content: 'a cat' },
+    ],
+    event: {},
+  })
+
+  assert.equal(calls.length, 1)
+  const sentMessages = calls[0].messages
+  assert.equal(sentMessages.length, 2)
+  assert.deepEqual(sentMessages[0].images, ['img1', 'img2'])
+  assert.equal(Object.hasOwn(sentMessages[1], 'images'), false)
+})
+
+test('callAgent omits images field on messages that have no images', async () => {
+  const calls = []
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { chat: { model: 'llama3' } } },
+      operators: { map: {} },
+    },
+    callAgent: async ({ messages }) => {
+      calls.push(messages)
+      return 'ok'
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  await adapter.callAgent({
+    agent: 'chat',
+    messages: [
+      { role: 'user', content: 'hello' },
+    ],
+    event: {},
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(Object.hasOwn(calls[0][0], 'images'), false)
+})
+
+test('callAgent appends return contract guidance to instruction layer', async () => {
+  const calls = []
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { chat: { model: 'llama3', instructions: 'profile rules' } } },
+      operators: { map: {} },
+    },
+    callAgent: async ({ messages }) => {
+      calls.push(messages)
+      return '{"intent":"search"}'
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value, format) => (format === 'json' ? JSON.parse(value) : value),
+    validateAgentReturnContract: (output) => output,
+    buildAgentReturnContractGuidance: () => 'Return only valid JSON matching this structure:\n{\n  "intent": ""\n}',
+  })
+
+  await adapter.callAgent({
+    agent: 'chat',
+    prompt: 'route this',
+    instructions: 'call rules',
+    returns: { intent: '' },
+    validate: 'coerce',
+    event: {},
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0][0].role, 'system')
+  assert.match(calls[0][0].content, /profile rules/)
+  assert.match(calls[0][0].content, /call rules/)
+  assert.match(calls[0][0].content, /Return only valid JSON matching this structure/)
+})
+
+test('callAgent validates returns contract in strict mode', async () => {
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { chat: { model: 'llama3' } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => '{"intent":"search"}',
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value, format) => (format === 'json' ? JSON.parse(value) : value),
+    validateAgentReturnContract: (output, contract, mode) => {
+      assert.equal(mode, 'strict')
+      assert.deepEqual(contract, { intent: '', confidence: 0 })
+      if (typeof output.confidence !== 'number') {
+        const err = new Error('violation')
+        err.code = 'AGENT_RETURN_CONTRACT_VIOLATION'
+        err.path = 'confidence'
+        err.expected = 'number'
+        err.actual = 'undefined'
+        throw err
+      }
+      return output
+    },
+  })
+
+  await assert.rejects(
+    () => adapter.callAgent({
+      agent: 'chat',
+      prompt: 'route this',
+      returns: { intent: '', confidence: 0 },
+      validate: 'strict',
+      event: {},
+    }),
+    (err) => {
+      assert.equal(err.code, 'AGENT_RETURN_CONTRACT_VIOLATION')
+      assert.equal(err.path, 'confidence')
+      return true
+    },
+  )
+})
+
+test('callAgent validates returns contract in coerce mode', async () => {
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { chat: { model: 'llama3' } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => '{"intent":"search"}',
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value, format) => (format === 'json' ? JSON.parse(value) : value),
+    validateAgentReturnContract: (output, _contract, mode) => {
+      assert.equal(mode, 'coerce')
+      return { intent: output.intent, confidence: 0 }
+    },
+  })
+
+  const result = await adapter.callAgent({
+    agent: 'chat',
+    prompt: 'route this',
+    returns: { intent: '', confidence: 0 },
+    validate: 'coerce',
+    event: {},
+  })
+
+  assert.deepEqual(result, { intent: 'search', confidence: 0 })
+})

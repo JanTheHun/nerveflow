@@ -1103,7 +1103,25 @@ function normalizeAgentMessagesValue(value, context) {
       })
     }
 
-    normalized.push({ role, content })
+    const normalizedEntry = { role, content }
+
+    if (entry.images != null) {
+      if (!Array.isArray(entry.images)) {
+        throw nextvError({
+          line: context.line,
+          kind: 'runtime',
+          code: 'INVALID_AGENT_MESSAGES',
+          statement: context.statement,
+          message: `agent() messages[${i}].images must be an array.`,
+        })
+      }
+      const imgs = entry.images.map((img) => String(img ?? '').trim()).filter(Boolean)
+      if (imgs.length > 0) {
+        normalizedEntry.images = imgs
+      }
+    }
+
+    normalized.push(normalizedEntry)
   }
 
   return normalized
@@ -1130,6 +1148,20 @@ function toJsonText(value, context, usage) {
     statement: context.statement,
     message: `${usage} could not serialize value as JSON.`,
   })
+}
+
+function normalizeAgentReturnsValue(value, context) {
+  if (value == null) return null
+  if (typeof value !== 'object') {
+    throw nextvError({
+      line: context.line,
+      kind: 'runtime',
+      code: 'INVALID_AGENT_RETURNS',
+      statement: context.statement,
+      message: 'agent() returns must be a plain object or array.',
+    })
+  }
+  return value
 }
 
 function formatOutputContent(value, format, context) {
@@ -1418,6 +1450,7 @@ async function executeFunctionCall(name, args, context, origin) {
   } catch (err) {
     if (err instanceof NextVError) throw err
     if (err?.code === 'INVALID_OUTPUT_CONTRACT') throw err
+    if (err?.code === 'AGENT_RETURN_CONTRACT_VIOLATION') throw err
     throw nextvError({
       line: context.line,
       kind: 'runtime',
@@ -1750,6 +1783,21 @@ function buildFunctions(options, runtimeContext) {
           message: `agent() format must be one of json, text, or code; received "${format}".`,
         })
       }
+
+      const returns = normalizeAgentReturnsValue(named?.returns ?? null, context)
+      const validateRaw = String(named?.validate ?? '').trim().toLowerCase()
+      if (validateRaw && validateRaw !== 'strict' && validateRaw !== 'coerce') {
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_AGENT_VALIDATE',
+          statement,
+          message: `agent() validate must be "strict" or "coerce"; received "${validateRaw}".`,
+        })
+      }
+      const validate = returns != null ? (validateRaw || 'coerce') : validateRaw
+      const effectiveFormat = returns != null ? '' : format
+
       if (typeof options.callAgent !== 'function') {
         runtimeUnavailable('AGENT_CALL_UNAVAILABLE', `agent("${agentName}") is not available in this runtime.`)
       }
@@ -1759,7 +1807,9 @@ function buildFunctions(options, runtimeContext) {
         prompt,
         instructions,
         messages,
-        format,
+        format: effectiveFormat,
+        returns,
+        validate,
         state,
         event,
         locals,
@@ -1964,9 +2014,11 @@ export async function runNextVScript(source, options = {}) {
 
   const enqueueSignal = (signal) => {
     if (!isPlainObject(signal)) return
+    const hasPayload = Object.prototype.hasOwnProperty.call(signal, 'payload')
     const normalizedSignal = {
       type: String(signal.type ?? '').trim(),
       value: signal.value,
+      payload: hasPayload ? signal.payload : null,
       line: signal.line,
       statement: signal.statement,
       source: String(signal.source ?? 'emit').trim() || 'emit',
@@ -2239,6 +2291,9 @@ export async function runNextVScript(source, options = {}) {
         enqueueSignal({
           type: initialType,
           value: initialEvent.value,
+          payload: Object.prototype.hasOwnProperty.call(initialEvent, 'payload')
+            ? initialEvent.payload
+            : null,
           source: 'external',
         })
       }
@@ -2278,6 +2333,9 @@ export async function runNextVScript(source, options = {}) {
     const signalEvent = {
       type: signal.type,
       value: signal.value,
+      payload: Object.prototype.hasOwnProperty.call(signal, 'payload')
+        ? signal.payload
+        : null,
       source: signal.source ?? 'emit',
     }
 

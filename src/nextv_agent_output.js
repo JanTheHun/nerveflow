@@ -199,3 +199,112 @@ export function normalizeAgentFormattedOutput(raw, format) {
   }
   return extractTextOutput(raw)
 }
+// --- Return contract engine ---
+
+function isPlainObjectContract(val) {
+  return val !== null && typeof val === 'object' && !Array.isArray(val)
+}
+
+function expectedContractTypeName(schema) {
+  if (schema === null) return 'any'
+  if (Array.isArray(schema)) return 'array'
+  if (isPlainObjectContract(schema)) return 'object'
+  return typeof schema
+}
+
+function actualContractTypeName(value) {
+  if (value === null) return 'null'
+  if (Array.isArray(value)) return 'array'
+  if (isPlainObjectContract(value)) return 'object'
+  return typeof value
+}
+
+function makeContractViolation(path, expected, actual) {
+  const displayPath = path || '<root>'
+  const err = new Error(`Agent return contract violation at "${displayPath}": expected ${expected}, got ${actual}.`)
+  err.code = 'AGENT_RETURN_CONTRACT_VIOLATION'
+  err.path = path
+  err.expected = expected
+  err.actual = actual
+  return err
+}
+
+function fillFromContractSchema(schema) {
+  if (schema === null) return null
+  if (Array.isArray(schema)) return []
+  if (isPlainObjectContract(schema)) {
+    const result = {}
+    for (const key of Object.keys(schema)) {
+      result[key] = fillFromContractSchema(schema[key])
+    }
+    return result
+  }
+  return schema
+}
+
+function validateContractValue(value, schema, mode, path) {
+  if (schema === null) return value
+
+  if (Array.isArray(schema)) {
+    if (value === null || value === undefined) {
+      if (mode === 'coerce') return []
+      throw makeContractViolation(path, 'array', value === null ? 'null' : 'undefined')
+    }
+    if (!Array.isArray(value)) {
+      throw makeContractViolation(path, 'array', actualContractTypeName(value))
+    }
+    if (schema.length === 0) return value
+    const itemSchema = schema[0]
+    return value.map((item, i) => validateContractValue(item, itemSchema, mode, `${path}[${i}]`))
+  }
+
+  if (isPlainObjectContract(schema)) {
+    if (value === null || value === undefined) {
+      if (mode === 'coerce') return fillFromContractSchema(schema)
+      throw makeContractViolation(path, 'object', value === null ? 'null' : 'undefined')
+    }
+    if (!isPlainObjectContract(value)) {
+      throw makeContractViolation(path, 'object', actualContractTypeName(value))
+    }
+    const result = { ...value }
+    for (const key of Object.keys(schema)) {
+      const fieldPath = path ? `${path}.${key}` : key
+      const fieldSchema = schema[key]
+      if (!(key in result) || result[key] === undefined) {
+        if (mode === 'coerce') {
+          result[key] = fillFromContractSchema(fieldSchema)
+        } else {
+          throw makeContractViolation(fieldPath, expectedContractTypeName(fieldSchema), 'undefined')
+        }
+      } else {
+        result[key] = validateContractValue(result[key], fieldSchema, mode, fieldPath)
+      }
+    }
+    return result
+  }
+
+  if (typeof schema === 'string') {
+    if (typeof value !== 'string') throw makeContractViolation(path, 'string', actualContractTypeName(value))
+    return value
+  }
+  if (typeof schema === 'number') {
+    if (typeof value !== 'number') throw makeContractViolation(path, 'number', actualContractTypeName(value))
+    return value
+  }
+  if (typeof schema === 'boolean') {
+    if (typeof value !== 'boolean') throw makeContractViolation(path, 'boolean', actualContractTypeName(value))
+    return value
+  }
+
+  return value
+}
+
+export function validateAgentReturnContract(output, contract, mode) {
+  const validMode = mode === 'strict' ? 'strict' : 'coerce'
+  return validateContractValue(output, contract, validMode, '')
+}
+
+export function buildAgentReturnContractGuidance(contract) {
+  const contractJson = JSON.stringify(contract, null, 2)
+  return `Return only valid JSON matching this structure:\n\n${contractJson}\n\nInclude all fields.\nReplace example values with actual values.\nDo not include commentary.`
+}

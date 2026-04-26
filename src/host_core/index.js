@@ -7,6 +7,10 @@ export {
 } from './event_bus.js'
 
 export {
+  createToolRuntime,
+} from './tool_runtime.js'
+
+export {
   areJsonStatesEqual,
   hasMeaningfulNextVExecutionEvents,
   normalizeEffectsPolicy,

@@ -9,6 +9,14 @@ import {
   createRuntimeWebSocketSurface,
 } from '../src/runtime/index.js'
 
+import {
+  createToolRuntime,
+} from '../src/host_core/index.js'
+
+import {
+  loadHostModules,
+} from '../src/host_modules/index.js'
+
 function parseCliOptions(argv) {
   const options = {
     command: '',
@@ -197,9 +205,15 @@ function appendOllamaDebugRecord(record) {
 }
 
 const resolvers = createRuntimeResolvers({ repoRoot })
+
+// Load host-modules providers (builtin + workspace discovery)
+const providers = await loadHostModules({ workspaceDir: options.workspaceDir })
+const toolRuntime = createToolRuntime({ providers })
+
 const runtimeCore = createRuntimeCore({
   resolvers,
   callAgent: callOllamaAgent,
+  toolRuntime,
   defaultModel: process.env.OLLAMA_MODEL ?? '',
 })
 

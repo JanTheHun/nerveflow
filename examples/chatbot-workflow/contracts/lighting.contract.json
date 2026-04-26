@@ -1,0 +1,5 @@
+{
+  "domain": "lighting",
+  "area": ["swimming_pool", "garage", "front_lawn", "dining_room", "living_room", "other"],
+  "action": ["on", "off", "dim", "brighten", "other"]
+}

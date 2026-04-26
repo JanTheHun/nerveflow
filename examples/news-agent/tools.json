@@ -1,0 +1,10 @@
+{
+  "allow": [
+    "poll_next_article",
+    "store_article",
+    "query_articles",
+    "send_alert",
+    "mark_read"
+  ],
+  "aliases": {}
+}

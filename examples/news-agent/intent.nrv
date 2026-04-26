@@ -1,0 +1,3 @@
+on external "user_message"
+  emit("summarize_unread", event.value)
+end

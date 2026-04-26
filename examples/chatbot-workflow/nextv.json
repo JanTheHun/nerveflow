@@ -1,0 +1,10 @@
+{
+  "entrypointPath": "entry.nrv",
+  "externals": ["user_message", "reset_chat"],
+  "effects": {
+    "switch": {
+      "kind": "gpio",
+      "format": "json"
+    }
+  }
+}

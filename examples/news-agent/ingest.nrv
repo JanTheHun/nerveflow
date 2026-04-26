@@ -1,0 +1,40 @@
+on external "news_tick"
+  article = tool("poll_next_article", { feeds: state.feeds })
+
+  if article != null
+    priority = agent(
+      "priority",
+      concat(
+        "Favorite topics: ",
+        to_json(state.favoriteTopics),
+        "\n\nArticle:\n",
+        to_json(article)
+      ),
+      file("prompts/priority.md"),
+      returns=from_json(file("contracts/priority.contract.json")),
+      retry_on_contract_violation=1
+    )
+
+    store_payload = {
+      article: article,
+      priority: priority.level,
+      topic: priority.topic,
+      unread: true
+    }
+    tool("store_article", store_payload)
+    state.unreadCount = state.unreadCount + 1
+
+    if priority.level == "urgent"
+      alert = {
+        title: article.title,
+        source: article.source,
+        topic: priority.topic,
+        reason: priority.reason,
+        url: article.url
+      }
+      output visual to_json(alert)
+      tool("send_alert", alert)
+      emit("user_output", concat("Urgent: ", article.title))
+    end
+  end
+end

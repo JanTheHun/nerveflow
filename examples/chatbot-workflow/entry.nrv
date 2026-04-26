@@ -1,0 +1,7 @@
+# Chatbot router composition entrypoint.
+include "intent.nrv"
+include "chat.nrv"
+include "reset.nrv"
+include "output.nrv"
+include "domain.nrv"
+include "lighting.nrv"

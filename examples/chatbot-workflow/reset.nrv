@@ -1,0 +1,7 @@
+on "reset_turn"
+  state.messages = [
+    { role: "system", content: "You are a helpful local chatbot." }
+  ]
+  state.turn = 0
+  emit("user_output", "Chat history reset")
+end

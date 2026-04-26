@@ -1,0 +1,11 @@
+{
+  "priority": {
+    "model": "phi3:mini-128k",
+    "tools": []
+  },
+  "summarizer": {
+    "model": "cogito:3b",
+    "tools": [],
+    "instructions": "You are a concise news briefing assistant. Prioritize actionable clarity and factual phrasing."
+  }
+}

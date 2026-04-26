@@ -1,0 +1,3 @@
+on "user_output"
+  output text event.value
+end

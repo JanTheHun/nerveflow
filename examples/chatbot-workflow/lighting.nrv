@@ -1,0 +1,15 @@
+on "light_instruction"
+
+  light = agent("intent", event.value, file("prompts/lighting-instruction.md"), returns=from_json(file("contracts/lighting.contract.json")))
+
+  if light.area != "other" & light.action != "other"
+    output switch light
+  else if light.area == "other" & light.action == "other"
+    output text "do what with what?"
+  else if light.area == "other"
+    output text "what light?"
+  else if light.action == "other"
+    output text "do what with ${light.area}?"
+  end
+
+end

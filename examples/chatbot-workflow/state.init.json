@@ -1,0 +1,10 @@
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a helpful local chatbot."
+    }
+  ],
+  "turn": 0,
+  "initialized": true
+}

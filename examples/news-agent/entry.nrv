@@ -1,0 +1,7 @@
+# News agent entrypoint composition.
+include "intent.nrv"
+include "ingest.nrv"
+include "summary.nrv"
+include "topics.nrv"
+include "read.nrv"
+include "output.nrv"

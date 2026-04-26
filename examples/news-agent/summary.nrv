@@ -1,0 +1,22 @@
+on "summarize_unread"
+  query = event.value
+  articles = tool("query_articles", { unread: true, limit: 20 })
+
+  digest = agent(
+    "summarizer",
+    concat(
+      "User request: ",
+      query,
+      "\n\nFavorite topics: ",
+      to_json(state.favoriteTopics),
+      "\n\nUnread articles:\n",
+      to_json(articles)
+    ),
+    file("prompts/summary.md"),
+    returns=from_json(file("contracts/summary.contract.json")),
+    retry_on_contract_violation=1
+  )
+
+  output text digest.answer
+  output json digest
+end

@@ -1,0 +1,5 @@
+{
+  "level": ["urgent", "high", "normal", "ignore"],
+  "topic": ["markets", "geopolitics", "ai", "energy", "other"],
+  "reason": ""
+}

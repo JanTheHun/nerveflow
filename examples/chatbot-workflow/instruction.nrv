@@ -1,0 +1,16 @@
+on "user_instruction"
+
+  subject = agent("intent", event.value, file("prompts/domain-classification.md"), returns=(from_json(file("contracts/domain-classification.contract.json"))))
+
+  if subject.domain == "lighting"
+
+    emit("light_instruction", event.value)
+
+  else
+
+    output json subject
+    emit("user_output", "wish I could..")
+
+  end
+
+end

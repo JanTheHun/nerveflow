@@ -1,0 +1,17 @@
+{
+  "entrypointPath": "entry.nrv",
+  "externals": ["user_message", "set_topics", "mark_read"],
+  "timers": [
+    {
+      "event": "news_tick",
+      "interval": 300000,
+      "runOnStart": true
+    }
+  ],
+  "effects": {
+    "breaking_news": {
+      "kind": "visual",
+      "format": "json"
+    }
+  }
+}

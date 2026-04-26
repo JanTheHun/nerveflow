@@ -1,0 +1,11 @@
+{
+  "chat": {
+    "model": "cogito:3b",
+    "tools": [],
+    "instructions": "You are a concise, helpful chatbot. Use the conversation history and respond naturally to the latest user message."
+  },
+  "intent": {
+    "model": "phi3:mini-128k",
+    "tools": []
+  }
+}

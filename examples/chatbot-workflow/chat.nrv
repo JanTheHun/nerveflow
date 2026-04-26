@@ -1,0 +1,17 @@
+on "chat_turn"
+  user_text = event.value
+  state.messages = state.messages + [
+    { role: "user", content: user_text }
+  ]
+  reply = agent("chat", messages=state.messages)
+  if reply.content
+    assistant_text = reply.content
+  else
+    assistant_text = reply
+  end
+  state.messages = state.messages + [
+    { role: "assistant", content: assistant_text }
+  ]
+  state.turn = state.turn + 1
+  emit("user_output", assistant_text)
+end

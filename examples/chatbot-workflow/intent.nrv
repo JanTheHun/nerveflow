@@ -1,0 +1,12 @@
+on external "user_message"
+  intent = agent("intent", event.value, file("prompts/intent.md"), returns=from_json(file("contracts/intent.contract.json")))
+  if intent.category == "instruction" & intent.confidence > 0.8
+    emit("user_instruction", event.value)
+  else
+    emit("chat_turn", event.value)
+  end
+end
+
+on external "reset_chat"
+  emit("reset_turn", event.value)
+end

@@ -1,8 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHostAdapter } from '../src/host_core/runtime_session.js'
+import { createToolRuntime } from '../src/host_core/tool_runtime.js'
 
-function buildAdapter(workspaceConfig) {
+function buildAdapter(workspaceConfig, options = {}) {
   return createHostAdapter({
     workspaceDir: {
       absolutePath: '/workspace',
@@ -20,6 +21,7 @@ function buildAdapter(workspaceConfig) {
     validateOutputContract: () => {},
     appendAgentFormatInstructions: (prompt) => prompt,
     normalizeAgentFormattedOutput: (value) => value,
+    toolRuntime: options.toolRuntime ?? null,
   })
 }
 
@@ -100,6 +102,74 @@ test('callTool reports unavailable when allow-list is not configured', async () 
       return true
     },
   )
+})
+
+test('callTool dispatches to configured tool runtime after alias resolution', async () => {
+  const calls = []
+  const toolRuntime = createToolRuntime({
+    providers: [
+      {
+        real_tool: async (payload) => {
+          calls.push(payload)
+          return { ok: true, handledBy: 'real_tool' }
+        },
+      },
+    ],
+  })
+
+  const adapter = buildAdapter({
+    tools: {
+      allow: new Set(['real_tool']),
+      aliases: { alias_tool: 'real_tool' },
+    },
+    agents: { profiles: {} },
+    operators: { map: {} },
+  }, { toolRuntime })
+
+  const result = await adapter.callTool({
+    name: 'alias_tool',
+    args: { sample: true },
+    positional: ['x'],
+    state: { on: true },
+  })
+
+  assert.deepEqual(result, { ok: true, handledBy: 'real_tool' })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].name, 'real_tool')
+  assert.equal(calls[0].requestedName, 'alias_tool')
+  assert.deepEqual(calls[0].args, { sample: true })
+})
+
+test('callTool enforces allow-list before tool runtime dispatch', async () => {
+  let called = 0
+  const toolRuntime = createToolRuntime({
+    providers: [
+      {
+        blocked_tool: async () => {
+          called += 1
+          return { ok: true }
+        },
+      },
+    ],
+  })
+
+  const adapter = buildAdapter({
+    tools: {
+      allow: new Set(['safe_tool']),
+      aliases: { alias_tool: 'blocked_tool' },
+    },
+    agents: { profiles: {} },
+    operators: { map: {} },
+  }, { toolRuntime })
+
+  await assert.rejects(
+    () => adapter.callTool({ name: 'alias_tool' }),
+    (err) => {
+      assert.match(err.message, /Tool "alias_tool" is not allowed by workspace tools policy\./)
+      return true
+    },
+  )
+  assert.equal(called, 0)
 })
 
 test('callAgent includes images when event payload provides images', async () => {

@@ -26,6 +26,8 @@ function extractEventImages(event) {
  * @param {function} opts.validateOutputContract  - output contract validator
  * @param {function} opts.appendAgentFormatInstructions - prompt formatter
  * @param {function} opts.normalizeAgentFormattedOutput - output normalizer
+ * @param {function} opts.buildAgentRetryPrompt  - retry error formatter
+ * @param {object|null} opts.toolRuntime  - optional tool runtime with call(payload)
  */
 export function createHostAdapter({
   workspaceDir,
@@ -40,6 +42,8 @@ export function createHostAdapter({
   normalizeAgentFormattedOutput,
   validateAgentReturnContract = null,
   buildAgentReturnContractGuidance = null,
+  buildAgentRetryPrompt = null,
+  toolRuntime = null,
 }) {
   function resolveToolName(toolNameRaw) {
     const aliases = workspaceConfig?.tools?.aliases ?? {}
@@ -64,17 +68,30 @@ export function createHostAdapter({
   }
 
   const adapter = {
-    callTool: async ({ name }) => {
+    callTool: async ({ name, args, positional, state, event, locals, line, statement }) => {
       const toolNameRaw = String(name ?? '').trim()
       const toolName = resolveToolName(toolNameRaw)
       const allowedTools = workspaceConfig?.tools?.allow ?? null
       if (allowedTools && !allowedTools.has(toolName)) {
         throw new Error(`Tool "${toolNameRaw}" is not allowed by workspace tools policy.`)
       }
+      if (toolRuntime && typeof toolRuntime.call === 'function') {
+        return await toolRuntime.call({
+          name: toolName,
+          requestedName: toolNameRaw,
+          args,
+          positional,
+          state,
+          event,
+          locals,
+          line,
+          statement,
+        })
+      }
       throw new Error(`Tool "${toolName}" is not available in this host yet.`)
     },
 
-    callAgent: async ({ agent, prompt, instructions, messages, format, returns, validate, event }) => {
+    callAgent: async ({ agent, prompt, instructions, messages, format, returns, validate, retry_on_contract_violation, on_contract_violation, event }) => {
       const agentName = String(agent ?? '').trim()
       const profile = resolveAgentProfile(agentName)
       if (!profile) {
@@ -92,49 +109,88 @@ export function createHostAdapter({
       const contractGuidance = (returns != null && typeof buildAgentReturnContractGuidance === 'function')
         ? buildAgentReturnContractGuidance(returns)
         : ''
-      const systemInstructions = [baseInstructions, contractGuidance].filter(Boolean).join('\n\n')
+      const baseSystemInstructions = [baseInstructions, contractGuidance].filter(Boolean).join('\n\n')
 
       const formattedPrompt = format ? appendAgentFormatInstructions(prompt, format) : String(prompt ?? '')
       const inputMessages = Array.isArray(messages) ? messages : []
 
-      const chatMessages = []
-      if (systemInstructions) {
-        chatMessages.push({ role: 'system', content: systemInstructions })
-      }
-      for (const entry of inputMessages) {
-        const role = String(entry?.role ?? '').trim()
-        const content = String(entry?.content ?? '').trim()
-        if (!role || !content) continue
-        const msgEntry = { role, content }
-        if (Array.isArray(entry.images) && entry.images.length > 0) {
-          msgEntry.images = entry.images
-        }
-        chatMessages.push(msgEntry)
-      }
-      if (formattedPrompt.trim()) {
-        const eventImages = extractEventImages(event)
-        if (eventImages.length > 0) {
-          chatMessages.push({ role: 'user', content: formattedPrompt.trim(), images: eventImages })
-        } else {
-          chatMessages.push({ role: 'user', content: formattedPrompt.trim() })
-        }
-      }
+      const retryLimit = Number.isInteger(retry_on_contract_violation) ? Math.max(0, retry_on_contract_violation) : 0
+      let lastViolation = null
+      let previousViolationKey = null
 
-      if (chatMessages.length === 0) {
-        throw new Error(`agent("${agentName}") has no prompt/messages to send.`)
-      }
-
-      const raw = await callAgent({ model, messages: chatMessages })
-      if (returns != null) {
-        const parsed = normalizeAgentFormattedOutput(raw, 'json')
-        if (typeof validateAgentReturnContract === 'function') {
-          const mode = String(validate ?? '').trim() || 'coerce'
-          return validateAgentReturnContract(parsed, returns, mode)
+      for (let attemptNum = 0; attemptNum <= retryLimit; attemptNum += 1) {
+        const chatMessages = []
+        if (baseSystemInstructions) {
+          chatMessages.push({ role: 'system', content: baseSystemInstructions })
         }
-        return parsed
+        for (const entry of inputMessages) {
+          const role = String(entry?.role ?? '').trim()
+          const content = String(entry?.content ?? '').trim()
+          if (!role || !content) continue
+          const msgEntry = { role, content }
+          if (Array.isArray(entry.images) && entry.images.length > 0) {
+            msgEntry.images = entry.images
+          }
+          chatMessages.push(msgEntry)
+        }
+
+        let userPrompt = formattedPrompt.trim()
+        if (attemptNum > 0 && lastViolation != null && typeof buildAgentRetryPrompt === 'function') {
+          const retryGuidance = buildAgentRetryPrompt(lastViolation)
+          userPrompt = [userPrompt, retryGuidance].filter(Boolean).join('\n\n')
+        }
+
+        if (userPrompt) {
+          const eventImages = extractEventImages(event)
+          if (eventImages.length > 0) {
+            chatMessages.push({ role: 'user', content: userPrompt, images: eventImages })
+          } else {
+            chatMessages.push({ role: 'user', content: userPrompt })
+          }
+        }
+
+        if (chatMessages.length === 0) {
+          throw new Error(`agent("${agentName}") has no prompt/messages to send.`)
+        }
+
+        const raw = await callAgent({ model, messages: chatMessages })
+        if (returns != null) {
+          const parsed = normalizeAgentFormattedOutput(raw, 'json')
+          if (typeof validateAgentReturnContract === 'function') {
+            const mode = String(validate ?? '').trim() || 'coerce'
+            try {
+              return validateAgentReturnContract(parsed, returns, mode)
+            } catch (err) {
+              lastViolation = err
+              const violationKey = `${err?.path}:${err?.expected}:${err?.actual}`
+              if (violationKey === previousViolationKey && attemptNum < retryLimit) {
+                previousViolationKey = violationKey
+                continue
+              }
+              previousViolationKey = violationKey
+              if (attemptNum < retryLimit) {
+                continue
+              }
+              if (on_contract_violation != null) {
+                return {
+                  __nextv_contract_violation__: true,
+                  expression: on_contract_violation,
+                  violation: {
+                    type: 'contract_violation',
+                    field: String(err?.path ?? ''),
+                    expected: String(err?.expected ?? ''),
+                    actual: String(err?.actual ?? ''),
+                  },
+                }
+              }
+              throw err
+            }
+          }
+          return parsed
+        }
+        if (!format) return raw
+        return normalizeAgentFormattedOutput(raw, format)
       }
-      if (!format) return raw
-      return normalizeAgentFormattedOutput(raw, format)
     },
 
     callScript: async ({ path, state: runtimeState, event, locals, executionRole, onEvent }) => {

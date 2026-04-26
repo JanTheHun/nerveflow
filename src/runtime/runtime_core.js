@@ -6,6 +6,7 @@ import {
   NextVEventRunner,
   appendAgentFormatInstructions,
   buildAgentReturnContractGuidance,
+  buildAgentRetryPrompt,
   normalizeAgentFormattedOutput,
   runNextVScriptFromFile,
   validateAgentReturnContract,
@@ -125,6 +126,7 @@ export function createRuntimeCore({
   callAgent = async () => {
     throw new Error('agent transport is not configured for runtime')
   },
+  toolRuntime = null,
   defaultModel = '',
   resolvers,
 } = {}) {
@@ -165,6 +167,8 @@ export function createRuntimeCore({
     normalizeAgentFormattedOutput,
     validateAgentReturnContract,
     buildAgentReturnContractGuidance,
+    buildAgentRetryPrompt,
+    toolRuntime,
     callAgent,
     defaultModel,
   })

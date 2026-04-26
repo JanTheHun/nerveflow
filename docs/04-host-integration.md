@@ -71,6 +71,52 @@ Compatibility timeline:
 | Next major | Removed | Supported |
 | Later extraction (optional) | N/A | May remain bridge path if `@nerveflow/runtime` is introduced |
 
+## Host-Modules Layer (Capability Composition)
+
+The `host-modules` layer provides tool capability composition separate from the runtime authority, keeping host-core substrate-clean while enabling domain-specific tool providers.
+
+```js
+import {
+  loadHostModules,
+  createRuntimeBuiltinToolProvider,
+} from 'nerveflow/host-modules'
+
+import {
+  createToolRuntime,
+} from 'nerveflow/host_core'
+
+// Discover and compose providers (builtin + workspace custom)
+const providers = await loadHostModules({ workspaceDir })
+const toolRuntime = createToolRuntime({ providers })
+
+// Pass to runtime
+const runtime = createRuntimeCore({
+  resolvers,
+  callAgent,
+  toolRuntime,
+  // ...
+})
+```
+
+### Builtin Providers
+
+Three tools are provided by default:
+
+- `get_time` — returns current UTC timestamp
+- `http_fetch` — HTTP request with JSON parsing
+- `rss_fetch` — Fetch and parse RSS/Atom feeds
+
+See [host-modules README](../src/host_modules/README.md) for provider semantics, workspace discovery, and custom provider registration.
+
+### Provider Ordering
+
+Providers are composed in order:
+
+1. Builtin providers (always first)
+2. Workspace providers (via `host_modules` directory discovery)
+
+First provider with a handler for a given tool name wins. This allows workspace providers to override or extend builtin capabilities.
+
 ## Host protocol utilities (v1)
 
 `nerveflow/host_core/protocol` provides a transport-agnostic envelope contract for multi-surface hosts.

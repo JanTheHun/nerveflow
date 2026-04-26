@@ -56,7 +56,7 @@ Responsibilities:
 - normalize workspace display paths
 - reject paths outside the repo root
 
-### `createRuntimeCore({ sessionId, callAgent, defaultModel, resolvers })`
+### `createRuntimeCore({ sessionId, callAgent, defaultModel, resolvers, toolRuntime })`
 
 Creates a single-session runtime authority.
 
@@ -93,6 +93,35 @@ Lifecycle states currently include:
 - `stopping`
 - `stopped`
 - `error`
+
+**Parameters:**
+
+- `sessionId` — unique runtime session identifier
+- `callAgent` — async function for agent invocation (Ollama, etc.)
+- `defaultModel` — default LLM model for agent() calls
+- `resolvers` — filesystem and path resolution bundle from `createRuntimeResolvers`
+- `toolRuntime` — (optional) tool dispatch engine from `createToolRuntime` (host-core). If provided, tool() calls in workflows will be dispatched through this runtime. If omitted, tool calls fall back to hostAdapter behavior.
+
+### `createRuntimeBuiltinToolProvider({ fetchImpl })`
+
+Builds a generic runtime tool provider map for:
+
+- `get_time`
+- `http_fetch`
+- `rss_fetch`
+
+This provider is transport-agnostic and can be composed into a `toolRuntime` chain.
+
+**Migration note:** As of v0.2.0, this export is a re-export from the `host-modules` layer for backward compatibility. New code should import directly from `host-modules`:
+
+```js
+import { createRuntimeBuiltinToolProvider } from 'nerveflow/host-modules'
+// or compose via loader:
+import { loadHostModules } from 'nerveflow/host-modules'
+const providers = await loadHostModules({ workspaceDir })
+```
+
+See [host-modules README](../host_modules/README.md) for workspace provider composition and custom tool providers.
 
 ### `createRuntimeCommandRouter({ runtimeCore, sessionId, onSubscribe, onUnsubscribe })`
 

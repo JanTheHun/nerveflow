@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Structured return contracts now support string scalar enum constraints via string-literal arrays.
+- Enum constraints are exact-literal only; wildcard/pattern semantics are explicitly unsupported.
+
+### Changed
+
+- Contract interpretation now treats multi-string arrays as scalar enums instead of collection schemas for those forms.
+
+### Notes
+
+- Coerce mode continues to repair structural omissions only; it does not rewrite invalid enum values or invent missing enum values.
+
 ## [0.1.3] - 2026-04-24
 
 ### Changed

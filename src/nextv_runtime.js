@@ -1798,11 +1798,25 @@ function buildFunctions(options, runtimeContext) {
       const validate = returns != null ? (validateRaw || 'coerce') : validateRaw
       const effectiveFormat = returns != null ? '' : format
 
+      const retryCountRaw = named?.retry_on_contract_violation
+      const retryCount = Number.isInteger(retryCountRaw) ? retryCountRaw : 0
+      if (retryCount < 0) {
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_AGENT_RETRY',
+          statement,
+          message: `agent() retry_on_contract_violation must be a non-negative integer; received ${retryCountRaw}.`,
+        })
+      }
+
+      const onViolationExpr = named?.on_contract_violation
+
       if (typeof options.callAgent !== 'function') {
         runtimeUnavailable('AGENT_CALL_UNAVAILABLE', `agent("${agentName}") is not available in this runtime.`)
       }
 
-      return await options.callAgent({
+      const callResult = await options.callAgent({
         agent: agentName,
         prompt,
         instructions,
@@ -1810,12 +1824,32 @@ function buildFunctions(options, runtimeContext) {
         format: effectiveFormat,
         returns,
         validate,
+        retry_on_contract_violation: retryCount,
+        on_contract_violation: onViolationExpr,
         state,
         event,
         locals,
         line,
         statement,
       })
+
+      if (callResult && typeof callResult === 'object' && callResult.__nextv_contract_violation__ === true) {
+        if (onViolationExpr) {
+          const violationLocals = { ...locals, violation: callResult.violation }
+          const violationContext = {
+            line,
+            statement,
+            locals: violationLocals,
+            state,
+            event,
+            executionRole: 'agent',
+          }
+          await evaluateExpression(callResult.expression, violationContext)
+        }
+        return null
+      }
+
+      return callResult
     },
     script: async ({ positional, named, state, event, locals, line, statement }) => {
       const pathValue = String(positional[0] ?? named?.path ?? '').trim()

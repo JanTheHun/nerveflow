@@ -205,8 +205,17 @@ function isPlainObjectContract(val) {
   return val !== null && typeof val === 'object' && !Array.isArray(val)
 }
 
+function isStringEnumSchema(schema) {
+  return Array.isArray(schema) && schema.length >= 2 && schema.every((item) => typeof item === 'string')
+}
+
+function enumExpectedName(schema) {
+  return `enum(${schema.map((item) => JSON.stringify(item)).join(' | ')})`
+}
+
 function expectedContractTypeName(schema) {
   if (schema === null) return 'any'
+  if (isStringEnumSchema(schema)) return enumExpectedName(schema)
   if (Array.isArray(schema)) return 'array'
   if (isPlainObjectContract(schema)) return 'object'
   return typeof schema
@@ -229,13 +238,47 @@ function makeContractViolation(path, expected, actual) {
   return err
 }
 
-function fillFromContractSchema(schema) {
+function makeInvalidContract(path, reason) {
+  const displayPath = path || '<root>'
+  const err = new Error(`Invalid agent return contract at "${displayPath}": ${reason}.`)
+  err.code = 'AGENT_RETURN_CONTRACT_INVALID'
+  err.path = path
+  err.reason = reason
+  return err
+}
+
+function assertValidContractSchema(schema, path = '') {
+  if (schema === null) return
+  if (isStringEnumSchema(schema)) {
+    if (schema.includes('*')) {
+      throw makeInvalidContract(path, 'wildcard enum value "*" is not supported')
+    }
+    return
+  }
+  if (Array.isArray(schema)) {
+    if (schema.length === 0) return
+    assertValidContractSchema(schema[0], `${path}[]`)
+    return
+  }
+  if (isPlainObjectContract(schema)) {
+    for (const key of Object.keys(schema)) {
+      const fieldPath = path ? `${path}.${key}` : key
+      assertValidContractSchema(schema[key], fieldPath)
+    }
+  }
+}
+
+function fillFromContractSchema(schema, path = '') {
   if (schema === null) return null
+  if (isStringEnumSchema(schema)) {
+    throw makeContractViolation(path, enumExpectedName(schema), 'undefined')
+  }
   if (Array.isArray(schema)) return []
   if (isPlainObjectContract(schema)) {
     const result = {}
     for (const key of Object.keys(schema)) {
-      result[key] = fillFromContractSchema(schema[key])
+      const fieldPath = path ? `${path}.${key}` : key
+      result[key] = fillFromContractSchema(schema[key], fieldPath)
     }
     return result
   }
@@ -244,6 +287,16 @@ function fillFromContractSchema(schema) {
 
 function validateContractValue(value, schema, mode, path) {
   if (schema === null) return value
+
+  if (isStringEnumSchema(schema)) {
+    if (typeof value !== 'string') {
+      throw makeContractViolation(path, enumExpectedName(schema), actualContractTypeName(value))
+    }
+    if (!schema.includes(value)) {
+      throw makeContractViolation(path, enumExpectedName(schema), JSON.stringify(value))
+    }
+    return value
+  }
 
   if (Array.isArray(schema)) {
     if (value === null || value === undefined) {
@@ -260,7 +313,7 @@ function validateContractValue(value, schema, mode, path) {
 
   if (isPlainObjectContract(schema)) {
     if (value === null || value === undefined) {
-      if (mode === 'coerce') return fillFromContractSchema(schema)
+      if (mode === 'coerce') return fillFromContractSchema(schema, path)
       throw makeContractViolation(path, 'object', value === null ? 'null' : 'undefined')
     }
     if (!isPlainObjectContract(value)) {
@@ -271,8 +324,11 @@ function validateContractValue(value, schema, mode, path) {
       const fieldPath = path ? `${path}.${key}` : key
       const fieldSchema = schema[key]
       if (!(key in result) || result[key] === undefined) {
+        if (isStringEnumSchema(fieldSchema)) {
+          throw makeContractViolation(fieldPath, enumExpectedName(fieldSchema), 'undefined')
+        }
         if (mode === 'coerce') {
-          result[key] = fillFromContractSchema(fieldSchema)
+          result[key] = fillFromContractSchema(fieldSchema, fieldPath)
         } else {
           throw makeContractViolation(fieldPath, expectedContractTypeName(fieldSchema), 'undefined')
         }
@@ -300,11 +356,61 @@ function validateContractValue(value, schema, mode, path) {
 }
 
 export function validateAgentReturnContract(output, contract, mode) {
+  assertValidContractSchema(contract)
   const validMode = mode === 'strict' ? 'strict' : 'coerce'
   return validateContractValue(output, contract, validMode, '')
 }
 
+function collectEnumConstraintLines(schema, path = '') {
+  if (schema === null) return []
+  if (isStringEnumSchema(schema)) {
+    const label = path || '<root>'
+    const values = schema.map((item) => `- ${item}`).join('\n')
+    const hasOther = schema.includes('other')
+    const fallbackRule = hasOther
+      ? `If user input does not map to any listed value for ${label}, use "other".`
+      : `If user input does not map to a listed value for ${label}, still choose one listed value. Never invent a new literal.`
+    return [
+      `${label} must be exactly one of:\n${values}\nReturn a single string literal value for ${label}. Do not return an array.\n${fallbackRule}\nBefore responding, verify ${label} is exactly one listed literal.`,
+    ]
+  }
+  if (Array.isArray(schema)) {
+    if (schema.length === 0) return []
+    const nestedPath = path ? `${path}[]` : '[]'
+    return collectEnumConstraintLines(schema[0], nestedPath)
+  }
+  if (isPlainObjectContract(schema)) {
+    const lines = []
+    for (const key of Object.keys(schema)) {
+      const fieldPath = path ? `${path}.${key}` : key
+      lines.push(...collectEnumConstraintLines(schema[key], fieldPath))
+    }
+    return lines
+  }
+  return []
+}
+
 export function buildAgentReturnContractGuidance(contract) {
+  assertValidContractSchema(contract)
   const contractJson = JSON.stringify(contract, null, 2)
-  return `Return only valid JSON matching this structure:\n\n${contractJson}\n\nInclude all fields.\nReplace example values with actual values.\nDo not include commentary.`
+  const enumLines = collectEnumConstraintLines(contract)
+  const enumSection = enumLines.length > 0 ? `\n\nEnum constraints:\n\n${enumLines.join('\n\n')}` : ''
+  return `Return only valid JSON matching this structure:\n\n${contractJson}${enumSection}\n\nInclude all fields.\nReplace example values with actual values.\nDo not include commentary.`
+}
+
+export function buildAgentRetryPrompt(error) {
+  if (!error || typeof error !== 'object') {
+    return 'The previous response violated the return contract. Please try again with a valid response.'
+  }
+
+  const path = String(error?.path ?? '').trim()
+  const expected = String(error?.expected ?? '').trim()
+  const actual = String(error?.actual ?? '').trim()
+  const errorMessage = String(error?.message ?? '').trim()
+
+  if (!path || !expected || !actual) {
+    return `The previous response violated the return contract:\n\n${errorMessage}\n\nReturn exactly one valid JSON object matching the declared contract.`
+  }
+
+  return `The previous response violated the return contract:\n\nField "${path}" must be ${expected}.\nYou returned: ${actual}\n\nReturn exactly one valid JSON object matching the declared contract.`
 }

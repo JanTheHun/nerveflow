@@ -26,6 +26,7 @@ Return contracts support:
 * model guidance through prompt augmentation
 * structural validation of model output
 * optional bounded structural repair (`coerce` mode)
+* optional bounded recovery via contract-violation retries
 
 They provide deterministic structure over probabilistic generation.
 
@@ -145,9 +146,13 @@ Use:
 
 ---
 
-# Arrays
+# Arrays And Scalar Enums
 
-Array contracts use the first element as the per-item schema.
+Array literals have two meanings.
+
+## 1. Collection schema
+
+An array with zero or one exemplar element is a collection schema.
 
 Example:
 
@@ -166,6 +171,46 @@ means:
 * every element must match that schema
 
 Not positional tuple syntax.
+
+Notes:
+
+* `[]` means array with unconstrained item structure
+* `[<schema>]` means array where each item matches `<schema>`
+
+## 2. Scalar enum constraint (string-only)
+
+An array with two or more string literals is an enum-constrained scalar field.
+
+Example:
+
+```json
+{
+  "color": ["green", "red", "other"]
+}
+```
+
+means:
+
+* field type is string
+* value must exactly match one listed literal
+
+Not supported:
+
+* wildcard enum entries such as `"*"`
+* wildcard/pattern semantics
+* regex/glob matching
+
+Enums are exact string-literal membership only.
+
+### Special case: "other" sentinel (optional)
+
+When an enum includes the literal string `"other"`, hosts may treat it as an explicit fallback value during prompt augmentation.
+
+Important:
+
+* this does not change validation semantics
+* `"other"` is validated exactly like any other enum member
+* fallback prompting is opt-in and derived only from contract membership
 
 ---
 
@@ -245,6 +290,23 @@ Rules:
 Coerce repairs omissions, not invalid values.
 
 It does not reinterpret wrong values.
+
+---
+
+## Enum validation semantics
+
+Strict mode:
+
+* returned value must be exactly one allowed enum literal
+* unknown values are violations
+
+Coerce mode:
+
+* unknown enum values are still violations
+* coerce does not rewrite enum values
+* coerce does not invent enum values for missing fields
+
+Missing enum-constrained fields are violations in both modes.
 
 ---
 
@@ -399,11 +461,154 @@ Nested paths use dotted/array-index notation.
 
 ---
 
+# Contract-Violation Retries
+
+When `retry_on_contract_violation=N` is specified, the runtime may automatically retry the agent call if the model output violates the return contract.
+
+Syntax:
+
+```nrv
+result = agent(
+  "classifier",
+  prompt,
+  returns={
+    intent: ["chat", "search", "other"],
+    confidence: 0
+  },
+  retry_on_contract_violation=1
+)
+```
+
+## Retry Trigger
+
+A retry is triggered only when output validation fails, including:
+
+* invalid JSON structure
+* wrong root type
+* missing required fields
+* enum constraint violations
+* nested contract violations
+
+Retries do not trigger for semantically weak but contract-valid outputs.
+
+## Retry Behavior
+
+On violation, runtime augments the system instructions with specific error feedback:
+
+```text
+Field "intent" must be one of:
+chat | search | other
+
+You returned: "unknown"
+
+Return exactly one valid JSON object matching the declared contract.
+```
+
+This reuses the existing contract guidance and appends violation-specific correction.
+
+## Validation Remains Strict
+
+Each retry is fully revalidated against the same contract. Validation is never relaxed during retries.
+
+If all retry attempts fail, the violation is raised normally.
+
+Retries do not suppress terminal failure.
+
+## Early Stop
+
+Hosts may detect and skip repeated identical violations to avoid ineffective retry loops.
+
+Example: if field "intent" returns the same invalid value across multiple attempts, the host may stop and raise the error.
+
+## Effectiveness
+
+Retries are typically most effective for:
+
+* malformed JSON
+* wrong root type
+* omitted fields
+
+They may be less reliable for repeated semantic enum violations, which depend on model behavior and prompt quality.
+
+---
+
+# Contract Violation Routing
+
+Agent calls may declare a violation handler to route exhausted contract failures into workflow control flow instead of terminating execution.
+
+## Syntax
+
+```nrv
+light = agent(
+  "intent",
+  event.value,
+  file("choose-light.md"),
+  returns=from_json(file("lighting.contract.json")),
+  retry_on_contract_violation=2,
+  on_contract_violation=emit("contract_violation", violation)
+)
+```
+
+`on_contract_violation` must be an `emit(...)` expression.
+
+## Execution Order
+
+1. Validate output against contract
+2. If violation and retries configured: attempt bounded recovery
+3. If retries exhausted: check for `on_contract_violation` handler
+4. If handler declared: execute emit, continue workflow
+5. If no handler: raise `AGENT_RETURN_CONTRACT_VIOLATION` normally
+
+## Violation Payload
+
+`violation` is an implicit variable available in the handler expression:
+
+```json
+{
+  "type": "contract_violation",
+  "field": "area",
+  "expected": "enum(garage|other)",
+  "actual": "cellar"
+}
+```
+
+Field path may be nested:
+
+```json
+{
+  "field": "entities[0].kind"
+}
+```
+
+## Handler Example
+
+```nrv
+on "contract_violation"
+  output text "Sorry, I couldn't parse that. Bad field: ${event.value.field}"
+end
+```
+
+Inspect violation details using `event.value` properties.
+
+## Semantics
+
+Contract violations routed via handlers are **not** silently recovered.
+
+They are failures that enter the control-flow model through events.
+
+Handler design is the application's responsibility—a missing handler raises normally.
+
+---
+
 # Backward Compatibility
 
 * `format="json"` unchanged
 * `returns={...}` additive
-* no breaking changes
+* multi-string arrays in contracts are interpreted as scalar enums
+
+Compatibility note:
+
+* interpreting multi-string arrays as enums is a semantic change from first-element array-schema behavior for those forms
 
 ---
 
@@ -417,14 +622,22 @@ Included:
 * strict mode
 * coerce mode
 * runtime canonicalization of redundant format
+* string scalar enums with exact-literal matching
+* contract-violation retries with specific error feedback
+* contract violation routing to event handlers
 
 Explicitly out of scope:
 
-* retries
 * tool/script return contracts
 * optional field syntax
 * JSON Schema compatibility
 * value coercion beyond structural repair
+* numeric enums
+* ranges
+* regex/pattern constraints
+* wildcard enum semantics
+* provider/transport failure retries (distinct mechanism)
+* exponential backoff strategies
 
 ---
 

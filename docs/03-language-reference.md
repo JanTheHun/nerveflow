@@ -91,7 +91,7 @@ Core built-ins:
 Recognized integration calls:
 
 - `tool(name, ...)`
-- `agent(agentName, prompt?, instructions?, messages=?, format=?, returns=?, validate=?)`
+- `agent(agentName, prompt?, instructions?, messages=?, format=?, returns=?, validate=?, retry_on_contract_violation=?, on_contract_violation=?)`
 
 `messages` entries have the shape `{ role, content, images? }`. `role` and `content` are required. `images` is an optional array of base64-encoded image strings; empty strings are filtered and the field is omitted when no valid entries remain. Example:
 
@@ -118,6 +118,58 @@ returns=from_json(file("contracts/triage.json"))
 - `validate="coerce"` (default): fills missing declared structure from the contract recursively
 - `validate="strict"`: requires all declared fields and exact structural types with no repair
 
+`retry_on_contract_violation` controls retry behavior when `returns` is present and validation fails:
+
+- integer ≥ 0
+- default: 0 (no retries)
+
+When the model output violates a return contract, runtime may issue up to `N` additional agent calls with corrective guidance that includes the specific violation feedback.
+
+Retries do not relax or bypass validation—each attempt is fully revalidated against the same contract.
+
+Effectiveness note: retries are typically most effective for malformed JSON and structural violations. Semantic enum violations depend on model behavior and prompt quality.
+
+`on_contract_violation` declares a handler for exhausted contract violations:
+
+- must be an `emit(eventType, value)` expression
+- executes only if validation fails and retries (if configured) are exhausted
+- provides implicit `violation` object with `type`, `field`, `expected`, `actual` properties
+
+Example:
+
+```
+light = agent(
+  "intent",
+  event.value,
+  returns=from_json(file("lighting.contract.json")),
+  on_contract_violation=emit("contract_violation", violation)
+)
+
+on "contract_violation"
+  output text "Could not interpret that. The field was: ${event.value.field}"
+end
+```
+
+If no handler is declared and validation fails, `AGENT_RETURN_CONTRACT_VIOLATION` is raised normally.
+
+Enum-constrained scalar fields are supported with string-literal arrays:
+
+```
+returns={
+  area: ["kitchen", "garage", "other"]
+}
+```
+
+Rules:
+
+- two or more string literals means enum-constrained string scalar
+- exact literal match is required
+- unknown enum values fail validation in both strict and coerce
+- missing enum fields fail validation in both strict and coerce
+- wildcard/pattern entries (for example `"*"`) are not supported
+- when an enum includes `"other"`, hosts may inject fallback prompting that uses `"other"` when no listed value fits
+- `"other"` has no special validation semantics; it remains an ordinary enum member
+
 Example:
 
 ```
@@ -132,6 +184,17 @@ triage = agent(
     }
   },
   validate="strict"
+)
+```
+
+Retry example:
+
+```
+light = agent(
+  "intent",
+  event.value,
+  returns=from_json(file("lighting.contract.json")),
+  retry_on_contract_violation=1
 )
 ```
 - `script(path, ...)`

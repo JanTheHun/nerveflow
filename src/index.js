@@ -1,6 +1,7 @@
 export {
   appendAgentFormatInstructions,
   buildAgentReturnContractGuidance,
+  buildAgentRetryPrompt,
   extractCodeOutput,
   extractJsonOutput,
   extractTextOutput,

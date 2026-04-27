@@ -1,6 +1,6 @@
 {
   "entrypointPath": "entry.nrv",
-  "externals": ["user_message", "set_topics", "mark_read"],
+  "externals": ["user_message", "mark_read"],
   "timers": [
     {
       "event": "news_tick",

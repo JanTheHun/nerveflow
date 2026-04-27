@@ -1,4 +1,4 @@
-on external "set_topics"
+on "set_topics"
   state.favoriteTopics = event.value
   emit("user_output", concat("Topics updated: ", to_json(state.favoriteTopics)))
 end

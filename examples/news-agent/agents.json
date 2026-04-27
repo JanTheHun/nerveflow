@@ -3,6 +3,10 @@
     "model": "phi3:mini-128k",
     "tools": []
   },
+  "priority-slow": {
+    "model": "qwen2.5:3b",
+    "tools": []
+  },
   "summarizer": {
     "model": "cogito:3b",
     "tools": [],

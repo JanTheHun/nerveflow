@@ -1,7 +1,9 @@
 {
   "allow": [
+    "poll_new_articles",
     "poll_next_article",
     "store_article",
+    "store_articles_batch",
     "query_articles",
     "send_alert",
     "mark_read"

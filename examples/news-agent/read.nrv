@@ -1,7 +1,8 @@
 on external "mark_read"
   result = tool("mark_read", { articleId: event.value })
-  if state.unreadCount > 0
-    state.unreadCount = state.unreadCount - 1
-  end
+  unread_snapshot = tool("query_articles", { unread: true, limit: 200 })
+  deduped_unread = dedupe_by(unread_snapshot.articles, "id")
+  state.unreadArticles = deduped_unread
+  state.unreadCount = length(deduped_unread)
   emit("user_output", concat("Marked read: ", to_json(result)))
 end

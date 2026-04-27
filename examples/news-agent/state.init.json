@@ -1,8 +1,8 @@
 {
   "feeds": [
-    "https://news.ycombinator.com/rss",
     "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"
   ],
   "favoriteTopics": ["ai", "geopolitics"],
-  "unreadCount": 0
+  "unreadCount": 0,
+  "unreadArticles": []
 }

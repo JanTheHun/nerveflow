@@ -3,7 +3,8 @@
 Deterministic news-agent scaffold focused on one vertical slice:
 
 - timer-driven polling (`news_tick`)
-- single-article prioritization with contract validation
+- batch fetch/filter of new unread articles with dedupe
+- batch prioritization (all new articles) with contract validation
 - urgent visual alert + alert tool dispatch
 - unread query summarization for user messages
 
@@ -12,7 +13,7 @@ Deterministic news-agent scaffold focused on one vertical slice:
 Implemented in workflow:
 
 - `intent.nrv`: routes `user_message` to unread summary flow
-- `ingest.nrv`: polls one article, classifies priority, stores article, emits urgent alerts
+- `ingest.nrv`: polls new articles, classifies all priorities in one call, stores results, emits urgent alerts
 - `summary.nrv`: summarizes unread articles for user query
 - `topics.nrv`: updates favorite topics
 - `read.nrv`: marks article as read
@@ -29,12 +30,20 @@ Configured assets:
 This workflow expects host tool implementations for:
 
 - `poll_next_article`
+- `poll_new_articles`
 - `store_article`
+- `store_articles_batch`
 - `query_articles`
 - `send_alert`
 - `mark_read`
 
-Without host implementations, tool calls will be rejected as unavailable.
+This example now includes a local workspace provider at `host_modules/index.js` that implements these tools for local development.
+
+Provider behavior notes:
+
+- `poll_new_articles` uses builtin `rss_fetch` to fetch feeds, filter unseen articles, dedupe by id, and persist unread items to the local store.
+- `poll_next_article` remains available for compatibility and returns one unseen article.
+- If feeds are temporarily unavailable, it falls back to synthetic deterministic articles so ingest workflows can still be exercised offline.
 
 ## Host Integration
 
@@ -52,7 +61,11 @@ The `nerve-runtime` process includes generic builtin tools:
 
 - `get_time`, `http_fetch`, `rss_fetch`
 
-To add domain tools, create a `host_modules` provider in your workspace and register it:
+This example already includes a workspace host provider:
+
+- `examples/news-agent/host_modules/index.js`
+
+If you want to replace it with a custom implementation, create your own `host_modules` provider in the workspace:
 
 **Create `host_modules/news_provider.js`:**
 
@@ -119,6 +132,18 @@ Set favorite topics:
 
 ```powershell
 node bin/nerve-attach.js ws://127.0.0.1:4201/api/runtime/ws enqueue set_topics "[\"ai\",\"energy\"]"
+```
+
+Manual poll trigger:
+
+```powershell
+node bin/nerve-attach.js ws://127.0.0.1:4201/api/runtime/ws enqueue trigger.poll
+```
+
+Unread priority summary:
+
+```powershell
+node bin/nerve-attach.js ws://127.0.0.1:4201/api/runtime/ws enqueue trigger.priority_summary
 ```
 
 Mark read:

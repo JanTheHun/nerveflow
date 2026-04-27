@@ -1,40 +1,95 @@
 on external "news_tick"
-  article = tool("poll_next_article", { feeds: state.feeds })
+  emit("ingest_poll_batch", "poll")
+end
 
-  if article != null
-    priority = agent(
-      "priority",
+on "ingest_poll_batch"
+  output text "tick!"
+  batch = tool("poll_new_articles", { feeds: state.feeds, limit: 10, fetchLimit: 250, fetchTimeoutMs: 6000 })
+
+  if batch.count > 0
+    classify_articles = take(batch.articles, 10)
+
+    priority_batch = agent(
+      "priority-slow",
       concat(
         "Favorite topics: ",
         to_json(state.favoriteTopics),
-        "\n\nArticle:\n",
-        to_json(article)
+        "\n\nArticles (classify all):\n",
+        to_json(classify_articles)
       ),
-      file("prompts/priority.md"),
-      returns=from_json(file("contracts/priority.contract.json")),
-      retry_on_contract_violation=1
+      file("prompts/priority-batch.md"),
+      returns={
+        classifications: exact_length(
+          length(classify_articles),
+          [{ id: "", level: ["urgent", "high", "normal", "ignore"], topic: ["markets", "geopolitics", "ai", "energy", "other"], reason: "" }]
+        )
+      },
+      retry_on_contract_violation=2,
+      on_contract_violation=emit("priority_contract_violation", violation)
     )
 
-    store_payload = {
-      article: article,
-      priority: priority.level,
-      topic: priority.topic,
-      unread: true
-    }
-    tool("store_article", store_payload)
-    state.unreadCount = state.unreadCount + 1
+    if priority_batch
+      classified_count = length(priority_batch.classifications)
+      output text concat("batch.count=", batch.count, " classified=", classified_count)
+      
+      if classified_count < batch.count
+        output text concat("WARNING: incomplete classification (", classified_count, "/", batch.count, ")")
+      end
 
-    if priority.level == "urgent"
-      alert = {
-        title: article.title,
-        source: article.source,
-        topic: priority.topic,
-        reason: priority.reason,
-        url: article.url
+      store_payload = {
+        articles: classify_articles,
+        classifications: priority_batch.classifications,
+        unread: true
       }
-      output visual to_json(alert)
-      tool("send_alert", alert)
-      emit("user_output", concat("Urgent: ", article.title))
+      tool("store_articles_batch", store_payload)
+
+      unread_snapshot = tool("query_articles", { unread: true, limit: 200 })
+      deduped_unread = dedupe_by(unread_snapshot.articles, "id")
+      state.unreadArticles = deduped_unread
+      state.unreadCount = length(deduped_unread)
+
+      total_classifications = length(priority_batch.classifications)
+      non_urgent = remove_by(priority_batch.classifications, "level", "urgent")
+      urgent_count = total_classifications - length(non_urgent)
+
+      if urgent_count > 0
+        if urgent_count == 1
+          output text "Found 1 urgent article"
+        else
+          output text concat("Found ", urgent_count, " urgent articles")
+        end
+        urgent = find_by(priority_batch.classifications, "level", "urgent")
+        urgent_article = find_by(classify_articles, "id", urgent.id)
+        if urgent_article
+          alert = {
+            title: concat(urgent_count, " urgent: ", urgent_article.title),
+            source: urgent_article.source,
+            topic: urgent.topic,
+            reason: urgent.reason,
+            url: urgent_article.url
+          }
+          output visual to_json(alert)
+          tool("send_alert", alert)
+        end
+      end
+    else
+      output text "WARNING: skipped batch due to priority contract violation"
+
+      unread_snapshot = tool("query_articles", { unread: true, limit: 200 })
+      deduped_unread = dedupe_by(unread_snapshot.articles, "id")
+      state.unreadArticles = deduped_unread
+      state.unreadCount = length(deduped_unread)
+    end
+  else
+    unread_snapshot = tool("query_articles", { unread: true, limit: 200 })
+    deduped_unread = dedupe_by(unread_snapshot.articles, "id")
+    state.unreadArticles = deduped_unread
+    state.unreadCount = length(deduped_unread)
+
+    if state.unreadCount > 0
+      output text concat("no new articles (", state.unreadCount, " unread queued)")
+    else
+      output text "no new articles"
     end
   end
 end

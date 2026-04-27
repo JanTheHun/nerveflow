@@ -1,22 +1,54 @@
-on "summarize_unread"
-  query = event.value
-  articles = tool("query_articles", { unread: true, limit: 20 })
+on "summarize_urgent"
+  urgent_snapshot = tool("query_articles", { unread: true, priority: "urgent", limit: 50 })
+  urgent_articles = urgent_snapshot.articles
+  urgent_count = urgent_snapshot.count
 
-  digest = agent(
-    "summarizer",
-    concat(
-      "User request: ",
-      query,
-      "\n\nFavorite topics: ",
-      to_json(state.favoriteTopics),
-      "\n\nUnread articles:\n",
-      to_json(articles)
-    ),
-    file("prompts/summary.md"),
-    returns=from_json(file("contracts/summary.contract.json")),
-    retry_on_contract_violation=1
-  )
+  if urgent_count == 0
+    emit("user_output", "No urgent articles at the moment.")
+  else
+    emit("user_output", concat(urgent_count, " urgent article(s):"))
+    emit("user_output", urgent_snapshot.titles)
+  end
+end
 
-  output text digest.answer
-  output json digest
+on "summarize_unread_priorities"
+  if length(state.unreadArticles) > 0
+    unread_articles = state.unreadArticles
+  else
+    unread_snapshot = tool("query_articles", { unread: true, limit: 200 })
+    unread_articles = unread_snapshot.articles
+  end
+
+  total_count = length(unread_articles)
+  urgent_count = total_count - length(remove_by(unread_articles, "priority", "urgent"))
+  high_count = total_count - length(remove_by(unread_articles, "priority", "high"))
+  normal_count = total_count - length(remove_by(unread_articles, "priority", "normal"))
+  pending_count = total_count - length(remove_by(unread_articles, "priority", "pending"))
+  ignore_count = total_count - length(remove_by(unread_articles, "priority", "ignore"))
+
+  priority_summary = {
+    total: total_count,
+    urgent: urgent_count,
+    high: high_count,
+    normal: normal_count,
+    pending: pending_count,
+    ignore: ignore_count
+  }
+
+  emit("user_output", concat(
+    "Unread by priority (",
+    total_count,
+    " total): ",
+    urgent_count,
+    " urgent, ",
+    high_count,
+    " high, ",
+    normal_count,
+    " normal, ",
+    pending_count,
+    " pending, ",
+    ignore_count,
+    " ignore"
+  ))
+  emit("user_output", priority_summary)
 end

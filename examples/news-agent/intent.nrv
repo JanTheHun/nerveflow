@@ -1,3 +1,21 @@
 on external "user_message"
-  emit("summarize_unread", event.value)
+  route = agent(
+    "priority",
+    event.value,
+    "Classify the user message intent for the news assistant. Choose \"news\" when the user is asking about news, updates, headlines, unread items, summaries, or priorities. Choose \"urgent\" when the user is asking specifically about urgent articles or urgent news. Choose \"poll\" when the user wants to fetch, check, or refresh new articles now. Choose \"set_topics\" when the user wants to set, update, or change their topic preferences or interests. Otherwise choose \"other\". If intent is \"set_topics\", also extract the topics as a JSON array of strings into the \"topics\" field; otherwise set \"topics\" to null.",
+    returns={ intent: ["news", "urgent", "poll", "set_topics", "other"], topics: null },
+    retry_on_contract_violation=1
+  )
+
+  if route.intent == "news"
+    emit("summarize_unread_priorities", event.value)
+  else if route.intent == "urgent"
+    emit("summarize_urgent", event.value)
+  else if route.intent == "poll"
+    emit("ingest_poll_batch", "poll")
+  else if route.intent == "set_topics"
+    emit("set_topics", route.topics)
+  else
+    emit("user_output", "I can summarize unread news, fetch new articles, or update your topic preferences.")
+  end
 end

@@ -248,6 +248,8 @@ export class NextVEventRunner {
         this.lastError = {
           message: String(err?.message ?? err ?? 'Unknown runner error'),
           line: Number.isFinite(Number(err?.line)) ? Number(err.line) : null,
+          sourcePath: String(err?.sourcePath ?? ''),
+          sourceLine: Number.isFinite(Number(err?.sourceLine)) ? Number(err.sourceLine) : null,
           kind: String(err?.kind ?? ''),
           code: String(err?.code ?? ''),
           statement: String(err?.statement ?? ''),

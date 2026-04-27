@@ -798,6 +798,82 @@ test('from_json output can be used for numeric loop bounds', async () => {
   assert.equal(result.locals.sum, 6)
 })
 
+test('length() returns size for arrays strings and objects', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"id\\":1},{\\"id\\":2},{\\"id\\":3}]")',
+    'arr_len = length(items)',
+    'text_len = length("hello")',
+    'obj_len = length({ a: 1, b: 2 })',
+  ].join('\n'))
+
+  assert.equal(result.locals.arr_len, 3)
+  assert.equal(result.locals.text_len, 5)
+  assert.equal(result.locals.obj_len, 2)
+})
+
+test('take() returns first n entries and handles non-positive values', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"id\\":1},{\\"id\\":2},{\\"id\\":3}]")',
+    'head = take(items, 2)',
+    'none = take(items, 0)',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.head, [{ id: 1 }, { id: 2 }])
+  assert.deepEqual(result.locals.none, [])
+})
+
+test('find_by() returns first matching object and null when missing', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"id\\":1,\\"title\\":\\"A\\"},{\\"id\\":2,\\"title\\":\\"B\\"},{\\"id\\":2,\\"title\\":\\"B2\\"}]")',
+    'found = find_by(items, "id", 2)',
+    'missing = find_by(items, "id", 9)',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.found, { id: 2, title: 'B' })
+  assert.equal(result.locals.missing, null)
+})
+
+test('remove_by() removes all matching rows and keeps order', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"id\\":1},{\\"id\\":2},{\\"id\\":1},{\\"id\\":3}]")',
+    'filtered = remove_by(items, "id", 1)',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.filtered, [{ id: 2 }, { id: 3 }])
+})
+
+test('dedupe_by() keeps first occurrence for each key value', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"id\\":1,\\"title\\":\\"first\\"},{\\"id\\":2,\\"title\\":\\"alpha\\"},{\\"id\\":1,\\"title\\":\\"second\\"}]")',
+    'deduped = dedupe_by(items, "id")',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.deduped, [
+    { id: 1, title: 'first' },
+    { id: 2, title: 'alpha' },
+  ])
+})
+
+test('collection helpers reject invalid arguments', async () => {
+  await assert.rejects(
+    () => runNextVScript('x = take("oops", 1)'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')
+      return true
+    },
+  )
+
+  await assert.rejects(
+    () => runNextVScript('x = dedupe_by(from_json("[{\\"id\\":1}]"), "")'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')
+      return true
+    },
+  )
+})
+
 test('from_json throws JSON_PARSE_ERROR for invalid json', async () => {
   await assert.rejects(
     () => runNextVScript('response = from_json("not-json")'),
@@ -1342,9 +1418,66 @@ test('agent() returns strict mode surfaces contract violation metadata via hostA
       assert.equal(err.path, 'intent')
       assert.equal(err.expected, 'string')
       assert.equal(err.actual, 'null')
+      assert.equal(err.agent, 'classifier')
+      assert.equal(Number.isFinite(Number(err.line)), true)
+      assert.match(String(err.message ?? ''), /agent\("classifier"\)/)
       return true
     },
   )
+})
+
+test('agent() on_contract_violation can emit violation payload without eager evaluation', async () => {
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { classifier: { model: 'llama3' } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => '{"intent":"search"}',
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions,
+    normalizeAgentFormattedOutput,
+    validateAgentReturnContract: () => {
+      const err = new Error('violation')
+      err.code = 'AGENT_RETURN_CONTRACT_VIOLATION'
+      err.path = 'confidence'
+      err.expected = 'number'
+      err.actual = 'undefined'
+      throw err
+    },
+    buildAgentReturnContractGuidance,
+  })
+
+  const result = await runNextVScript([
+    'on "contract_violation"',
+    '  state.violation_field = event.value.field',
+    '  state.violation_source_type = event.value.source_event.type',
+    'end',
+    'decision = agent(',
+    '  "classifier",',
+    '  event.value,',
+    '  returns={ intent: "", confidence: 0 },',
+    '  validate="strict",',
+    '  retry_on_contract_violation=0,',
+    '  on_contract_violation=emit("contract_violation", violation)',
+    ')',
+    'if decision == null',
+    '  state.contract_failed = true',
+    'end',
+  ].join('\n'), {
+    hostAdapter: adapter,
+    event: { type: 'user_input', value: 'route this' },
+    state: {},
+  })
+
+  assert.equal(result.state.contract_failed, true)
+  assert.equal(result.state.violation_field, 'confidence')
+  assert.equal(result.state.violation_source_type, 'user_input')
 })
 
 test('if supports equality comparison with json intent field', async () => {
@@ -1453,6 +1586,24 @@ test('if treats missing dotted path as falsy for existence checks', async () => 
   ].join('\n'))
 
   assert.equal(result.locals.route, 'missing')
+})
+
+test('nested if without local else does not fall into enclosing else', async () => {
+  const result = await runNextVScript([
+    'outer = ""',
+    'inner = ""',
+    'if 1 == 1',
+    '  outer = "then"',
+    '  if 1 == 2',
+    '    inner = "unexpected"',
+    '  end',
+    'else',
+    '  outer = "else"',
+    'end',
+  ].join('\n'))
+
+  assert.equal(result.locals.outer, 'then')
+  assert.equal(result.locals.inner, '')
 })
 
 test('if can fall back with logical OR when left path is missing', async () => {

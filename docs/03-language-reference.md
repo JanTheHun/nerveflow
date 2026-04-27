@@ -82,11 +82,27 @@ Scope/boundary rules:
 Core built-ins:
 
 - `concat(...)`
+- `length(listOrStringOrObject)`
+- `take(list, n)`
+- `find_by(list,key,value)`
+- `remove_by(list,key,value)`
+- `dedupe_by(list,key)`
+- `exact_length(n, schema)`
 - `file(path)`
 - `input([prompt])`
 - `from_json(text)`
 - `to_json(value)`
 - `emit(type, value)`
+
+Collection helper semantics:
+
+- `length`: arrays -> item count, strings -> character count, objects -> top-level key count
+- `take`: returns first `n` rows from a list; non-positive `n` returns `[]`
+- `find_by`: returns first row where `row[key] == value`, else `null`
+- `remove_by`: returns a new list excluding rows where `row[key] == value`
+- `dedupe_by`: returns a new list where first occurrence of each `row[key]` is kept (stable order)
+
+Current key support for collection helpers is flat key names (no dotted key traversal).
 
 Recognized integration calls:
 
@@ -151,6 +167,64 @@ end
 ```
 
 If no handler is declared and validation fails, `AGENT_RETURN_CONTRACT_VIOLATION` is raised normally.
+
+Enum-constrained scalar fields are supported with string-literal arrays:
+
+```
+returns={
+  area: ["kitchen", "garage", "other"]
+}
+```
+
+## Cardinality Constraints
+
+`exact_length(n, schema)` enforces exact array cardinality on return contracts:
+
+- `n` — numeric expression evaluated at agent call time
+- `schema` — an array schema exemplar `[{ ... }]`
+
+Requires the returned array to contain exactly `n` items. Items are validated against the schema. Unlike coerce mode for structural fields, cardinality mismatches fail in both strict and coerce modes — missing items cannot be fabricated.
+
+Static example:
+
+```
+returns={
+  classifications: exact_length(10, [{ id: "", level: "", topic: "" }])
+}
+```
+
+Dynamic example (one output per input item):
+
+```
+items = take(batch.articles, 10)
+
+result = agent(
+  "classifier",
+  to_json(items),
+  returns={
+    classifications: exact_length(
+      length(items),
+      [{ id: "", level: ["urgent", "high", "normal", "ignore"] }]
+    )
+  },
+  retry_on_contract_violation=2
+)
+```
+
+When a cardinality violation occurs with `retry_on_contract_violation`, the retry prompt includes specific feedback:
+
+```
+classifications requires exactly 10 items. You returned 9.
+Return one entry for every input item. Do not skip or omit any items.
+```
+
+Rules:
+
+- `n` must evaluate to a non-negative integer
+- `schema` must be a non-empty array with one exemplar item
+- violations fail in both strict and coerce mode
+- nested enum constraints in the schema are still validated
+- can be used at any depth in the return contract object
 
 Enum-constrained scalar fields are supported with string-literal arrays:
 

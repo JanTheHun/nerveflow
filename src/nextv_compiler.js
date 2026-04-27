@@ -283,8 +283,10 @@ export function compileAST(statements, options = {}) {
         line: stmt.line,
         statement: stmt.statement,
       }, stmt))
-      const targetStmt = typeof stmt.nextBranchIndex === 'number' ? stmt.nextBranchIndex : stmt.endIndex + 1
-      patchStmtIndex(index, 'ifFalse', targetStmt, stmt.line, stmt.statement, branchTargetOffsetForStmtIndex(targetStmt))
+      const hasNextBranch = typeof stmt.nextBranchIndex === 'number'
+      const targetStmt = hasNextBranch ? stmt.nextBranchIndex : stmt.endIndex + 1
+      const targetOffset = hasNextBranch ? branchTargetOffsetForStmtIndex(targetStmt) : 0
+      patchStmtIndex(index, 'ifFalse', targetStmt, stmt.line, stmt.statement, targetOffset)
       continue
     }
 
@@ -304,8 +306,10 @@ export function compileAST(statements, options = {}) {
         line: stmt.line,
         statement: stmt.statement,
       }, stmt))
-      const targetStmt = typeof stmt.nextBranchIndex === 'number' ? stmt.nextBranchIndex : stmt.endIndex + 1
-      patchStmtIndex(branchIndex, 'ifFalse', targetStmt, stmt.line, stmt.statement, branchTargetOffsetForStmtIndex(targetStmt))
+      const hasNextBranch = typeof stmt.nextBranchIndex === 'number'
+      const targetStmt = hasNextBranch ? stmt.nextBranchIndex : stmt.endIndex + 1
+      const targetOffset = hasNextBranch ? branchTargetOffsetForStmtIndex(targetStmt) : 0
+      patchStmtIndex(branchIndex, 'ifFalse', targetStmt, stmt.line, stmt.statement, targetOffset)
       continue
     }
 

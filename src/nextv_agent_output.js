@@ -249,6 +249,19 @@ function makeInvalidContract(path, reason) {
 
 function assertValidContractSchema(schema, path = '') {
   if (schema === null) return
+  
+  // Handle exact_length constraint
+  if (schema && typeof schema === 'object' && schema.__nextv_constraint__ === 'exact_length') {
+    if (typeof schema.expectedLength !== 'number' || !Number.isInteger(schema.expectedLength)) {
+      throw makeInvalidContract(path, 'exact_length constraint requires expectedLength to be an integer')
+    }
+    if (!schema.schema) {
+      throw makeInvalidContract(path, 'exact_length constraint requires a schema')
+    }
+    assertValidContractSchema(schema.schema, `${path}:exact_length`)
+    return
+  }
+  
   if (isStringEnumSchema(schema)) {
     if (schema.includes('*')) {
       throw makeInvalidContract(path, 'wildcard enum value "*" is not supported')
@@ -270,6 +283,12 @@ function assertValidContractSchema(schema, path = '') {
 
 function fillFromContractSchema(schema, path = '') {
   if (schema === null) return null
+  
+  // Constraints cannot be filled/coerced - they must fail
+  if (schema && typeof schema === 'object' && schema.__nextv_constraint__ === 'exact_length') {
+    throw makeContractViolation(path, `array with exactly ${schema.expectedLength} items`, 'undefined')
+  }
+  
   if (isStringEnumSchema(schema)) {
     throw makeContractViolation(path, enumExpectedName(schema), 'undefined')
   }
@@ -287,6 +306,26 @@ function fillFromContractSchema(schema, path = '') {
 
 function validateContractValue(value, schema, mode, path) {
   if (schema === null) return value
+
+  // Handle exact_length constraint
+  if (schema && typeof schema === 'object' && schema.__nextv_constraint__ === 'exact_length') {
+    if (!Array.isArray(value)) {
+      throw makeContractViolation(path, 'array', actualContractTypeName(value))
+    }
+    if (value.length !== schema.expectedLength) {
+      throw makeContractViolation(
+        path,
+        `array with exactly ${schema.expectedLength} items`,
+        `array with ${value.length} items`
+      )
+    }
+    // Validate each item against the schema
+    const itemSchema = Array.isArray(schema.schema) && schema.schema.length > 0 ? schema.schema[0] : null
+    if (itemSchema !== null) {
+      return value.map((item, i) => validateContractValue(item, itemSchema, mode, `${path}[${i}]`))
+    }
+    return value
+  }
 
   if (isStringEnumSchema(schema)) {
     if (typeof value !== 'string') {
@@ -363,6 +402,19 @@ export function validateAgentReturnContract(output, contract, mode) {
 
 function collectEnumConstraintLines(schema, path = '') {
   if (schema === null) return []
+  
+  // Handle exact_length constraint guidance
+  if (schema && typeof schema === 'object' && schema.__nextv_constraint__ === 'exact_length') {
+    const label = path || '<root>'
+    const n = schema.expectedLength
+    const lines = [`${label} must be an array with exactly ${n} item${n === 1 ? '' : 's'}. Return one entry for every input item provided. Do not skip or omit any.`]
+    if (Array.isArray(schema.schema) && schema.schema.length > 0) {
+      const nestedPath = path ? `${path}[]` : '[]'
+      lines.push(...collectEnumConstraintLines(schema.schema[0], nestedPath))
+    }
+    return lines
+  }
+  
   if (isStringEnumSchema(schema)) {
     const label = path || '<root>'
     const values = schema.map((item) => `- ${item}`).join('\n')
@@ -407,6 +459,14 @@ export function buildAgentRetryPrompt(error) {
   const expected = String(error?.expected ?? '').trim()
   const actual = String(error?.actual ?? '').trim()
   const errorMessage = String(error?.message ?? '').trim()
+
+  // Specific feedback for exact_length cardinality violations
+  const exactLengthMatch = expected.match(/^array with exactly (\d+) items?$/)
+  if (exactLengthMatch) {
+    const expectedCount = exactLengthMatch[1]
+    const fieldLabel = path ? `Field "${path}"` : 'The result'
+    return `The previous response violated the return contract:\n\n${fieldLabel} requires exactly ${expectedCount} items.\nYou returned: ${actual}.\nReturn one entry for every input item. Do not skip or omit any items.\n\nReturn exactly one valid JSON object matching the declared contract.`
+  }
 
   if (!path || !expected || !actual) {
     return `The previous response violated the return contract:\n\n${errorMessage}\n\nReturn exactly one valid JSON object matching the declared contract.`

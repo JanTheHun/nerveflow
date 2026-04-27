@@ -45,12 +45,14 @@ export function validateOutputContract(value) {
 }
 
 class NextVError extends Error {
-  constructor({ line, kind, code, statement, message }) {
+  constructor({ line, kind, code, statement, message, sourcePath, sourceLine }) {
     super(message)
     this.line = line
     this.kind = kind
     this.code = code
     this.statement = statement
+    this.sourcePath = sourcePath
+    this.sourceLine = sourceLine
   }
 }
 
@@ -1348,10 +1350,18 @@ async function evaluateCallArgs(args, context) {
   const named = {}
 
   for (const arg of args ?? []) {
-    const value = await evaluateExpression(arg.expr, context)
     if (arg.kind === 'named') {
+      if (arg.name === 'on_contract_violation') {
+        // Keep violation handler as expression so `violation` is resolved only
+        // when a contract violation is actually produced.
+        named[arg.name] = arg.expr
+        continue
+      }
+
+      const value = await evaluateExpression(arg.expr, context)
       named[arg.name] = value
     } else {
+      const value = await evaluateExpression(arg.expr, context)
       positional.push(value)
     }
   }
@@ -1453,6 +1463,8 @@ async function executeFunctionCall(name, args, context, origin) {
     if (err?.code === 'AGENT_RETURN_CONTRACT_VIOLATION') throw err
     throw nextvError({
       line: context.line,
+      sourcePath: context.sourcePath,
+      sourceLine: context.sourceLine,
       kind: 'runtime',
       code: 'FUNCTION_CALL_ERROR',
       statement: context.statement,
@@ -1584,8 +1596,95 @@ function buildFunctions(options, runtimeContext) {
     })
   }
 
+  const collectionError = (code, message) => {
+    throw nextvError({
+      line: runtimeContext.line,
+      kind: 'runtime',
+      code,
+      statement: runtimeContext.statement,
+      message,
+    })
+  }
+
+  const requireArray = (value, fnName) => {
+    if (!Array.isArray(value)) {
+      collectionError('INVALID_COLLECTION_ARGUMENT', `${fnName}() requires an array as first argument.`)
+    }
+    return value
+  }
+
+  const requireKeyName = (value, fnName) => {
+    const keyName = String(value ?? '').trim()
+    if (!keyName) {
+      collectionError('INVALID_COLLECTION_ARGUMENT', `${fnName}() requires a non-empty key as second argument.`)
+    }
+    return keyName
+  }
+
+  const readKey = (entry, keyName) => (isPlainObject(entry) ? entry[keyName] : undefined)
+
   return {
     concat: ({ positional }) => positional.map((v) => coerceTextValue(v, runtimeContext, 'concat()')).join(''),
+    length: ({ positional }) => {
+      const value = positional[0]
+      if (Array.isArray(value) || typeof value === 'string') return value.length
+      if (isPlainObject(value)) return Object.keys(value).length
+      collectionError('INVALID_COLLECTION_ARGUMENT', 'length() requires an array, string, or object argument.')
+    },
+    take: ({ positional }) => {
+      const list = requireArray(positional[0], 'take')
+      const nRaw = positional[1]
+      const n = Number(nRaw)
+      if (!Number.isInteger(n)) {
+        collectionError('INVALID_COLLECTION_ARGUMENT', `take() requires an integer count as second argument; received "${nRaw}".`)
+      }
+      if (n <= 0) return []
+      return list.slice(0, n)
+    },
+    find_by: ({ positional }) => {
+      const list = requireArray(positional[0], 'find_by')
+      const keyName = requireKeyName(positional[1], 'find_by')
+      const expected = positional[2]
+      for (const entry of list) {
+        if (readKey(entry, keyName) === expected) return entry
+      }
+      return null
+    },
+    remove_by: ({ positional }) => {
+      const list = requireArray(positional[0], 'remove_by')
+      const keyName = requireKeyName(positional[1], 'remove_by')
+      const expected = positional[2]
+      return list.filter((entry) => readKey(entry, keyName) !== expected)
+    },
+    dedupe_by: ({ positional }) => {
+      const list = requireArray(positional[0], 'dedupe_by')
+      const keyName = requireKeyName(positional[1], 'dedupe_by')
+      const seen = new Set()
+      const out = []
+      for (const entry of list) {
+        const keyValue = readKey(entry, keyName)
+        if (seen.has(keyValue)) continue
+        seen.add(keyValue)
+        out.push(entry)
+      }
+      return out
+    },
+    exact_length: ({ positional }) => {
+      const lengthValue = positional[0]
+      const schema = positional[1]
+      const expectedLength = Number(lengthValue)
+      if (!Number.isInteger(expectedLength)) {
+        collectionError('INVALID_CONSTRAINT_ARGUMENT', `exact_length() requires an integer length as first argument; received "${lengthValue}".`)
+      }
+      if (!schema) {
+        collectionError('INVALID_CONSTRAINT_ARGUMENT', 'exact_length() requires a schema as second argument.')
+      }
+      return {
+        __nextv_constraint__: 'exact_length',
+        expectedLength,
+        schema,
+      }
+    },
     file: ({ positional }) => {
       const pathRaw = String(positional[0] ?? '')
       const absolute = resolve(baseDir, pathRaw)
@@ -1837,6 +1936,7 @@ function buildFunctions(options, runtimeContext) {
         if (onViolationExpr) {
           const violationLocals = { ...locals, violation: callResult.violation }
           const violationContext = {
+            ...runtimeContext,
             line,
             statement,
             locals: violationLocals,
@@ -2121,6 +2221,8 @@ export async function runNextVScript(source, options = {}) {
       const ctx = {
         line: instr.line,
         statement: instr.statement,
+        sourcePath: instr.sourcePath,
+        sourceLine: instr.sourceLine,
         locals,
         state,
         event: activeEvent,

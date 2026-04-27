@@ -21,9 +21,11 @@ let nextVHasLiveRuntimeEvents = false
 let visualOutputWindow = null
 let traceRowCounter = 0
 let nextVLastKnownState = null
+let nextVStateFilterQuery = ''
 let deleteConfirmTimeoutId = null
 let deleteConfirmTickerId = null
 let pendingDeleteConfirmResolver = null
+const nextVStateSectionOpenByKey = new Map()
 const SCRIPT_FILE_REF_REGEX = /([!?])?file:([^\s"']+)/g
 
 const scriptCache = new Map()
@@ -44,6 +46,7 @@ const storageKeys = {
   nextVTreeDrawerOpen: 'local-agent.nextv.treeDrawerOpen',
   nextVStateDiffOpen: 'local-agent.nextv.stateDiffOpen',
   nextVStateDiffWidth: 'local-agent.nextv.stateDiffWidth',
+  nextVStateFilter: 'local-agent.nextv.stateFilter',
   nextVUserIOOpen: 'local-agent.nextv.userIOOpen',
   nextVUserIOWidth: 'local-agent.nextv.userIOWidth',
   nextVGraphDirection: 'local-agent.nextv.graphDirection',
@@ -106,6 +109,8 @@ const nextVGraphState = {
   runtimeTriggeredExternalNodes: new Set(),
   runtimeWarningNodes: new Set(),
   runtimeTimers: new Set(),
+  visualPulseTimers: new Set(),
+  visualPulseTimersByNode: new Map(),
   runtimeLastDispatchedNode: '',
   runtimeSequence: 0,
   selectedNodeId: '',
@@ -113,6 +118,9 @@ const nextVGraphState = {
   layoutDirection: 'TB',
   setSelectedGraphNodeFn: null,
   layoutPositions: new Map(),
+  savedViewportState: null,
+  pendingTimerPulses: [],
+  graphRefreshInProgress: false,
   detailPopoverEl: null,
   canvasEl: null,
 }
@@ -193,6 +201,7 @@ const nextVStateDiffPanel = document.getElementById('nextv-state-diff-panel')
 const nextVUserIOSplitter = document.getElementById('nextv-user-io-splitter')
 const nextVStateDiffFeed = document.getElementById('nextv-state-diff-feed')
 const nextVStateSnapshotPane = document.getElementById('nextv-state-snapshot-pane')
+const nextVStateFilterInput = document.getElementById('nextv-state-filter-input')
 const nextVStateDiffTabDiff = document.getElementById('nextv-state-diff-tab-diff')
 const nextVStateDiffTabState = document.getElementById('nextv-state-diff-tab-state')
 const nextVConsoleOutput = document.getElementById('nextv-console-output')
@@ -454,6 +463,15 @@ function setModePanelLabels(mode) {
 function setNextVPrimaryView(view, options = {}) {
   const { persist = true } = options
   const nextView = view === 'graph' ? 'graph' : 'editor'
+  const previousView = nextVViewState.currentView
+
+  if (previousView === 'graph' && nextView !== 'graph') {
+    const captured = captureNextVGraphViewportState()
+    if (captured) {
+      nextVGraphState.savedViewportState = captured
+    }
+  }
+
   nextVViewState.currentView = nextView
 
   if (nextVViewEditor) {
@@ -475,7 +493,11 @@ function setNextVPrimaryView(view, options = {}) {
   }
 
   if (nextView === 'graph') {
-    refreshNextVGraph({ silent: true })
+    refreshNextVGraph({
+      silent: true,
+      preserveViewport: true,
+      viewportStateOverride: nextVGraphState.savedViewportState,
+    })
   }
 
   if (persist) {
@@ -515,6 +537,7 @@ function setNextVStateDiffTab(tab) {
   if (nextVStateSnapshotPane) nextVStateSnapshotPane.classList.toggle('active-state-pane', nextTab === 'state')
   const clearBtn = document.getElementById('nextv-state-diff-clear-btn')
   if (clearBtn) clearBtn.style.visibility = nextTab === 'diff' ? '' : 'hidden'
+  applyNextVStateSearchFilter()
 }
 
 function setNextVDevTab(tab, options = {}) {
@@ -693,10 +716,15 @@ function setScriptMode() {
   setAppMode('script')
 }
 
-function setNextVMode() {
+function setNextVMode(options = {}) {
+  const { ensureEntrypoint = true, refreshGraph = true, preserveViewport = false } = options
   setAppMode('nextv')
-  ensureNextVEntrypointVisible({ logLoaded: false, warnOnDirty: true })
-  refreshNextVGraph({ silent: true })
+  if (ensureEntrypoint) {
+    ensureNextVEntrypointVisible({ logLoaded: false, warnOnDirty: true })
+  }
+  if (refreshGraph) {
+    refreshNextVGraph({ silent: true, preserveViewport })
+  }
 }
 
 function updateRemoteModeBadge() {
@@ -746,6 +774,11 @@ function clearNextVConsoleOutput() {
 
 function clearNextVGraphOutput() {
   if (nextVGraphOutput) nextVGraphOutput.innerHTML = ''
+  for (const timerId of nextVGraphState.visualPulseTimers) {
+    window.clearTimeout(timerId)
+  }
+  nextVGraphState.visualPulseTimers.clear()
+  nextVGraphState.visualPulseTimersByNode.clear()
   nextVGraphState.detailPopoverEl = null
   nextVGraphState.canvasEl = null
   nextVGraphState.layoutPositions = new Map()
@@ -960,6 +993,91 @@ function centerNextVGraphViewport() {
     : Math.max(0, (canvas.scrollHeight - viewport.clientHeight) / 2)
 }
 
+function captureNextVGraphViewportState(viewport = getNextVGraphViewport()) {
+  const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
+  if (!Number.isFinite(zoom) || zoom <= 0) return null
+  if (!viewport || viewport.clientWidth < 2 || viewport.clientHeight < 2) {
+    return { zoom }
+  }
+  const { width: baseWidth, height: baseHeight } = getNextVGraphBaseMetrics()
+
+  const scaledPadding = getNextVGraphScaledPadding(zoom, viewport)
+  const centerX = viewport.clientWidth / 2
+  const centerY = viewport.clientHeight / 2
+  const graphCenterX = (viewport.scrollLeft + centerX - scaledPadding.x) / zoom
+  const graphCenterY = (viewport.scrollTop + centerY - scaledPadding.y) / zoom
+  const graphCenterRatioX = baseWidth > 0 ? (graphCenterX / baseWidth) : 0.5
+  const graphCenterRatioY = baseHeight > 0 ? (graphCenterY / baseHeight) : 0.5
+
+  return {
+    zoom,
+    graphCenterX,
+    graphCenterY,
+    graphCenterRatioX,
+    graphCenterRatioY,
+  }
+}
+
+function restoreNextVGraphViewportState(viewportState, viewport = getNextVGraphViewport()) {
+  if (!viewport || !viewportState) return false
+  if (viewport.clientWidth < 2 || viewport.clientHeight < 2) return false
+
+  const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
+  if (!Number.isFinite(zoom) || zoom <= 0) return false
+
+  const { width: baseWidth, height: baseHeight } = getNextVGraphBaseMetrics()
+  const ratioX = Number(viewportState.graphCenterRatioX)
+  const ratioY = Number(viewportState.graphCenterRatioY)
+  const absoluteX = Number(viewportState.graphCenterX)
+  const absoluteY = Number(viewportState.graphCenterY)
+
+  const preferredCenterX = Number.isFinite(ratioX) && baseWidth > 0
+    ? (ratioX * baseWidth)
+    : absoluteX
+  const preferredCenterY = Number.isFinite(ratioY) && baseHeight > 0
+    ? (ratioY * baseHeight)
+    : absoluteY
+
+  if (!Number.isFinite(preferredCenterX) || !Number.isFinite(preferredCenterY)) {
+    return false
+  }
+
+  const graphCenterX = baseWidth > 0
+    ? Math.max(0, Math.min(baseWidth, preferredCenterX))
+    : Math.max(0, preferredCenterX)
+  const graphCenterY = baseHeight > 0
+    ? Math.max(0, Math.min(baseHeight, preferredCenterY))
+    : Math.max(0, preferredCenterY)
+
+  const scaledPadding = getNextVGraphScaledPadding(zoom, viewport)
+  const centerX = viewport.clientWidth / 2
+  const centerY = viewport.clientHeight / 2
+  const nextScrollLeft = (graphCenterX * zoom) + scaledPadding.x - centerX
+  const nextScrollTop = (graphCenterY * zoom) + scaledPadding.y - centerY
+
+  const maxScrollLeft = Math.max(0, viewport.scrollWidth - viewport.clientWidth)
+  const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight)
+  viewport.scrollLeft = Math.min(maxScrollLeft, Math.max(0, nextScrollLeft))
+  viewport.scrollTop = Math.min(maxScrollTop, Math.max(0, nextScrollTop))
+  return true
+}
+
+function scheduleNextVGraphViewportRestore(viewportState, attemptsRemaining = 10) {
+  if (restoreNextVGraphViewportState(viewportState)) {
+    positionNextVGraphPopover()
+    return
+  }
+
+  if (attemptsRemaining <= 0) {
+    positionNextVGraphPopover()
+    return
+  }
+
+  window.requestAnimationFrame(() => {
+    scheduleNextVGraphViewportRestore(viewportState, attemptsRemaining - 1)
+  })
+}
+
 function setNextVGraphZoom(value, options = {}) {
   const { anchorClientX = null, anchorClientY = null } = options
   const viewport = getNextVGraphViewport()
@@ -1142,7 +1260,7 @@ function formatNextVGraphEventValue(value) {
   if (value === null) return 'null'
   if (typeof value === 'string') {
     const trimmed = value.trim()
-    if (!trimmed) return '""'
+    if (!trimmed) return ''
     return trimmed.length > 96 ? `${trimmed.slice(0, 93)}...` : trimmed
   }
 
@@ -1201,20 +1319,153 @@ function flashNextVGraphEventValue(eventType, value, options = {}) {
   nextVGraphState.runtimeTimers.add(timerId)
 }
 
+function getNextVGraphEdgeFlashAnchor(edgeKey) {
+  const edgeElement = nextVGraphState.edgeElements.get(edgeKey)
+  if (!edgeElement) return null
+
+  let point = null
+  if (typeof edgeElement.getTotalLength === 'function' && typeof edgeElement.getPointAtLength === 'function') {
+    try {
+      const totalLength = Number(edgeElement.getTotalLength())
+      if (Number.isFinite(totalLength) && totalLength > 0) {
+        point = edgeElement.getPointAtLength(totalLength * 0.62)
+      }
+    } catch {
+      // Fall back to data attributes below.
+    }
+  }
+
+  if (!point) {
+    const x1 = Number(edgeElement.getAttribute('x1'))
+    const y1 = Number(edgeElement.getAttribute('y1'))
+    const x2 = Number(edgeElement.getAttribute('x2'))
+    const y2 = Number(edgeElement.getAttribute('y2'))
+    if ([x1, y1, x2, y2].every(Number.isFinite)) {
+      point = {
+        x: x1 + ((x2 - x1) * 0.62),
+        y: y1 + ((y2 - y1) * 0.62),
+      }
+    }
+  }
+
+  if (!point) return null
+
+  const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
+  const scaledPadding = getNextVGraphScaledPadding(zoom, getNextVGraphViewport())
+  return {
+    x: scaledPadding.x + (point.x * zoom),
+    y: scaledPadding.y + (point.y * zoom),
+  }
+}
+
+function flashNextVGraphEdgeValue(edgeKey, value) {
+  const formatted = formatNextVGraphEventValue(value)
+  if (!formatted) return
+
+  const anchor = getNextVGraphEdgeFlashAnchor(edgeKey)
+  if (!anchor) return
+
+  const canvas = nextVGraphState.canvasEl ?? getNextVGraphCanvas()
+  if (!canvas) return
+
+  const badge = document.createElement('div')
+  badge.className = 'nextv-graph-emit-value-flash nextv-graph-effect-value-flash'
+  badge.textContent = formatted
+  badge.style.left = `${Math.round(anchor.x + 10)}px`
+  badge.style.top = `${Math.round(anchor.y - 14)}px`
+  canvas.appendChild(badge)
+
+  window.requestAnimationFrame(() => {
+    badge.classList.add('visible')
+  })
+
+  const timerId = window.setTimeout(() => {
+    nextVGraphState.runtimeTimers.delete(timerId)
+    badge.classList.remove('visible')
+    window.setTimeout(() => {
+      badge.remove()
+    }, 180)
+  }, 1400)
+
+  nextVGraphState.runtimeTimers.add(timerId)
+}
+
 function getNextVGraphEdgeKey(from, to) {
   return `${String(from ?? '').trim()}\u0000${String(to ?? '').trim()}`
 }
 
-function flashNextVGraphTimerPulse(eventType) {
-  const nodeId = `timer:${String(eventType ?? '').trim()}`
-  const el = nextVGraphState.nodeElements.get(nodeId)
-  if (!el) return
-  el.classList.add('is-pulsing')
+function pulseNextVGraphNode(nodeId, durationMs = 650) {
+  const normalizedNodeId = String(nodeId ?? '').trim()
+  if (!normalizedNodeId) return false
+
+  const nodeEl = nextVGraphState.nodeElements.get(normalizedNodeId)
+  if (!nodeEl) return false
+
+  const existingTimerId = nextVGraphState.visualPulseTimersByNode.get(normalizedNodeId)
+  if (existingTimerId) {
+    window.clearTimeout(existingTimerId)
+    nextVGraphState.visualPulseTimers.delete(existingTimerId)
+    nextVGraphState.visualPulseTimersByNode.delete(normalizedNodeId)
+  }
+
+  // Restart class-driven animation reliably for repeated pulses.
+  nodeEl.classList.remove('is-pulsing')
+  nodeEl.getBoundingClientRect()
+  nodeEl.classList.add('is-pulsing')
   const timerId = window.setTimeout(() => {
-    nextVGraphState.runtimeTimers.delete(timerId)
-    el.classList.remove('is-pulsing')
-  }, 600)
-  nextVGraphState.runtimeTimers.add(timerId)
+    nextVGraphState.visualPulseTimers.delete(timerId)
+    nextVGraphState.visualPulseTimersByNode.delete(normalizedNodeId)
+    nodeEl.classList.remove('is-pulsing')
+  }, Math.max(160, Number(durationMs) || 650))
+  nextVGraphState.visualPulseTimers.add(timerId)
+  nextVGraphState.visualPulseTimersByNode.set(normalizedNodeId, timerId)
+  return true
+}
+
+function queueNextVGraphTimerPulse(eventType) {
+  const normalizedEventType = String(eventType ?? '').trim()
+  if (!normalizedEventType) return
+  nextVGraphState.pendingTimerPulses.push(normalizedEventType)
+  if (nextVGraphState.pendingTimerPulses.length > 64) {
+    nextVGraphState.pendingTimerPulses.shift()
+  }
+}
+
+function flushNextVGraphPendingTimerPulses() {
+  if (nextVGraphState.pendingTimerPulses.length === 0) return
+
+  const pulses = nextVGraphState.pendingTimerPulses.slice()
+  nextVGraphState.pendingTimerPulses = []
+  for (const eventType of pulses) {
+    flashNextVGraphTimerPulse(eventType, { force: true })
+  }
+}
+
+function flashNextVGraphTimerPulse(eventType, options = {}) {
+  const force = options?.force === true
+  const normalizedEventType = String(eventType ?? '').trim()
+  if (!normalizedEventType) return
+
+  if (nextVGraphState.graphRefreshInProgress && !force) {
+    queueNextVGraphTimerPulse(normalizedEventType)
+    return
+  }
+
+  const hasAnyNodes = nextVGraphState.nodeElements.size > 0
+  if (!hasAnyNodes) {
+    queueNextVGraphTimerPulse(normalizedEventType)
+    return
+  }
+
+  const nodeId = `timer:${normalizedEventType}`
+  // Keep pulse visuals independent from runtime state reset so they remain
+  // visible during rapid start/stop and startup sequencing.
+  const timerPulseVisible = pulseNextVGraphNode(nodeId, 700)
+  const externalPulseVisible = pulseNextVGraphNode(normalizedEventType, 700)
+
+  if (!timerPulseVisible && !externalPulseVisible) {
+    queueNextVGraphTimerPulse(normalizedEventType)
+  }
 }
 
 function fadeNextVGraphActiveHighlights(delayMs = 700) {
@@ -1489,6 +1740,23 @@ function markNextVGraphEffectEdgeActive(sourceNode, effectType, effectName) {
   markNextVGraphEdgeActive(handlerId, effectNodeId)
 }
 
+function resolveNextVGraphEffectEdgeKey(sourceNode, effectType, effectName) {
+  const source = String(sourceNode ?? '').trim()
+  if (!source) return ''
+  const rawEvent = source.startsWith('handler:') ? source.slice('handler:'.length) : source
+  const handlerId = source.startsWith('handler:') ? source : `handler:${source}`
+
+  let effectNodeId = ''
+  if (effectType === 'output') {
+    effectNodeId = getNextVGraphEffectOutputNodeId(rawEvent, effectName)
+  } else if (effectType === 'tool') {
+    effectNodeId = getNextVGraphEffectToolNodeId(rawEvent, effectName)
+  }
+
+  if (!effectNodeId) return ''
+  return getNextVGraphEdgeKey(handlerId, effectNodeId)
+}
+
 function updateNextVGraphRuntimeStep(nodeName) {
   const normalizedNode = String(nodeName ?? '').trim()
   if (!normalizedNode) return
@@ -1587,6 +1855,8 @@ function handleNextVGraphRuntimeEvent(runtimeEvent) {
     const format = String(runtimeEvent.format ?? '').trim()
     if (currentNode && format) {
       markNextVGraphEffectEdgeActive(currentNode, 'output', format)
+      const edgeKey = resolveNextVGraphEffectEdgeKey(currentNode, 'output', format)
+      flashNextVGraphEdgeValue(edgeKey, runtimeEvent.value ?? runtimeEvent.content)
     }
     return
   }
@@ -1744,7 +2014,8 @@ function buildNextVGraphLayout(graphNodes, options = {}) {
   return { width, height, positions, containers, fileCount, nodeGroupById, edgeBendpoints }
 }
 
-function renderNextVGraph(data = {}) {
+function renderNextVGraph(data = {}, options = {}) {
+  const { preserveViewport = false, viewportState = null } = options
   if (!nextVGraphOutput) return
   const layoutDirection = normalizeNextVGraphDirection(nextVGraphState.layoutDirection)
 
@@ -2531,18 +2802,27 @@ function renderNextVGraph(data = {}) {
   }
 
   nextVGraphOutput.appendChild(wrap)
-  nextVGraphState.zoom = getNextVGraphFitZoom()
+  const preservedZoom = Number(viewportState?.zoom)
+  nextVGraphState.zoom = preserveViewport && Number.isFinite(preservedZoom)
+    ? clampNextVGraphZoom(preservedZoom)
+    : getNextVGraphFitZoom()
   applyNextVGraphZoom()
   setSelectedGraphNode(nextVGraphState.selectedNodeId)
   applyNextVGraphRuntimeVisuals()
+  flushNextVGraphPendingTimerPulses()
   window.requestAnimationFrame(() => {
-    centerNextVGraphViewport()
-    positionNextVGraphPopover()
+    if (!preserveViewport) {
+      centerNextVGraphViewport()
+      positionNextVGraphPopover()
+      return
+    }
+
+    scheduleNextVGraphViewportRestore(viewportState)
   })
 }
 
 async function refreshNextVGraph(options = {}) {
-  const { silent = false } = options
+  const { silent = false, preserveViewport = false, viewportStateOverride = null } = options
   if (!nextVGraphOutput) return
 
   const entrypointPath = normalizeRelativePath(nextVEntrypointInput?.value ?? '')
@@ -2557,6 +2837,12 @@ async function refreshNextVGraph(options = {}) {
     renderNextVGraphMessage('Loading graph…')
   }
 
+  const viewport = preserveViewport ? getNextVGraphViewport() : null
+  const viewportState = preserveViewport
+    ? (viewportStateOverride || captureNextVGraphViewportState(viewport))
+    : null
+
+  nextVGraphState.graphRefreshInProgress = true
   try {
     const params = new URLSearchParams()
     if (workspaceDir) params.set('workspaceDir', workspaceDir)
@@ -2568,12 +2854,17 @@ async function refreshNextVGraph(options = {}) {
       throw new Error(data.error ?? 'Unable to load nextV graph')
     }
 
-    renderNextVGraph(data)
+    renderNextVGraph(data, { preserveViewport, viewportState })
+    if (preserveViewport && viewportState) {
+      nextVGraphState.savedViewportState = viewportState
+    }
   } catch (err) {
     renderNextVGraphMessage(`Graph unavailable: ${String(err?.message ?? err)}`, 'error')
     if (!silent) {
       setStatus('nextv graph unavailable', 'responding')
     }
+  } finally {
+    nextVGraphState.graphRefreshInProgress = false
   }
 }
 
@@ -2583,8 +2874,14 @@ function appendNextVLogRow(line, cls = '') {
     return
   }
 
-  if (cls === 'error' || cls === 'content') {
+  if (cls === 'error') {
     appendPanelLogRow(nextVConsoleOutput, line, cls)
+    return
+  }
+
+  if (cls === 'content') {
+    appendPanelLogRow(nextVConsoleOutput, line, cls)
+    appendPanelLogRow(nextVEventsOutput, line, 'result')
     return
   }
 
@@ -2613,52 +2910,98 @@ function extractErrorLineNumber(raw) {
   return 0
 }
 
-function formatErrorMessageWithLine(message, line) {
+function normalizeErrorSourcePath(raw) {
+  return String(raw ?? '').trim().replace(/\\/g, '/')
+}
+
+function extractErrorSourcePath(raw) {
+  const text = String(raw ?? '')
+  if (!text) return ''
+
+  const patterns = [
+    /\bfile\s*=\s*([^\s]+)/i,
+    /\bsource(?:Path)?\s*=\s*([^\s]+)/i,
+  ]
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern)
+    if (match?.[1]) {
+      return normalizeErrorSourcePath(match[1])
+    }
+  }
+
+  return ''
+}
+
+function formatErrorMessageWithSource(message, line, sourcePath) {
   const text = String(message ?? 'runtime error').trim() || 'runtime error'
   const lineNumber = Number(line)
-  if (!Number.isFinite(lineNumber) || lineNumber <= 0) return text
+  const normalizedSourcePath = normalizeErrorSourcePath(sourcePath)
+  const hasLine = Number.isFinite(lineNumber) && lineNumber > 0
 
-  if (/\bline\s*=\s*\d+\b/i.test(text) || /\bline\s+\d+\b/i.test(text) || /\bat\s+line\s+\d+\b/i.test(text)) {
+  if (normalizedSourcePath && /\bfile\s*=\s*[^\s]+/i.test(text)) {
+    return text
+  }
+  if (!normalizedSourcePath && !hasLine) {
+    return text
+  }
+  if (!normalizedSourcePath && (/\bline\s*=\s*\d+\b/i.test(text) || /\bline\s+\d+\b/i.test(text) || /\bat\s+line\s+\d+\b/i.test(text))) {
     return text
   }
 
-  return `line=${lineNumber} ${text}`
+  const parts = []
+  if (normalizedSourcePath) {
+    parts.push(`file=${normalizedSourcePath}`)
+  }
+  if (hasLine) {
+    parts.push(`line=${lineNumber}`)
+  }
+
+  return `${parts.join(' ')} ${text}`
 }
 
-function getErrorMessageAndLine(payloadLike, fallbackMessage = 'runtime error') {
+function getErrorMessageAndSource(payloadLike, fallbackMessage = 'runtime error') {
   if (payloadLike == null) {
-    return { message: fallbackMessage, line: 0 }
+    return { message: fallbackMessage, line: 0, sourcePath: '' }
   }
 
   if (typeof payloadLike === 'string') {
     return {
       message: payloadLike,
       line: extractErrorLineNumber(payloadLike),
+      sourcePath: extractErrorSourcePath(payloadLike),
     }
   }
 
   if (payloadLike instanceof Error) {
     const message = String(payloadLike.message ?? fallbackMessage)
+    const sourceLineCandidate = Number(payloadLike.sourceLine)
     const lineCandidate = Number(payloadLike.line)
-    const line = Number.isFinite(lineCandidate) && lineCandidate > 0
-      ? lineCandidate
-      : extractErrorLineNumber(message)
-
-    return { message, line }
+    const line = Number.isFinite(sourceLineCandidate) && sourceLineCandidate > 0
+      ? sourceLineCandidate
+      : (Number.isFinite(lineCandidate) && lineCandidate > 0
+        ? lineCandidate
+        : extractErrorLineNumber(message))
+    const sourcePath = normalizeErrorSourcePath(payloadLike.sourcePath) || extractErrorSourcePath(message)
+    return { message, line, sourcePath }
   }
 
   const message = String(payloadLike.message ?? fallbackMessage)
+  const sourceLineCandidate = Number(payloadLike.sourceLine)
   const lineCandidate = Number(payloadLike.line)
-  const line = Number.isFinite(lineCandidate) && lineCandidate > 0
-    ? lineCandidate
-    : extractErrorLineNumber(message)
+  const line = Number.isFinite(sourceLineCandidate) && sourceLineCandidate > 0
+    ? sourceLineCandidate
+    : (Number.isFinite(lineCandidate) && lineCandidate > 0
+      ? lineCandidate
+      : extractErrorLineNumber(message))
+  const sourcePath = normalizeErrorSourcePath(payloadLike.sourcePath) || extractErrorSourcePath(message)
 
-  return { message, line }
+  return { message, line, sourcePath }
 }
 
 function appendNextVErrorLog(payloadLike, prefix = '[nextv:error]') {
-  const { message, line } = getErrorMessageAndLine(payloadLike)
-  appendNextVLogRow(`${prefix} ${formatErrorMessageWithLine(message, line)}`, 'error')
+  const { message, line, sourcePath } = getErrorMessageAndSource(payloadLike)
+  appendNextVLogRow(`${prefix} ${formatErrorMessageWithSource(message, line, sourcePath)}`, 'error')
 }
 
 function normalizeRelativePath(pathValue) {
@@ -3794,6 +4137,51 @@ function isObjectRecord(value) {
   return value != null && typeof value === 'object' && !Array.isArray(value)
 }
 
+function safeJsonByteSize(value) {
+  try {
+    const encoded = JSON.stringify(value)
+    return typeof encoded === 'string' ? encoded.length : 0
+  } catch {
+    return 0
+  }
+}
+
+function formatPayloadByteSize(bytes) {
+  const value = Number(bytes)
+  if (!Number.isFinite(value) || value <= 0) return '0B'
+  if (value < 1024) return `${Math.round(value)}B`
+  if (value < (1024 * 1024)) return `${(value / 1024).toFixed(1)}kb`
+  return `${(value / (1024 * 1024)).toFixed(1)}mb`
+}
+
+function summarizeToolCallArgs(args) {
+  const positional = Array.isArray(args?.positional) ? args.positional : []
+  const named = isObjectRecord(args?.named) ? args.named : {}
+  const positionalCount = positional.length
+  const namedCount = Object.keys(named).length
+  const totalCount = positionalCount + namedCount
+  const sizeLabel = formatPayloadByteSize(safeJsonByteSize(args))
+  return `args=${totalCount} (${positionalCount}p/${namedCount}n) size=${sizeLabel}`
+}
+
+function summarizeToolResultPayload(result) {
+  let shape = 'result=unknown'
+  if (result === null) {
+    shape = 'result=null'
+  } else if (Array.isArray(result)) {
+    shape = `result=array len=${result.length}`
+  } else if (isObjectRecord(result)) {
+    shape = `result=object keys=${Object.keys(result).length}`
+  } else if (typeof result === 'string') {
+    shape = `result=string chars=${result.length}`
+  } else {
+    shape = `result=${typeof result}`
+  }
+
+  const sizeLabel = formatPayloadByteSize(safeJsonByteSize(result))
+  return `${shape} size=${sizeLabel}`
+}
+
 function flattenStatePaths(value, basePath = '', out = new Map()) {
   if (Array.isArray(value)) {
     if (value.length === 0) {
@@ -3867,6 +4255,165 @@ function formatStateDiff(changes) {
     }
     return `~ ${change.path}\n  before: ${toPrettyJson(change.before)}\n  after:  ${toPrettyJson(change.after)}`
   }).join('\n')
+}
+
+function normalizeNextVStateFilterQuery(value) {
+  return String(value ?? '').trim().toLowerCase()
+}
+
+function formatStateSectionMeta(value) {
+  if (Array.isArray(value)) return `${value.length} items`
+  if (isObjectRecord(value)) return `${Object.keys(value).length} keys`
+  if (typeof value === 'string') return `${value.length} chars`
+  if (value === null) return 'null'
+  return typeof value
+}
+
+function isNextVStateTreeContainer(value) {
+  return Array.isArray(value) || isObjectRecord(value)
+}
+
+function formatNextVStateLeafPreview(value) {
+  if (typeof value === 'string') {
+    const compact = value.length > 120 ? `${value.slice(0, 117)}...` : value
+    return JSON.stringify(compact)
+  }
+  if (typeof value === 'number' || typeof value === 'boolean' || value === null) {
+    return String(value)
+  }
+  return toPrettyJson(value)
+}
+
+function createNextVStateTreeNode(label, value, options = {}) {
+  const { depth = 0 } = options
+  const node = document.createElement('details')
+  node.className = 'nextv-state-tree-node'
+  node.open = depth < 1
+
+  const summary = document.createElement('summary')
+  summary.className = 'nextv-state-tree-summary'
+
+  const labelSpan = document.createElement('span')
+  labelSpan.className = 'nextv-state-tree-label'
+  labelSpan.textContent = String(label)
+  summary.appendChild(labelSpan)
+
+  if (isNextVStateTreeContainer(value)) {
+    const meta = document.createElement('span')
+    meta.className = 'nextv-state-tree-meta'
+    meta.textContent = formatStateSectionMeta(value)
+    summary.appendChild(meta)
+  } else {
+    const valueSpan = document.createElement('span')
+    valueSpan.className = 'nextv-state-tree-value'
+    valueSpan.textContent = formatNextVStateLeafPreview(value)
+    summary.appendChild(valueSpan)
+  }
+
+  node.appendChild(summary)
+
+  if (!isNextVStateTreeContainer(value)) {
+    return node
+  }
+
+  const children = document.createElement('div')
+  children.className = 'nextv-state-tree-children'
+
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      children.appendChild(createNextVStateTreeNode(`[${i}]`, value[i], { depth: depth + 1 }))
+    }
+  } else {
+    const keys = Object.keys(value)
+    for (const key of keys) {
+      children.appendChild(createNextVStateTreeNode(key, value[key], { depth: depth + 1 }))
+    }
+  }
+
+  node.appendChild(children)
+  return node
+}
+
+function matchesNextVStateFilter(element, query) {
+  if (!query) return true
+  return String(element?.dataset?.searchText ?? '').includes(query)
+}
+
+function applyNextVStateSearchFilter() {
+  const query = nextVStateFilterQuery
+
+  if (nextVStateDiffFeed) {
+    const entries = nextVStateDiffFeed.querySelectorAll('.nextv-state-diff-entry')
+    for (const entry of entries) {
+      const visible = matchesNextVStateFilter(entry, query)
+      entry.classList.toggle('nextv-state-hidden', !visible)
+      if (query && visible && entry instanceof HTMLDetailsElement) {
+        entry.open = true
+      }
+    }
+  }
+
+  if (nextVStateSnapshotPane) {
+    const sections = nextVStateSnapshotPane.querySelectorAll('.nextv-state-section')
+    for (const section of sections) {
+      const visible = matchesNextVStateFilter(section, query)
+      section.classList.toggle('nextv-state-hidden', !visible)
+      if (query && visible && section instanceof HTMLDetailsElement) {
+        section.open = true
+      }
+    }
+  }
+}
+
+function setNextVStateFilter(value, options = {}) {
+  const { persist = true } = options
+  nextVStateFilterQuery = normalizeNextVStateFilterQuery(value)
+  if (nextVStateFilterInput && nextVStateFilterInput.value !== value) {
+    nextVStateFilterInput.value = String(value ?? '')
+  }
+  applyNextVStateSearchFilter()
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVStateFilter, String(value ?? ''))
+  }
+}
+
+function initNextVStatePanelTools() {
+  const stored = localStorage.getItem(storageKeys.nextVStateFilter) ?? ''
+  setNextVStateFilter(stored, { persist: false })
+
+  if (!nextVStateFilterInput || nextVStateFilterInput.dataset.bound === '1') return
+  nextVStateFilterInput.dataset.bound = '1'
+  nextVStateFilterInput.addEventListener('input', (event) => {
+    setNextVStateFilter(event.target?.value ?? '')
+  })
+}
+
+function setNextVStateCollapseAll(collapsed) {
+  const shouldOpen = collapsed !== true
+
+  if (nextVStateDiffFeed) {
+    const entries = nextVStateDiffFeed.querySelectorAll('.nextv-state-diff-entry')
+    for (const entry of entries) {
+      if (entry.classList.contains('nextv-state-hidden')) continue
+      if (entry instanceof HTMLDetailsElement) {
+        entry.open = shouldOpen
+      }
+    }
+  }
+
+  if (nextVStateSnapshotPane) {
+    const sections = nextVStateSnapshotPane.querySelectorAll('.nextv-state-section')
+    for (const section of sections) {
+      if (section.classList.contains('nextv-state-hidden')) continue
+      if (section instanceof HTMLDetailsElement) {
+        section.open = shouldOpen
+        const sectionKey = section.dataset.sectionKey
+        if (sectionKey) {
+          nextVStateSectionOpenByKey.set(sectionKey, shouldOpen)
+        }
+      }
+    }
+  }
 }
 
 function clearNextVStateDiff() {
@@ -3993,18 +4540,26 @@ function setupNextVUserIOSplitter() {
 function appendNextVStateDiffEntry(signalType, changes) {
   if (!nextVStateDiffFeed) return
 
-  const entry = document.createElement('div')
+  const entry = document.createElement('details')
   entry.className = 'nextv-state-diff-entry'
+  entry.open = true
 
-  const header = document.createElement('div')
+  const header = document.createElement('summary')
   header.className = 'nextv-state-diff-entry-header'
   const now = new Date()
   const timestamp = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`
-  header.innerHTML = `<span>▷ ${escapeHtml(signalType)}</span><span>${escapeHtml(timestamp)}</span>`
+  const title = document.createElement('span')
+  title.textContent = `▷ ${String(signalType ?? '')}`
+  const meta = document.createElement('span')
+  const totalChanges = Array.isArray(changes) ? changes.length : 0
+  meta.textContent = `${timestamp} • ${totalChanges} ${totalChanges === 1 ? 'change' : 'changes'}`
+  header.appendChild(title)
+  header.appendChild(meta)
   entry.appendChild(header)
 
   const body = document.createElement('div')
   body.className = 'nextv-state-diff-body'
+  const searchParts = [String(signalType ?? '')]
 
   const capped = Array.isArray(changes) ? changes.slice(0, 30) : []
   if (capped.length === 0) {
@@ -4018,12 +4573,15 @@ function appendNextVStateDiffEntry(signalType, changes) {
       if (change.kind === 'added') {
         line.className = 'nextv-diff-line nextv-diff-added'
         line.textContent = `+ ${change.path} = ${toPrettyJson(change.after)}`
+        searchParts.push(String(change.path ?? ''), toPrettyJson(change.after))
       } else if (change.kind === 'removed') {
         line.className = 'nextv-diff-line nextv-diff-removed'
         line.textContent = `- ${change.path} (was ${toPrettyJson(change.before)})`
+        searchParts.push(String(change.path ?? ''), toPrettyJson(change.before))
       } else {
         line.className = 'nextv-diff-line nextv-diff-changed'
         line.textContent = `~ ${change.path}: ${toPrettyJson(change.before)} → ${toPrettyJson(change.after)}`
+        searchParts.push(String(change.path ?? ''), toPrettyJson(change.before), toPrettyJson(change.after))
       }
       body.appendChild(line)
     }
@@ -4035,8 +4593,14 @@ function appendNextVStateDiffEntry(signalType, changes) {
     }
   }
 
+  if (totalChanges > 10) {
+    entry.open = false
+  }
+
+  entry.dataset.searchText = normalizeNextVStateFilterQuery(searchParts.join(' '))
   entry.appendChild(body)
   nextVStateDiffFeed.appendChild(entry)
+  applyNextVStateSearchFilter()
   nextVStateDiffFeed.scrollTop = nextVStateDiffFeed.scrollHeight
 }
 
@@ -4225,12 +4789,18 @@ function renderCanonicalNextVEvents(events) {
     }
 
     if (event.type === 'tool_call') {
-      appendNextVLogRow(`[nextv:tool_call] tool=${String(event.tool ?? '')}`, 'step')
+      appendNextVLogRow(
+        `[nextv:tool_call] tool=${String(event.tool ?? '')} ${summarizeToolCallArgs(event.args)}`,
+        'step'
+      )
       continue
     }
 
     if (event.type === 'tool_result') {
-      appendNextVLogRow(`[nextv:tool_result] tool=${String(event.tool ?? '')}`, 'result')
+      appendNextVLogRow(
+        `[nextv:tool_result] tool=${String(event.tool ?? '')} ${summarizeToolResultPayload(event.result)}`,
+        'result'
+      )
       continue
     }
 
@@ -4256,9 +4826,80 @@ function renderNextVSnapshot(snapshot, options = {}) {
     appendNextVLogRow(`[nextv:snapshot] running=${nextVRuntimeRunning} executions=${Number(snapshot.executionCount ?? 0)} pending=${Number(snapshot.pendingEvents ?? 0)}`, 'result')
   }
 
-  const stateBlock = JSON.stringify(snapshot.state ?? {}, null, 2)
-  if (nextVStateSnapshotPane) nextVStateSnapshotPane.textContent = stateBlock
-  nextVLastKnownState = snapshot.state ?? {}
+  const nextState = snapshot.state ?? {}
+  if (nextVStateSnapshotPane) {
+    nextVStateSnapshotPane.innerHTML = ''
+
+    const sectionEntries = isObjectRecord(nextState)
+      ? Object.entries(nextState)
+      : [['(state)', nextState]]
+
+    if (sectionEntries.length === 0) {
+      const empty = document.createElement('div')
+      empty.className = 'nextv-diff-empty'
+      empty.textContent = 'state is empty'
+      nextVStateSnapshotPane.appendChild(empty)
+    } else {
+      const root = document.createElement('div')
+      root.className = 'nextv-state-tree-root'
+
+      for (const [key, value] of sectionEntries) {
+        const section = document.createElement('details')
+        section.className = 'nextv-state-section nextv-state-tree-root-node'
+        section.dataset.sectionKey = String(key)
+        section.dataset.searchText = normalizeNextVStateFilterQuery(`${key} ${toPrettyJson(value)}`)
+        section.open = nextVStateSectionOpenByKey.has(String(key))
+          ? nextVStateSectionOpenByKey.get(String(key)) === true
+          : true
+
+        const summary = document.createElement('summary')
+        summary.className = 'nextv-state-section-header nextv-state-tree-summary'
+
+        const title = document.createElement('span')
+        title.className = 'nextv-state-section-title nextv-state-tree-label'
+        title.textContent = String(key)
+
+        const meta = document.createElement('span')
+        meta.className = 'nextv-state-section-meta nextv-state-tree-meta'
+        meta.textContent = formatStateSectionMeta(value)
+
+        summary.appendChild(title)
+        summary.appendChild(meta)
+        section.appendChild(summary)
+
+        const content = document.createElement('div')
+        content.className = 'nextv-state-section-content'
+        if (isNextVStateTreeContainer(value)) {
+          if (Array.isArray(value)) {
+            for (let i = 0; i < value.length; i++) {
+              content.appendChild(createNextVStateTreeNode(`[${i}]`, value[i], { depth: 1 }))
+            }
+          } else {
+            for (const childKey of Object.keys(value)) {
+              content.appendChild(createNextVStateTreeNode(childKey, value[childKey], { depth: 1 }))
+            }
+          }
+        } else {
+          const pre = document.createElement('pre')
+          pre.className = 'nextv-state-section-pre'
+          pre.textContent = toPrettyJson(value)
+          content.appendChild(pre)
+        }
+        section.appendChild(content)
+
+        section.addEventListener('toggle', () => {
+          nextVStateSectionOpenByKey.set(String(key), section.open)
+        })
+
+        root.appendChild(section)
+      }
+
+      nextVStateSnapshotPane.appendChild(root)
+    }
+
+    applyNextVStateSearchFilter()
+  }
+  nextVLastKnownState = nextState
 }
 
 function closeNextVStream() {
@@ -4331,15 +4972,16 @@ function openNextVStream() {
       const payload = JSON.parse(evt.data)
       const eventType = String(payload?.event?.type ?? '')
       const source = String(payload?.event?.source ?? '')
+      const shouldRenderFromExecution = !nextVHasLiveRuntimeEvents
       if (eventType) {
         nextVGraphState.runtimeExternalNodes.add(eventType)
       }
-      if (!nextVHasLiveRuntimeEvents && Array.isArray(payload?.events)) {
+      if (shouldRenderFromExecution && Array.isArray(payload?.events)) {
         for (const runtimeEvent of payload.events) {
           handleNextVGraphRuntimeEvent(runtimeEvent)
         }
       }
-      if (!nextVHasLiveRuntimeEvents) {
+      if (shouldRenderFromExecution) {
         renderCanonicalNextVEvents(payload?.events)
         appendTraceRows(payload?.events)
       }
@@ -4383,7 +5025,9 @@ function openNextVStream() {
     try {
       const payload = JSON.parse(evt.data)
       const eventType = String(payload?.event?.type ?? '').trim()
-      if (eventType) flashNextVGraphTimerPulse(eventType)
+      if (eventType) {
+        flashNextVGraphTimerPulse(eventType)
+      }
     } catch {
       // ignore malformed stream payload
     }
@@ -4394,8 +5038,17 @@ function openNextVStream() {
       const payload = JSON.parse(evt.data)
       appendNextVErrorLog(payload)
       if (payload?.snapshot) renderNextVSnapshot(payload.snapshot)
-      const { line } = getErrorMessageAndLine(payload)
-      setStatus(line > 0 ? `nextv runtime error (line ${line})` : 'nextv runtime error', 'responding')
+      const { line, sourcePath } = getErrorMessageAndSource(payload)
+      const sourceLabel = sourcePath ? pathBasename(sourcePath) : ''
+      if (sourceLabel && line > 0) {
+        setStatus(`nextv runtime error (${sourceLabel}:${line})`, 'responding')
+      } else if (line > 0) {
+        setStatus(`nextv runtime error (line ${line})`, 'responding')
+      } else if (sourceLabel) {
+        setStatus(`nextv runtime error (${sourceLabel})`, 'responding')
+      } else {
+        setStatus('nextv runtime error', 'responding')
+      }
     } catch {
       // ignore malformed stream payload
     }
@@ -4488,7 +5141,7 @@ async function startNextVRuntime() {
   }
 
   try {
-    setNextVMode()
+    setNextVMode({ ensureEntrypoint: false, refreshGraph: false })
     clearTracePanel({ silent: true })
     clearNextVEventsOutput()
     clearNextVConsoleOutput()
@@ -4531,7 +5184,7 @@ async function startNextVRuntime() {
 
     persistNextVConfig()
 
-    await refreshNextVGraph({ silent: true })
+    await refreshNextVGraph({ silent: true, preserveViewport: true })
     beginNextVGraphExecutionTrail()
     flashNextVGraphSignalDispatch('init', 1000)
     nextVLastKnownState = null
@@ -6501,6 +7154,14 @@ function initLayoutState() {
   }
 
   restoreNextVConfig()
+
+  const queryWorkspaceDir = normalizeNextVWorkspaceDir(
+    new URLSearchParams(window.location.search).get('workspaceDir') ?? ''
+  )
+  if (queryWorkspaceDir && nextVWorkspaceDirInput) {
+    nextVWorkspaceDirInput.value = queryWorkspaceDir
+  }
+
   setNextVDevConsoleOpen(nextVPanelState.devConsoleOpen, { persist: false })
   setNextVPrimaryView(nextVViewState.currentView, { persist: false })
   setNextVDevTab(tracePanelState.currentTab, { persist: false })
@@ -6514,6 +7175,7 @@ function initLayoutState() {
   clearUserOutputPanel()
   clearTracePanel({ silent: true })
   initNextVStateDiffPanel()
+  initNextVStatePanelTools()
   initNextVUserIOPanel()
   updateOpenFileLabel('')
   renderScriptMirror()

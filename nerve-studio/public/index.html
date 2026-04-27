@@ -144,6 +144,11 @@
               <button id="nextv-state-diff-clear-btn" type="button" class="panel-action" onclick="clearNextVStateDiff()">clear</button>
               <button type="button" class="panel-icon-btn" onclick="toggleNextVStateDiff()" title="close state diff" aria-label="close state diff">✕</button>
             </div>
+            <div class="nextv-state-diff-tools">
+              <input id="nextv-state-filter-input" type="text" class="nextv-state-filter-input" placeholder="search key or value" autocomplete="off" spellcheck="false" />
+              <button type="button" class="panel-action" onclick="setNextVStateCollapseAll(true)">collapse</button>
+              <button type="button" class="panel-action" onclick="setNextVStateCollapseAll(false)">expand</button>
+            </div>
             <div id="nextv-state-diff-feed" class="nextv-state-diff-feed panel-scroll active-state-pane"></div>
             <div id="nextv-state-snapshot-pane" class="nextv-state-snapshot-pane panel-scroll"></div>
           </div>

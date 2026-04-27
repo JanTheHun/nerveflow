@@ -141,6 +141,112 @@ const isRemoteControlMode = REMOTE_MODE === 'ws'
 const isRemoteObserveOnlyMode = REMOTE_MODE === 'mqtt'
 
 const eventBus = createEventBus()
+const TIMER_PULSE_REPLAY_WINDOW_MS = 30_000
+const TIMER_PULSE_REPLAY_LIMIT = 64
+const recentTimerPulses = []
+const EXECUTION_REPLAY_WINDOW_MS = 30_000
+const EXECUTION_REPLAY_LIMIT = 32
+const recentTimerExecutions = []
+const RUNTIME_EVENT_REPLAY_WINDOW_MS = 30_000
+const RUNTIME_EVENT_REPLAY_LIMIT = 64
+const recentTimerRuntimeEvents = []
+const ERROR_REPLAY_WINDOW_MS = 30_000
+const ERROR_REPLAY_LIMIT = 32
+const recentErrors = []
+
+function pruneRecentTimerPulses(now = Date.now()) {
+  while (recentTimerPulses.length > 0) {
+    const ageMs = now - Number(recentTimerPulses[0]?.timestamp ?? 0)
+    if (ageMs <= TIMER_PULSE_REPLAY_WINDOW_MS) break
+    recentTimerPulses.shift()
+  }
+  while (recentTimerPulses.length > TIMER_PULSE_REPLAY_LIMIT) {
+    recentTimerPulses.shift()
+  }
+}
+
+function pruneRecentTimerExecutions(now = Date.now()) {
+  while (recentTimerExecutions.length > 0) {
+    const ageMs = now - Number(recentTimerExecutions[0]?.timestamp ?? 0)
+    if (ageMs <= EXECUTION_REPLAY_WINDOW_MS) break
+    recentTimerExecutions.shift()
+  }
+  while (recentTimerExecutions.length > EXECUTION_REPLAY_LIMIT) {
+    recentTimerExecutions.shift()
+  }
+}
+
+function pruneRecentTimerRuntimeEvents(now = Date.now()) {
+  while (recentTimerRuntimeEvents.length > 0) {
+    const ageMs = now - Number(recentTimerRuntimeEvents[0]?.timestamp ?? 0)
+    if (ageMs <= RUNTIME_EVENT_REPLAY_WINDOW_MS) break
+    recentTimerRuntimeEvents.shift()
+  }
+  while (recentTimerRuntimeEvents.length > RUNTIME_EVENT_REPLAY_LIMIT) {
+    recentTimerRuntimeEvents.shift()
+  }
+}
+
+function pruneRecentErrors(now = Date.now()) {
+  while (recentErrors.length > 0) {
+    const ageMs = now - Number(recentErrors[0]?.timestamp ?? 0)
+    if (ageMs <= ERROR_REPLAY_WINDOW_MS) break
+    recentErrors.shift()
+  }
+  while (recentErrors.length > ERROR_REPLAY_LIMIT) {
+    recentErrors.shift()
+  }
+}
+
+eventBus.subscribe((eventName, payload) => {
+  if (eventName === 'nextv_timer_pulse') {
+    recentTimerPulses.push({
+      timestamp: Date.now(),
+      payload,
+    })
+    pruneRecentTimerPulses()
+    return
+  }
+
+  if (eventName === 'nextv_execution') {
+    const eventSource = String(payload?.event?.source ?? '').trim()
+    if (eventSource !== 'timer') return
+    recentTimerExecutions.push({
+      timestamp: Date.now(),
+      payload,
+    })
+    pruneRecentTimerExecutions()
+    return
+  }
+
+  if (eventName === 'nextv_runtime_event') {
+    const eventSource = String(payload?.event?.source ?? '').trim()
+    const runtimeEventType = String(payload?.runtimeEvent?.type ?? '').trim()
+    if (eventSource !== 'timer' || runtimeEventType !== 'output') return
+    recentTimerRuntimeEvents.push({
+      timestamp: Date.now(),
+      payload,
+    })
+    pruneRecentTimerRuntimeEvents()
+    return
+  }
+
+  if (eventName === 'nextv_error') {
+    recentErrors.push({
+      timestamp: Date.now(),
+      payload,
+    })
+    pruneRecentErrors()
+    return
+  }
+
+  if (eventName === 'nextv_stopped') {
+    recentTimerExecutions.length = 0
+    recentTimerRuntimeEvents.length = 0
+    recentErrors.length = 0
+    return
+  }
+})
 
 const wsRemoteBridge = isRemoteControlMode
   ? createWsRemoteBridge({
@@ -1148,6 +1254,7 @@ async function handleApi(req, res, url) {
       Connection: 'keep-alive',
     })
 
+    const connectionTime = Date.now()
     const sseHandler = (eventName, payload) => {
       try {
         sseEvent(res, eventName, payload)
@@ -1165,6 +1272,46 @@ async function handleApi(req, res, url) {
         : runtimeController.isActive(),
     })
 
+    const replayTimer = setTimeout(() => {
+      const now = Date.now()
+      pruneRecentTimerPulses(now)
+      pruneRecentTimerExecutions(now)
+      pruneRecentTimerRuntimeEvents(now)
+      pruneRecentErrors(now)
+      for (const entry of recentTimerPulses) {
+        if (entry.timestamp >= connectionTime) continue
+        try {
+          sseEvent(res, 'nextv_timer_pulse', entry.payload)
+        } catch {
+          break
+        }
+      }
+      for (const entry of recentTimerExecutions) {
+        if (entry.timestamp >= connectionTime) continue
+        try {
+          sseEvent(res, 'nextv_execution', entry.payload)
+        } catch {
+          break
+        }
+      }
+      for (const entry of recentTimerRuntimeEvents) {
+        if (entry.timestamp >= connectionTime) continue
+        try {
+          sseEvent(res, 'nextv_runtime_event', entry.payload)
+        } catch {
+          break
+        }
+      }
+      for (const entry of recentErrors) {
+        if (entry.timestamp >= connectionTime) continue
+        try {
+          sseEvent(res, 'nextv_error', entry.payload)
+        } catch {
+          break
+        }
+      }
+    }, 40)
+
     const activeSnapshot = isRemoteControlMode
       ? (wsRemoteBridge?.getCachedSnapshot() ?? null)
       : runtimeController.getActiveSnapshot()
@@ -1173,6 +1320,7 @@ async function handleApi(req, res, url) {
     }
 
     req.on('close', () => {
+      clearTimeout(replayTimer)
       eventBus.unsubscribe(sseHandler)
     })
     return

@@ -1011,6 +1011,24 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
   flex-shrink: 0;
 }
 
+.nextv-state-diff-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: #0d1217;
+  flex-shrink: 0;
+}
+
+.nextv-state-filter-input {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
 #nextv-state-diff-tabs {
   flex: 1;
   border-bottom: none;
@@ -1037,17 +1055,18 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
 }
 
 .nextv-state-snapshot-pane {
-  white-space: pre-wrap;
-  word-break: break-word;
   font-size: 11px;
   font-family: var(--mono);
-  line-height: 1.5;
+  line-height: 1.4;
   color: var(--fg);
-  padding: 8px;
+  padding: 6px 8px;
 }
 
 .nextv-state-snapshot-pane.active-state-pane {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
 }
 .nextv-state-diff-feed {}
 
@@ -1056,10 +1075,21 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
   background: #151b22;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 6px 8px;
   font-size: 11px;
   font-family: var(--mono);
   min-width: 0;
+  overflow: hidden;
+}
+
+.nextv-state-diff-entry summary,
+.nextv-state-section summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.nextv-state-diff-entry summary::-webkit-details-marker,
+.nextv-state-section summary::-webkit-details-marker {
+  display: none;
 }
 
 .nextv-state-diff-entry-header {
@@ -1068,14 +1098,21 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
   align-items: center;
   color: var(--dim);
   font-size: 10px;
-  margin-bottom: 5px;
   gap: 6px;
+  padding: 6px 8px;
+}
+
+.nextv-state-diff-entry[open] .nextv-state-diff-entry-header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .nextv-state-diff-body {
   display: flex;
   flex-direction: column;
   gap: 1px;
+  padding: 6px 8px;
+  max-height: 42vh;
+  overflow: auto;
 }
 
 .nextv-diff-line {
@@ -1100,6 +1137,103 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
   color: var(--dim);
   font-style: italic;
   font-size: 10px;
+}
+
+.nextv-state-section {
+  border-left: 1px solid rgba(140, 174, 210, 0.24);
+  margin-left: 2px;
+  padding-left: 8px;
+  overflow: visible;
+}
+
+.nextv-state-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--dim);
+  font-size: 10px;
+}
+
+.nextv-state-section-title {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.nextv-state-section-meta {
+  color: var(--dim);
+}
+
+.nextv-state-section-pre {
+  margin: 2px 0 0 16px;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 5px;
+  background: #101721;
+  max-height: 42vh;
+  overflow: auto;
+}
+
+.nextv-state-section-content {
+  margin-left: 6px;
+  max-height: 42vh;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.nextv-state-tree-root {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nextv-state-tree-root-node {
+  margin-bottom: 2px;
+}
+
+.nextv-state-tree-node {
+  border-left: 1px solid rgba(140, 174, 210, 0.2);
+  margin-left: 2px;
+  padding-left: 8px;
+}
+
+.nextv-state-tree-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.nextv-state-tree-label {
+  color: #d9ecff;
+  font-size: 10px;
+}
+
+.nextv-state-tree-meta {
+  color: #93a9c1;
+  font-size: 10px;
+}
+
+.nextv-state-tree-value {
+  color: #e6bf88;
+  font-size: 10px;
+  text-align: right;
+  margin-left: 8px;
+  word-break: break-word;
+}
+
+.nextv-state-tree-children {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-left: 4px;
+}
+
+.nextv-state-hidden {
+  display: none !important;
 }
 
 .nextv-graph-wrap {
@@ -1544,6 +1678,12 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
 .nextv-graph-emit-value-flash.visible {
   opacity: 1;
   transform: translate3d(0, 0, 0);
+}
+
+.nextv-graph-effect-value-flash {
+  border-color: rgba(230, 177, 88, 0.7);
+  background: rgba(42, 28, 10, 0.93);
+  color: #f2d7a2;
 }
 
 .nextv-graph-popover {

@@ -11,6 +11,7 @@ function parseArgs(argv) {
     studioPort: 4173,
     wsPath: '/api/runtime/ws',
     openBrowser: true,
+    autoStart: false,
   }
 
   let index = 0
@@ -65,6 +66,12 @@ function parseArgs(argv) {
       continue
     }
 
+    if (token === '--autostart') {
+      options.autoStart = true
+      index += 1
+      continue
+    }
+
     if (token.startsWith('--')) {
       throw new Error(`Unknown argument: ${token}`)
     }
@@ -79,7 +86,7 @@ function parseArgs(argv) {
   }
 
   if (!options.workspaceDir) {
-    throw new Error('Usage: nerve-dev-remote <workspaceDir> [--entrypoint <path>] [--runtime-port <n>] [--studio-port <n>] [--ws-path <path>] [--no-open]')
+    throw new Error('Usage: nerve-dev-remote <workspaceDir> [--entrypoint <path>] [--runtime-port <n>] [--studio-port <n>] [--ws-path <path>] [--no-open] [--autostart]')
   }
 
   return options
@@ -169,6 +176,9 @@ const runtimeArgs = [
 if (options.entrypointPath) {
   runtimeArgs.push('--entrypoint', options.entrypointPath)
 }
+if (!options.autoStart) {
+  runtimeArgs.push('--no-autostart')
+}
 
 const studioArgs = [
   studioScript,
@@ -187,6 +197,9 @@ console.log(`[dev] studio url: http://127.0.0.1:${options.studioPort}`)
 if (!options.openBrowser) {
   console.log('[dev] browser auto-open disabled (--no-open)')
 }
+if (!options.autoStart) {
+  console.log('[dev] runtime autostart disabled; use Start in studio UI')
+}
 
 const runtimeProc = spawn(process.execPath, runtimeArgs, {
   cwd: repoRoot,
@@ -203,13 +216,16 @@ const studioProc = spawn(process.execPath, studioArgs, {
 pipeWithPrefix(runtimeProc.stdout, process.stdout, 'runtime')
 pipeWithPrefix(runtimeProc.stderr, process.stderr, 'runtime')
 let browserOpened = false
-const studioUrl = `http://127.0.0.1:${options.studioPort}`
+const studioBaseUrl = `http://127.0.0.1:${options.studioPort}`
+const studioLaunchUrlObj = new URL(studioBaseUrl)
+studioLaunchUrlObj.searchParams.set('workspaceDir', options.workspaceDir)
+const studioLaunchUrl = studioLaunchUrlObj.toString()
 pipeWithPrefix(studioProc.stdout, process.stdout, 'studio', (line) => {
   if (!options.openBrowser || browserOpened) return
   if (!line.includes('nerve-studio preview running at')) return
   browserOpened = true
-  openUrlInBrowser(studioUrl)
-  console.log(`[dev] opened browser: ${studioUrl}`)
+  openUrlInBrowser(studioLaunchUrl)
+  console.log(`[dev] opened browser: ${studioLaunchUrl}`)
 })
 pipeWithPrefix(studioProc.stderr, process.stderr, 'studio')
 

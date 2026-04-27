@@ -24,6 +24,7 @@ function parseCliOptions(argv) {
     entrypointPath: '',
     port: 4190,
     wsPath: '/api/runtime/ws',
+    autoStart: true,
   }
 
   const [command, maybeWorkspace] = argv
@@ -55,11 +56,15 @@ function parseCliOptions(argv) {
       index += 1
       continue
     }
+    if (token === '--no-autostart') {
+      options.autoStart = false
+      continue
+    }
     throw new Error(`Unknown argument: ${token}`)
   }
 
   if (options.command !== 'start') {
-    throw new Error('Usage: nerve-runtime start <workspaceDir> [--entrypoint <path>] [--port <n>] [--ws-path <path>]')
+    throw new Error('Usage: nerve-runtime start <workspaceDir> [--entrypoint <path>] [--port <n>] [--ws-path <path>] [--no-autostart]')
   }
 
   if (!options.workspaceDir) {
@@ -237,19 +242,24 @@ const wsSurface = createRuntimeWebSocketSurface({
   path: options.wsPath,
 })
 
-try {
-  await runtimeCore.start({
-    workspaceDir: options.workspaceDir,
-    entrypointPath: options.entrypointPath || undefined,
-  })
-} catch (err) {
-  console.error(`nerve-runtime failed to start runtime: ${err?.message ?? err}`)
-  process.exit(1)
+if (options.autoStart) {
+  try {
+    await runtimeCore.start({
+      workspaceDir: options.workspaceDir,
+      entrypointPath: options.entrypointPath || undefined,
+    })
+  } catch (err) {
+    console.error(`nerve-runtime failed to start runtime: ${err?.message ?? err}`)
+    process.exit(1)
+  }
 }
 
 server.listen(options.port, () => {
   console.log(`nerve-runtime listening at http://localhost:${options.port}`)
   console.log(`nerve-runtime websocket surface: ws://localhost:${options.port}${options.wsPath}`)
+  if (!options.autoStart) {
+    console.log('nerve-runtime autostart disabled; waiting for remote start command')
+  }
 })
 
 let shuttingDown = false

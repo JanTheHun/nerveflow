@@ -1,6 +1,6 @@
 # Host-Modules Layer
 
-Provides capability composition for Nerveflow runtime: builtin tool providers, workspace provider discovery, and provider ordering for deterministic tool dispatch.
+Provides capability composition for Nerveflow runtime: builtin tool providers, public shared providers, workspace provider discovery, and provider ordering for deterministic tool dispatch.
 
 ## Overview
 
@@ -8,8 +8,8 @@ The host-modules layer is the bridge between Nerveflow's deterministic runtime (
 
 **Key Design:**
 - Host-core remains substrate-only: just dispatch contracts and policy enforcement
-- Host-modules provides capabilities: builtin providers + workspace extension points
-- Provider ordering: builtin first, workspace providers after; first handler wins
+- Host-modules provides capabilities: builtin providers + public shared providers + workspace extension points
+- Provider ordering: builtin first, public shared second, workspace providers last; first handler wins
 - Safe failures: missing workspace directory non-fatal, invalid provider files logged and skipped
 
 ## Structure
@@ -17,10 +17,12 @@ The host-modules layer is the bridge between Nerveflow's deterministic runtime (
 ```
 src/host_modules/
 ├── index.js                  # Public API: loadHostModules, createRuntimeBuiltinToolProvider
-├── loader.js                 # Workspace provider discovery and composition
+├── loader.js                 # Provider discovery and composition
 ├── builtin/
 │   ├── index.js              # Re-export builtin provider
 │   └── tools.js              # Implementation: get_time, http_fetch, rss_fetch
+├── public/
+│   └── index.js              # Public shared provider factory hook
 └── README.md                 # This file
 ```
 
@@ -54,6 +56,13 @@ export function createMyDomainProvider() {
   }
 }
 ```
+
+Supported workspace export shapes:
+
+- `export default <provider | providerFactory | providerArray>`
+- `export function createHostModules() { ... }`
+- `export function createProviders() { ... }`
+- `export function createXxxProvider() { ... }` (auto-discovered fallback)
 
 Then in bin/nerve-runtime.js:
 
@@ -106,6 +115,12 @@ Provider order matters. When a workflow calls a tool:
    - First provider with handler for tool name wins
    - Others skipped
 3. Invoke handler, return result or propagate unknown-tool error
+
+Default provider order:
+
+1. Builtin providers
+2. Public shared providers
+3. Workspace providers
 
 ### Error handling
 

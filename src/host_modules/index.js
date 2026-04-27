@@ -11,3 +11,4 @@
 
 export { loadHostModules } from './loader.js'
 export { createRuntimeBuiltinToolProvider } from './builtin/index.js'
+export { createPublicHostModuleProviders } from './public/index.js'

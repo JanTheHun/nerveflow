@@ -505,3 +505,82 @@ test('callAgent validates returns contract in coerce mode', async () => {
 
   assert.deepEqual(result, { intent: 'search', confidence: 0 })
 })
+
+test('callAgent retries on JSON parse failure when retry_on_contract_violation is set', async () => {
+  let callCount = 0
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { chat: { model: 'llama3' } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => {
+      callCount += 1
+      // First call returns invalid JSON, second returns valid
+      if (callCount === 1) return 'not valid json at all'
+      return '{"intent":"search"}'
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value, format) => {
+      if (format === 'json') {
+        const trimmed = value.trim()
+        if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) throw new Error('JSON_PARSE_ERROR: not JSON')
+        return JSON.parse(trimmed)
+      }
+      return value
+    },
+    validateAgentReturnContract: (output) => output,
+    buildAgentRetryPrompt: () => 'Please respond with valid JSON.',
+  })
+
+  const result = await adapter.callAgent({
+    agent: 'chat',
+    prompt: 'route this',
+    returns: { intent: '' },
+    retry_on_contract_violation: 1,
+    event: {},
+  })
+
+  assert.equal(callCount, 2)
+  assert.deepEqual(result, { intent: 'search' })
+})
+
+test('callAgent throws JSON parse error when retries exhausted', async () => {
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { chat: { model: 'llama3' } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => 'not valid json',
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value, format) => {
+      if (format === 'json') throw new Error('JSON_PARSE_ERROR: invalid json')
+      return value
+    },
+    validateAgentReturnContract: (output) => output,
+  })
+
+  await assert.rejects(
+    () => adapter.callAgent({
+      agent: 'chat',
+      prompt: 'route this',
+      returns: { intent: '' },
+      retry_on_contract_violation: 1,
+      event: {},
+    }),
+    /JSON_PARSE_ERROR/,
+  )
+})

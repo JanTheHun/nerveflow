@@ -218,7 +218,10 @@ export function createNextVRuntimeController({
       },
       onEvent: ({ event, runtimeEvent, snapshot }) => {
         const eventSource = String(event?.source ?? '').trim()
-        if (eventSource === 'timer' && suppressTimerNoOps) return
+        if (eventSource === 'timer' && suppressTimerNoOps) {
+          const runtimeEventType = String(runtimeEvent?.type ?? '').trim()
+          if (runtimeEventType !== 'output') return
+        }
         eventBus.publish('nextv_runtime_event', { event, runtimeEvent, snapshot })
       },
       onExecution: ({ event, result, events, snapshot }) => {
@@ -247,6 +250,8 @@ export function createNextVRuntimeController({
         eventBus.publish('nextv_error', {
           message: String(err?.message ?? 'Unknown nextV runtime error'),
           line: Number.isFinite(Number(err?.line)) ? Number(err.line) : null,
+          sourcePath: String(err?.sourcePath ?? ''),
+          sourceLine: Number.isFinite(Number(err?.sourceLine)) ? Number(err.sourceLine) : null,
           kind: String(err?.kind ?? ''),
           code: String(err?.code ?? ''),
           statement: String(err?.statement ?? ''),

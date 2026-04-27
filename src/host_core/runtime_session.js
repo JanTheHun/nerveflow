@@ -12,6 +12,55 @@ function extractEventImages(event) {
     .filter(Boolean)
 }
 
+function enrichAgentContractError(err, { agentName, line, statement }) {
+  if (!err || typeof err !== 'object') return err
+  if (err.code !== 'AGENT_RETURN_CONTRACT_VIOLATION') return err
+
+  const normalizedLine = Number(line)
+  if (Number.isFinite(normalizedLine) && !Number.isFinite(Number(err.line))) {
+    err.line = normalizedLine
+  }
+  if (statement && !err.statement) {
+    err.statement = statement
+  }
+  if (!err.agent) {
+    err.agent = agentName
+  }
+
+  const baseMessage = String(err.message ?? 'Agent return contract violation.')
+  const hasAgentName = baseMessage.includes(`agent("${agentName}")`)
+  const withAgent = hasAgentName ? baseMessage : `agent("${agentName}"): ${baseMessage}`
+  const withLine = Number.isFinite(normalizedLine) && !withAgent.includes(`line ${normalizedLine}`)
+    ? `${withAgent} (line ${normalizedLine})`
+    : withAgent
+
+  err.message = withLine
+  return err
+}
+
+function cloneEventForViolation(event) {
+  if (!event || typeof event !== 'object' || Array.isArray(event)) return null
+
+  const payload = {
+    type: String(event.type ?? ''),
+    value: Object.prototype.hasOwnProperty.call(event, 'value') ? event.value : null,
+    payload: Object.prototype.hasOwnProperty.call(event, 'payload') ? event.payload : null,
+    source: String(event.source ?? ''),
+  }
+
+  try {
+    return JSON.parse(JSON.stringify(payload))
+  } catch {
+    // Best effort only; avoid surfacing serialization errors in violation path.
+    return {
+      type: payload.type,
+      value: null,
+      payload: null,
+      source: payload.source,
+    }
+  }
+}
+
 /**
  * Creates a standard nextV host adapter for a given workspace session.
  *
@@ -91,7 +140,7 @@ export function createHostAdapter({
       throw new Error(`Tool "${toolName}" is not available in this host yet.`)
     },
 
-    callAgent: async ({ agent, prompt, instructions, messages, format, returns, validate, retry_on_contract_violation, on_contract_violation, event }) => {
+    callAgent: async ({ agent, prompt, instructions, messages, format, returns, validate, retry_on_contract_violation, on_contract_violation, event, line, statement }) => {
       const agentName = String(agent ?? '').trim()
       const profile = resolveAgentProfile(agentName)
       if (!profile) {
@@ -155,7 +204,31 @@ export function createHostAdapter({
 
         const raw = await callAgent({ model, messages: chatMessages })
         if (returns != null) {
-          const parsed = normalizeAgentFormattedOutput(raw, 'json')
+          let parsed
+          try {
+            parsed = normalizeAgentFormattedOutput(raw, 'json')
+          } catch (parseErr) {
+            lastViolation = parseErr
+            const violationKey = `JSON_PARSE_ERROR:${String(parseErr?.message ?? '').slice(0, 80)}`
+            previousViolationKey = violationKey
+            if (attemptNum < retryLimit) {
+              continue
+            }
+            if (on_contract_violation != null) {
+              return {
+                __nextv_contract_violation__: true,
+                expression: on_contract_violation,
+                violation: {
+                  type: 'json_parse_error',
+                  field: '',
+                  expected: 'valid JSON',
+                  actual: String(parseErr?.message ?? 'Failed to parse JSON output'),
+                  source_event: cloneEventForViolation(event),
+                },
+              }
+            }
+            throw parseErr
+          }
           if (typeof validateAgentReturnContract === 'function') {
             const mode = String(validate ?? '').trim() || 'coerce'
             try {
@@ -180,9 +253,11 @@ export function createHostAdapter({
                     field: String(err?.path ?? ''),
                     expected: String(err?.expected ?? ''),
                     actual: String(err?.actual ?? ''),
+                    source_event: cloneEventForViolation(event),
                   },
                 }
               }
+              enrichAgentContractError(err, { agentName, line, statement })
               throw err
             }
           }

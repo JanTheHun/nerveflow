@@ -2,7 +2,14 @@
   "feeds": [
     "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"
   ],
+  "topic_markets": false,
+  "topic_geopolitics": true,
+  "topic_ai": true,
+  "topic_energy": false,
+  "topic_other": false,
   "favoriteTopics": ["ai", "geopolitics"],
+  "refreshIngestedCount": 0,
+  "refreshBatchCount": 0,
   "unreadCount": 0,
   "unreadArticles": []
 }

@@ -78,6 +78,8 @@ export function createRuntimeCommandRouter({
         data = { snapshot: runtimeCore.stop() }
       } else if (command.type === 'enqueue_event') {
         data = runtimeCore.enqueue(payload)
+      } else if (command.type === 'dispatch_ingress') {
+        data = await runtimeCore.dispatchIngress(payload)
       } else if (command.type === 'snapshot') {
         const snapshot = runtimeCore.getSnapshot()
         data = {

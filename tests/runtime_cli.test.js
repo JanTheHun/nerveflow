@@ -204,6 +204,59 @@ test('nerve-runtime starts and serves health endpoint', async () => {
   }
 })
 
+test('nerve-runtime exposes ingress dispatch HTTP endpoint', async () => {
+  const port = await findOpenPort()
+  const child = spawn(process.execPath, [
+    'bin/nerve-runtime.js',
+    'start',
+    'examples/mqtt-simple-host',
+    '--port',
+    String(port),
+  ], {
+    cwd: process.cwd(),
+    env: { ...process.env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  try {
+    await waitForOutput(child, 'nerve-runtime listening at')
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/runtime/ingress`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'missing_ingress', value: 'test' }),
+    })
+    const payload = await response.json().catch(() => ({}))
+
+    assert.equal(response.status, 400)
+    assert.equal(payload.ok, false)
+    assert.equal(String(payload.error || '').includes('Ingress connector'), true)
+  } finally {
+    await new Promise((resolveExit) => {
+      const timer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL')
+        } catch {
+          // ignore
+        }
+        resolveExit()
+      }, 5000)
+
+      child.once('exit', () => {
+        clearTimeout(timer)
+        resolveExit()
+      })
+
+      try {
+        child.kill('SIGTERM')
+      } catch {
+        clearTimeout(timer)
+        resolveExit()
+      }
+    })
+  }
+})
+
 test('nerve-attach can snapshot enqueue and stop a live runtime', async () => {
   const port = await findOpenPort()
   const child = spawn(process.execPath, [

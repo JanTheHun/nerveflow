@@ -156,6 +156,17 @@ test('preview server proxies control commands over remote ws runtime', async () 
     assert.equal(enqueuePayload.ok, true)
     assert.equal(typeof enqueuePayload.snapshot, 'object')
 
+    const ingressResponse = await fetch(`http://127.0.0.1:${studioPort}/api/nextv/ingress`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'missing_ingress', value: 'x' }),
+    })
+    const ingressPayload = await ingressResponse.json().catch(() => ({}))
+
+    assert.equal(ingressResponse.status, 503)
+    assert.equal(ingressPayload.ok, false)
+    assert.equal(ingressPayload.remoteControl, true)
+
     const stopResponse = await fetch(`http://127.0.0.1:${studioPort}/api/nextv/stop`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

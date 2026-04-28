@@ -8,7 +8,7 @@ function parseCliOptions(argv) {
   const cmd = String(command ?? '').trim().toLowerCase()
 
   if (!wsUrl || !cmd) {
-    throw new Error('Usage: nerve-attach <wsUrl> <snapshot|stop|enqueue|start|listen> [args]')
+    throw new Error('Usage: nerve-attach <wsUrl> <snapshot|stop|enqueue|ingress|start|listen> [args]')
   }
 
   const options = {
@@ -23,6 +23,12 @@ function parseCliOptions(argv) {
     if (!eventType) throw new Error('enqueue requires <eventType> [value]')
     options.commandType = 'enqueue_event'
     options.commandPayload = { eventType, value }
+  } else if (cmd === 'ingress') {
+    const ingressName = String(rest[0] ?? '').trim()
+    const value = rest.slice(1).join(' ')
+    if (!ingressName) throw new Error('ingress requires <name> [value]')
+    options.commandType = 'dispatch_ingress'
+    options.commandPayload = { name: ingressName, value }
   } else if (cmd === 'start') {
     const workspaceDir = String(rest[0] ?? '').trim()
     const entrypointPath = String(rest[1] ?? '').trim()

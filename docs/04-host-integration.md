@@ -10,7 +10,13 @@ The host substrate is available as a supported npm subpath export:
 import {
   createHostAdapter,
   createEventBus,
+  createToolRuntime,
+  createIngressConnectorRuntime,
+  createEffectRealizerRuntime,
+  getRequiredCapabilities,
+  getConfiguredModules,
   loadWorkspaceNextVConfig,
+  validateRequiredCapabilityBindings,
 } from 'nerveflow/host_core'
 
 import {
@@ -78,6 +84,7 @@ The `host-modules` layer provides tool capability composition separate from the 
 ```js
 import {
   loadHostModules,
+  loadHostModulesByRole,
   createRuntimeBuiltinToolProvider,
 } from 'nerveflow/host-modules'
 
@@ -88,6 +95,11 @@ import {
 // Discover and compose providers (builtin + workspace custom)
 const providers = await loadHostModules({ workspaceDir })
 const toolRuntime = createToolRuntime({ providers })
+
+// Role-aware composition (additive)
+const roles = await loadHostModulesByRole({ workspaceDir })
+const ingressRuntime = createIngressConnectorRuntime({ connectors: roles.ingressConnectors })
+const effectRuntime = createEffectRealizerRuntime({ realizers: roles.effectRealizers })
 
 // Pass to runtime
 const runtime = createRuntimeCore({
@@ -113,15 +125,29 @@ See [host-modules README](../src/host_modules/README.md) for provider semantics,
 Providers are composed in order:
 
 1. Builtin providers (always first)
-2. Workspace providers (via `host_modules` directory discovery)
+2. Public shared providers
+3. Workspace providers (via `host_modules` directory discovery)
 
 First provider with a handler for a given tool name wins. This allows workspace providers to override or extend builtin capabilities.
+
+### Role-aware Host Modules (additive)
+
+`loadHostModulesByRole()` returns separate role buckets:
+
+- `toolProviders`: workflow-callable tools
+- `ingressConnectors`: event ingress connectors for host surfaces
+- `effectRealizers`: output/effect channel realizers
+
+Compatibility note:
+
+- `loadHostModules()` remains tool-only and is preserved for existing hosts
+- role-aware APIs are additive and can be adopted incrementally
 
 ## Host protocol utilities (v1)
 
 `nerveflow/host_core/protocol` provides a transport-agnostic envelope contract for multi-surface hosts.
 
-- command types: `start`, `stop`, `enqueue_event`, `snapshot`, `subscribe`, `unsubscribe`
+- command types: `start`, `stop`, `enqueue_event`, `dispatch_ingress`, `snapshot`, `subscribe`, `unsubscribe`
 - canonical event names: `nextv_started`, `nextv_stopped`, `nextv_warning`, `nextv_runtime_event`, `nextv_execution`, `nextv_error`, `nextv_timer_pulse`, `nextv_event_queued`
 - canonical error codes: `policy_denied`, `unavailable`, `validation_error`, `runtime_error`, `not_active`, `already_active`
 
@@ -152,8 +178,10 @@ Behavior notes:
 - running without `--remote` starts in local mode even if `NERVE_STUDIO_REMOTE_MQTT` is set
 - if remote mode is requested and no MQTT or WS URL is resolved, startup fails fast
 - `--remote-mqtt` and `--remote-ws` are mutually exclusive
-- MQTT remote mode is observability-only: runtime mutation endpoints (`start`, `stop`, `enqueue_event`) return 405 and UI controls are disabled
+- MQTT remote mode is observability-only: runtime mutation endpoints (`start`, `stop`, `enqueue_event`, `dispatch_ingress`) return 405 and UI controls are disabled
 - WS remote mode proxies runtime mutation endpoints to the remote runtime and keeps SSE/event rendering active
+- local Studio start now resolves host modules for the selected workspace and includes role counts in startup metadata
+- startup payloads expose capability/effect preflight summaries (`capabilities`, `effects`) for quick diagnostics in the Studio event log
 
 Examples:
 
@@ -192,6 +220,7 @@ Supported WebSocket command types map directly to protocol v1 commands:
 - `start`
 - `stop`
 - `enqueue_event`
+- `dispatch_ingress`
 - `snapshot`
 - `subscribe`
 - `unsubscribe`
@@ -215,6 +244,7 @@ Optional flags:
 When running, the process exposes:
 
 - `GET /health` runtime status JSON
+- `POST /api/runtime/ingress` dispatch an ingress connector payload over HTTP (same runtime path as `dispatch_ingress`)
 - `ws://<host>:<port><wsPath>` protocol v1 command/event surface
 
 Attach from another process:
@@ -222,6 +252,7 @@ Attach from another process:
 ```powershell
 node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws snapshot
 node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws enqueue user_message hello
+node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws ingress mqtt_bridge hello
 node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws stop
 ```
 
@@ -233,7 +264,7 @@ node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws listen
 
 Notes:
 
-- `nerve-attach` uses protocol command types `snapshot`, `enqueue_event`, `stop`, `start`, and `subscribe`.
+- `nerve-attach` uses protocol command types `snapshot`, `enqueue_event`, `dispatch_ingress`, `stop`, `start`, and `subscribe`.
 - one-shot attach commands may print event envelopes before their final response envelope when runtime events occur concurrently.
 - disconnecting one attach client does not stop the runtime; other surfaces remain attached.
 

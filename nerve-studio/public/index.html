@@ -172,6 +172,12 @@
                     <button type="button" onclick="sendNextVEvent()">enqueue</button>
                     <button type="button" onclick="refreshNextVSnapshot()">snapshot</button>
                   </div>
+                  <div class="footer-row nextv-ingress-row">
+                    <span class="row-label">ingress</span>
+                    <input id="nextv-ingress-name" type="text" placeholder="connector name" autocomplete="off" spellcheck="false" />
+                    <input id="nextv-ingress-value" type="text" placeholder="payload value (optional)" autocomplete="off" spellcheck="false" />
+                    <button type="button" onclick="sendNextVIngress()">dispatch</button>
+                  </div>
                   <div class="footer-row nextv-images-row">
                     <span class="row-label">images</span>
                     <div id="nextv-image-dropzone" class="nextv-image-dropzone" role="button" tabindex="0" aria-label="drop images for nextv input event">

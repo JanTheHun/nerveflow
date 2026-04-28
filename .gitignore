@@ -1,3 +1,5 @@
 node_modules/
 logs/
 bin/print-ollama-debug-log.js
+examples/news-agent/voice-spa/.env
+examples/news-agent/voice-spa/.tmp/

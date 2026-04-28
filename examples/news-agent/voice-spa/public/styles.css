@@ -1,0 +1,98 @@
+:root {
+  color-scheme: dark;
+  font-family: Georgia, 'Times New Roman', serif;
+  background:
+    radial-gradient(circle at top, rgba(190, 214, 255, 0.18), transparent 34%),
+    linear-gradient(180deg, #11141c, #090b10 70%);
+  color: #eef2ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.panel {
+  width: min(420px, 100%);
+  display: grid;
+  justify-items: center;
+  gap: 18px;
+  padding: 32px 24px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 24px;
+  background: rgba(7, 10, 16, 0.82);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+}
+
+.eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  font-size: 0.72rem;
+  color: #9eb5ff;
+}
+
+.record-btn {
+  width: 184px;
+  height: 184px;
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ff6f61, #cf3328);
+  color: #fff8f2;
+  font-size: 1.5rem;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  cursor: pointer;
+  box-shadow: 0 16px 40px rgba(207, 51, 40, 0.35);
+}
+
+.record-btn:disabled {
+  opacity: 0.72;
+  cursor: wait;
+}
+
+.record-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.status {
+  margin: 0;
+  font-size: 1rem;
+  color: #d7dff5;
+}
+
+.status[data-error='true'] {
+  color: #ffb4a9;
+}
+
+.transcript {
+  margin: 0;
+  width: 100%;
+  padding: 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.05);
+  line-height: 1.5;
+  color: #f3f6ff;
+}
+
+@media (max-width: 480px) {
+  .panel {
+    padding: 24px 18px;
+  }
+
+  .record-btn {
+    width: 160px;
+    height: 160px;
+  }
+}

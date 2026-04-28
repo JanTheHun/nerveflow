@@ -1,95 +1,142 @@
 on external "news_tick"
+  state.refreshIngestedCount = 0
+  state.refreshBatchCount = 0
   emit("ingest_poll_batch", "poll")
 end
 
 on "ingest_poll_batch"
-  output text "tick!"
   batch = tool("poll_new_articles", { feeds: state.feeds, limit: 10, fetchLimit: 250, fetchTimeoutMs: 6000 })
 
   if batch.count > 0
     classify_articles = take(batch.articles, 10)
-
-    priority_batch = agent(
-      "priority-slow",
-      concat(
-        "Favorite topics: ",
-        to_json(state.favoriteTopics),
-        "\n\nArticles (classify all):\n",
-        to_json(classify_articles)
-      ),
-      file("prompts/priority-batch.md"),
-      returns={
-        classifications: exact_length(
-          length(classify_articles),
-          [{ id: "", level: ["urgent", "high", "normal", "ignore"], topic: ["markets", "geopolitics", "ai", "energy", "other"], reason: "" }]
-        )
-      },
-      retry_on_contract_violation=2,
-      on_contract_violation=emit("priority_contract_violation", violation)
-    )
-
-    if priority_batch
-      classified_count = length(priority_batch.classifications)
-      output text concat("batch.count=", batch.count, " classified=", classified_count)
-      
-      if classified_count < batch.count
-        output text concat("WARNING: incomplete classification (", classified_count, "/", batch.count, ")")
-      end
-
-      store_payload = {
-        articles: classify_articles,
-        classifications: priority_batch.classifications,
-        unread: true
-      }
-      tool("store_articles_batch", store_payload)
-
-      unread_snapshot = tool("query_articles", { unread: true, limit: 200 })
-      deduped_unread = dedupe_by(unread_snapshot.articles, "id")
-      state.unreadArticles = deduped_unread
-      state.unreadCount = length(deduped_unread)
-
-      total_classifications = length(priority_batch.classifications)
-      non_urgent = remove_by(priority_batch.classifications, "level", "urgent")
-      urgent_count = total_classifications - length(non_urgent)
-
-      if urgent_count > 0
-        if urgent_count == 1
-          output text "Found 1 urgent article"
-        else
-          output text concat("Found ", urgent_count, " urgent articles")
-        end
-        urgent = find_by(priority_batch.classifications, "level", "urgent")
-        urgent_article = find_by(classify_articles, "id", urgent.id)
-        if urgent_article
-          alert = {
-            title: concat(urgent_count, " urgent: ", urgent_article.title),
-            source: urgent_article.source,
-            topic: urgent.topic,
-            reason: urgent.reason,
-            url: urgent_article.url
-          }
-          output visual to_json(alert)
-          tool("send_alert", alert)
-        end
-      end
-    else
-      output text "WARNING: skipped batch due to priority contract violation"
-
-      unread_snapshot = tool("query_articles", { unread: true, limit: 200 })
-      deduped_unread = dedupe_by(unread_snapshot.articles, "id")
-      state.unreadArticles = deduped_unread
-      state.unreadCount = length(deduped_unread)
-    end
+    emit("ingest_classify_batch", {
+      batch_count: batch.count,
+      articles: classify_articles
+    })
   else
-    unread_snapshot = tool("query_articles", { unread: true, limit: 200 })
-    deduped_unread = dedupe_by(unread_snapshot.articles, "id")
-    state.unreadArticles = deduped_unread
-    state.unreadCount = length(deduped_unread)
+    emit("ingest_refresh_unread_state", { reason: "no_new_articles" })
+  end
+end
 
-    if state.unreadCount > 0
-      output text concat("no new articles (", state.unreadCount, " unread queued)")
+on "ingest_classify_batch"
+  priority_batch = agent(
+    "priority-slow",
+    concat(
+      "Favorite topics: ",
+      to_json(state.favoriteTopics),
+      "\n\nArticles (classify all):\n",
+      to_json(event.value.articles)
+    ),
+    file("prompts/priority-batch.md"),
+    returns={
+      classifications: exact_length(
+        length(event.value.articles),
+        [{ id: "", level: ["urgent", "high", "normal", "ignore"], topic: ["markets", "geopolitics", "ai", "energy", "other"], reason: "" }]
+      )
+    },
+    retry_on_contract_violation=2,
+    on_contract_violation=emit("user_output", "Sorry, this went sideways while prioritizing articles. Please try again.")
+  )
+
+  if priority_batch
+    classified_count = length(priority_batch.classifications)
+
+    if classified_count < event.value.batch_count
+      emit("user_output", concat("WARNING: incomplete classification (", classified_count, "/", event.value.batch_count, ")"))
+    end
+
+    emit("ingest_store_batch", {
+      articles: event.value.articles,
+      classifications: priority_batch.classifications
+    })
+  else
+    emit("user_output", "WARNING: skipped batch due to priority contract violation")
+    emit("ingest_refresh_unread_state", { reason: "contract_violation" })
+  end
+end
+
+on "ingest_store_batch"
+  batch_size = length(event.value.articles)
+  state.refreshBatchCount = state.refreshBatchCount + 1
+  state.refreshIngestedCount = state.refreshIngestedCount + batch_size
+
+  store_payload = {
+    articles: event.value.articles,
+    classifications: event.value.classifications,
+    unread: true,
+    ingestProgress: {
+      batch: state.refreshBatchCount,
+      batchSize: batch_size,
+      totalIngested: state.refreshIngestedCount
+    }
+  }
+  tool("store_articles_batch", store_payload)
+  emit("user_output", concat("[ingest] batch ", state.refreshBatchCount, " stored ", batch_size, " article(s); total=", state.refreshIngestedCount))
+
+  emit("ingest_refresh_unread_state", {
+    reason: "stored",
+    classifications: event.value.classifications,
+    articles: event.value.articles
+  })
+  emit("ingest_poll_batch", "poll")
+end
+
+on "ingest_refresh_unread_state"
+  unread_snapshot = tool("query_articles", { unread: true, limit: 200 })
+  deduped_unread = dedupe_by(unread_snapshot.articles, "id")
+  state.unreadArticles = deduped_unread
+  state.unreadCount = length(deduped_unread)
+
+  if event.value.reason == "no_new_articles"
+    if state.refreshIngestedCount > 0
+      emit("user_output", concat("Ingested ", state.refreshIngestedCount, " new article(s). ", state.unreadCount, " unread queued."))
+    else if state.unreadCount > 0
+      emit("user_output", concat("no new articles (", state.unreadCount, " unread queued)"))
+
+      # output voice "no new articles"
+
     else
-      output text "no new articles"
+      emit("user_output", "no new articles")
+    end
+    state.refreshIngestedCount = 0
+    state.refreshBatchCount = 0
+  else if event.value.reason == "stored"
+    total_classifications = length(event.value.classifications)
+    non_urgent = remove_by(event.value.classifications, "level", "urgent")
+    urgent_count = total_classifications - length(non_urgent)
+
+    if urgent_count > 0
+      emit("ingest_urgent_detected", {
+        urgent_count: urgent_count,
+        classifications: event.value.classifications,
+        articles: event.value.articles
+      })
     end
   end
+end
+
+on "ingest_urgent_detected"
+  if event.value.urgent_count == 1
+    emit("user_output", "Found 1 urgent article")
+    output voice "Found 1 urgent article"
+  else
+    emit("user_output", concat("Found ", event.value.urgent_count, " urgent articles"))
+    output voice concat("Found ", event.value.urgent_count, " urgent articles")
+  end
+
+  output json event.value
+
+  # urgent = find_by(event.value.classifications, "level", "urgent")
+  # urgent_article = find_by(event.value.articles, "id", urgent.id)
+  # if urgent_article
+    # alert = {
+      # title: concat(event.value.urgent_count, " urgent: ", urgent_article.title),
+      # source: urgent_article.source,
+      # topic: urgent.topic,
+      # reason: urgent.reason,
+      # url: urgent_article.url
+    # }
+    # output visual to_json(alert)
+    # tool("send_alert", alert)
+  # end
 end

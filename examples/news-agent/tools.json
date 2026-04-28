@@ -6,7 +6,8 @@
     "store_articles_batch",
     "query_articles",
     "send_alert",
-    "mark_read"
+    "mark_read",
+    "reset_unread_articles"
   ],
   "aliases": {}
 }

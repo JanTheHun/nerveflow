@@ -103,3 +103,49 @@ test('runtime command router returns validation_error for malformed JSON', async
   assert.equal(response.ok, false)
   assert.equal(response.error.code, 'validation_error')
 })
+
+test('runtime command router handles dispatch_ingress command', async () => {
+  const runtime = {
+    dispatchIngressCalls: [],
+    async dispatchIngress(payload) {
+      this.dispatchIngressCalls.push(payload)
+      return {
+        ingressName: payload?.name,
+        dispatchedCount: 1,
+        enqueued: [{ event: { type: 'ingress_test' }, snapshot: { running: true } }],
+      }
+    },
+    async start() {
+      throw new Error('not used')
+    },
+    stop() {
+      throw new Error('not used')
+    },
+    enqueue() {
+      throw new Error('not used')
+    },
+    getSnapshot() {
+      return { running: true }
+    },
+    isActive() {
+      return true
+    },
+  }
+
+  const router = createRuntimeCommandRouter({
+    runtimeCore: runtime,
+    sessionId: 'runtime-test-session',
+  })
+
+  const response = await router.handleRawCommand({
+    type: 'dispatch_ingress',
+    requestId: 'ingress-1',
+    payload: { name: 'mqtt_bridge', value: 'hello' },
+  })
+
+  assert.equal(response.ok, true)
+  assert.equal(response.requestId, 'ingress-1')
+  assert.equal(response.data.ingressName, 'mqtt_bridge')
+  assert.equal(response.data.dispatchedCount, 1)
+  assert.deepEqual(runtime.dispatchIngressCalls, [{ name: 'mqtt_bridge', value: 'hello' }])
+})

@@ -1,5 +1,14 @@
 import { isAbsolute, relative, resolve } from 'node:path'
 import { createPublicFileStoreProvider } from '../../../src/host_modules/public/file_store.js'
+import { createPollingIngressConnector } from '../../../src/host_modules/public/polling_ingress_connector.js'
+import {
+  buildSyntheticRssItem,
+  fetchRssCandidatesByFeed,
+  mapRssItemsToIngressEvents,
+  normalizeFeedList,
+  pickNewRssItemsFromFeeds,
+  pickNextRssItemFromFeeds,
+} from '../../../src/host_modules/public/rss_source.js'
 
 function toObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
@@ -33,45 +42,18 @@ function resolveToolInput(args, positional) {
   return argsObject
 }
 
-function sourceFromFeed(feed) {
-  const value = String(feed ?? '').trim()
-  if (!value) return 'news'
-  try {
-    return new URL(value).hostname || value
-  } catch {
-    return value
-  }
-}
-
-function normalizeFeedList(feedsLike) {
-  return toArray(feedsLike)
-    .map((item) => String(item ?? '').trim())
-    .filter(Boolean)
-}
-
-function normalizeRssItem(itemLike, feed) {
-  const item = toObject(itemLike)
-  const rawId = String(item.id ?? '').trim()
-  const rawUrl = String(item.url ?? '').trim()
-  const rawTitle = String(item.title ?? '').trim()
-  const normalizedId = rawId || rawUrl || `${feed}:${rawTitle}`
-  if (!normalizedId) return null
-
-  return {
-    id: normalizedId,
-    title: rawTitle || 'Untitled article',
-    source: String(item.source ?? sourceFromFeed(feed)).trim() || sourceFromFeed(feed),
-    url: rawUrl || String(feed ?? '').trim(),
-    publishedAt: String(item.publishedAt ?? new Date().toISOString()),
-  }
-}
-
 const articleStore = []
 const articleById = new Map()
 const readIds = new Set()
 const feedCursor = new Map()
 const alertLog = []
 let pollIndex = 0
+let ingestProgress = {
+  batch: 0,
+  batchSize: 0,
+  totalIngested: 0,
+  updatedAt: '',
+}
 const deliveredArticleIds = new Set()
 const DEFAULT_STORE_RELATIVE_PATH = '.data/news-agent-store.json'
 let storeInitialized = false
@@ -88,6 +70,12 @@ function resetStoreState() {
   alertLog.length = 0
   deliveredArticleIds.clear()
   pollIndex = 0
+  ingestProgress = {
+    batch: 0,
+    batchSize: 0,
+    totalIngested: 0,
+    updatedAt: '',
+  }
 }
 
 function resolveStoreFilePath(workspaceDir) {
@@ -160,6 +148,8 @@ function hydrateStoreFromPayload(parsed) {
   if (Number.isFinite(persistedPollIndex)) {
     pollIndex = Math.max(0, Math.floor(persistedPollIndex))
   }
+
+  ingestProgress = normalizeIngestProgress(parsed.ingestProgress, ingestProgress)
 }
 
 function buildStorePayload() {
@@ -175,6 +165,7 @@ function buildStorePayload() {
     feedCursor: feedCursorObject,
     alertLog,
     pollIndex,
+    ingestProgress,
   }
 }
 
@@ -211,6 +202,18 @@ async function persistStoreStateToDisk() {
   })
 }
 
+async function clearStoreStateFromDisk() {
+  if (!storeTool || !storeRelativePath) return
+
+  await storeTool({
+    args: {
+      store: storeRelativePath,
+      op: 'delete',
+      key: 'state',
+    },
+  })
+}
+
 function initializeStoreTool(workspaceDir) {
   const nextStoreRelativePath = resolveStoreFilePath(workspaceDir)
   if (storeTool && storeRelativePath === nextStoreRelativePath) return
@@ -237,95 +240,42 @@ function normalizeTopicValue(value, fallback = 'other') {
   return ALLOWED_TOPICS.has(normalized) ? normalized : fallback
 }
 
-async function fetchRssCandidates(feeds, options = {}) {
-  const { createRuntimeBuiltinToolProvider } = await import('../../../src/host_modules/builtin/index.js')
-  const builtin = createRuntimeBuiltinToolProvider()
-  const limitRaw = Number(options.limit)
-  const timeoutMsRaw = Number(options.timeoutMs)
-  const perFeedLimit = Number.isFinite(limitRaw)
-    ? Math.max(1, Math.min(250, Math.floor(limitRaw)))
-    : 100
-  const timeoutMs = Number.isFinite(timeoutMsRaw)
-    ? Math.max(500, Math.floor(timeoutMsRaw))
-    : 4000
-
-  const byFeed = new Map()
-  for (const feed of feeds) {
-    try {
-      const result = await builtin.rss_fetch({
-        args: {
-          url: feed,
-          limit: perFeedLimit,
-          timeoutMs,
-        },
-      })
-
-      const items = toArray(result?.items)
-        .map((item) => normalizeRssItem(item, feed))
-        .filter(Boolean)
-
-      byFeed.set(feed, items)
-    } catch {
-      byFeed.set(feed, [])
-    }
+function toNonNegativeInteger(value, fallback = 0) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) {
+    const parsedFallback = Number(fallback)
+    return Number.isFinite(parsedFallback) ? Math.max(0, Math.floor(parsedFallback)) : 0
   }
-
-  return byFeed
+  return Math.max(0, Math.floor(parsed))
 }
 
-function pickNextArticleFromFeeds(feeds, rssCandidatesByFeed) {
-  if (feeds.length === 0) return null
-  const startOffset = pollIndex % feeds.length
-
-  for (let i = 0; i < feeds.length; i += 1) {
-    const feed = feeds[(startOffset + i) % feeds.length]
-    const candidates = toArray(rssCandidatesByFeed.get(feed))
-    for (const article of candidates) {
-      const articleId = String(article?.id ?? '').trim()
-      if (!articleId || deliveredArticleIds.has(articleId)) continue
-      deliveredArticleIds.add(articleId)
-      return article
-    }
-  }
-
-  return null
-}
-
-function pickNewArticlesFromFeeds(feeds, rssCandidatesByFeed, maxItems = 5) {
-  if (feeds.length === 0) return []
-  const startOffset = pollIndex % feeds.length
-  const picked = []
-
-  for (let i = 0; i < feeds.length; i += 1) {
-    const feed = feeds[(startOffset + i) % feeds.length]
-    const candidates = toArray(rssCandidatesByFeed.get(feed))
-    for (const article of candidates) {
-      const articleId = String(article?.id ?? '').trim()
-      if (!articleId || deliveredArticleIds.has(articleId) || articleById.has(articleId)) continue
-      deliveredArticleIds.add(articleId)
-      picked.push(article)
-      if (picked.length >= maxItems) return picked
-    }
-  }
-
-  return picked
-}
-
-function buildSyntheticArticle(feed) {
-  const feedKey = String(feed ?? '').trim() || 'news://default'
-  const nextCursor = Number(feedCursor.get(feedKey) ?? 0) + 1
-  feedCursor.set(feedKey, nextCursor)
-
-  const source = sourceFromFeed(feedKey)
-  const id = `${source.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'news'}-${nextCursor}`
-
+function normalizeIngestProgress(value, fallback = {}) {
+  const source = isObject(value) ? value : {}
   return {
-    id,
-    title: `${source} headline #${nextCursor}`,
-    source,
-    url: feedKey.startsWith('http') ? `${feedKey}#item-${nextCursor}` : `https://${source}/item/${nextCursor}`,
-    publishedAt: new Date().toISOString(),
+    batch: toNonNegativeInteger(source.batch, fallback.batch ?? 0),
+    batchSize: toNonNegativeInteger(source.batchSize, fallback.batchSize ?? 0),
+    totalIngested: toNonNegativeInteger(source.totalIngested, fallback.totalIngested ?? 0),
+    updatedAt: String(source.updatedAt ?? fallback.updatedAt ?? ''),
   }
+}
+
+let builtinRssFetchPromise = null
+
+async function getBuiltinRssFetch() {
+  if (builtinRssFetchPromise) return builtinRssFetchPromise
+
+  builtinRssFetchPromise = (async () => {
+    const { createRuntimeBuiltinToolProvider } = await import('../../../src/host_modules/builtin/index.js')
+    const builtin = createRuntimeBuiltinToolProvider()
+    return builtin.rss_fetch
+  })()
+
+  return builtinRssFetchPromise
+}
+
+async function fetchRssCandidates(feeds, options = {}) {
+  const rssFetch = await getBuiltinRssFetch()
+  return await fetchRssCandidatesByFeed(feeds, options, { rssFetch })
 }
 
 function normalizeArticleRecord(recordLike) {
@@ -368,10 +318,88 @@ function upsertArticleRecord(recordLike) {
   return normalized
 }
 
+function clearUnreadArticles() {
+  const clearedCount = articleStore.reduce(
+    (count, record) => count + (record.unread === true ? 1 : 0),
+    0
+  )
+
+  resetStoreState()
+
+  return {
+    clearedCount,
+    unreadCount: 0,
+    storeCleared: true,
+  }
+}
+
 export default function createNewsAgentWorkspaceProvider({ workspaceDir } = {}) {
   initializeStoreTool(workspaceDir)
 
   return {
+    poll_source_items: async ({ args, positional }) => {
+      await ensureStoreInitialized()
+      const input = resolveToolInput(args, positional)
+      const sourceType = String(input.sourceType ?? 'rss').trim().toLowerCase() || 'rss'
+      if (sourceType !== 'rss') {
+        throw new Error('poll_source_items currently supports sourceType="rss" only.')
+      }
+
+      const feeds = normalizeFeedList(input.sources ?? input.feeds)
+      if (feeds.length === 0) {
+        return {
+          sourceType,
+          count: 0,
+          first: null,
+          items: [],
+        }
+      }
+
+      const limitRaw = Number(input.limit)
+      const maxItems = Number.isFinite(limitRaw)
+        ? Math.max(1, Math.min(100, Math.floor(limitRaw)))
+        : 25
+      const fetchLimitRaw = Number(input.fetchLimit)
+      const fetchLimit = Number.isFinite(fetchLimitRaw)
+        ? Math.max(1, Math.min(250, Math.floor(fetchLimitRaw)))
+        : Math.max(100, maxItems)
+      const fetchTimeoutMsRaw = Number(input.fetchTimeoutMs)
+      const fetchTimeoutMs = Number.isFinite(fetchTimeoutMsRaw)
+        ? Math.max(500, Math.floor(fetchTimeoutMsRaw))
+        : 6000
+
+      const rssCandidatesByFeed = await fetchRssCandidates(feeds, {
+        limit: fetchLimit,
+        timeoutMs: fetchTimeoutMs,
+      })
+
+      const mode = String(input.mode ?? 'new').trim().toLowerCase() || 'new'
+      let items
+      if (mode === 'next') {
+        const nextItem = pickNextRssItemFromFeeds(feeds, rssCandidatesByFeed, {
+          pollIndex,
+          deliveredIds: deliveredArticleIds,
+        })
+        items = nextItem ? [nextItem] : []
+      } else {
+        items = pickNewRssItemsFromFeeds(feeds, rssCandidatesByFeed, {
+          maxItems,
+          pollIndex,
+          deliveredIds: deliveredArticleIds,
+          excludeIds: new Set(articleById.keys()),
+        })
+      }
+
+      pollIndex += 1
+
+      return {
+        sourceType,
+        count: items.length,
+        first: items[0] ?? null,
+        items,
+      }
+    },
+
     poll_new_articles: async ({ args, positional }) => {
       await ensureStoreInitialized()
       const input = resolveToolInput(args, positional)
@@ -399,13 +427,28 @@ export default function createNewsAgentWorkspaceProvider({ workspaceDir } = {}) 
         ? Math.max(500, Math.floor(fetchTimeoutMsRaw))
         : 6000
 
-      const rssCandidatesByFeed = await fetchRssCandidates(feeds, {
-        limit: fetchLimit,
-        timeoutMs: fetchTimeoutMs,
-      })
-      let newArticles = pickNewArticlesFromFeeds(feeds, rssCandidatesByFeed, maxItems)
+      const polled = await (async () => {
+        const sourceType = 'rss'
+        const rssCandidatesByFeed = await fetchRssCandidates(feeds, {
+          limit: fetchLimit,
+          timeoutMs: fetchTimeoutMs,
+        })
+        const items = pickNewRssItemsFromFeeds(feeds, rssCandidatesByFeed, {
+          maxItems,
+          pollIndex,
+          deliveredIds: deliveredArticleIds,
+          excludeIds: new Set(articleById.keys()),
+        })
+        pollIndex += 1
+        return {
+          sourceType,
+          count: items.length,
+          first: items[0] ?? null,
+          items,
+        }
+      })()
 
-      pollIndex += 1
+      const newArticles = polled.items
 
       const storedRows = []
       for (const article of newArticles) {
@@ -443,10 +486,13 @@ export default function createNewsAgentWorkspaceProvider({ workspaceDir } = {}) 
       if (feeds.length === 0) return null
 
       const rssCandidatesByFeed = await fetchRssCandidates(feeds)
-      let article = pickNextArticleFromFeeds(feeds, rssCandidatesByFeed)
+      let article = pickNextRssItemFromFeeds(feeds, rssCandidatesByFeed, {
+        pollIndex,
+        deliveredIds: deliveredArticleIds,
+      })
       if (!article) {
         const selectedFeed = feeds[pollIndex % feeds.length]
-        const syntheticArticle = buildSyntheticArticle(selectedFeed)
+        const syntheticArticle = buildSyntheticRssItem(selectedFeed, feedCursor)
         if (!articleById.has(syntheticArticle.id) && !deliveredArticleIds.has(syntheticArticle.id)) {
           deliveredArticleIds.add(syntheticArticle.id)
           article = syntheticArticle
@@ -512,6 +558,17 @@ export default function createNewsAgentWorkspaceProvider({ workspaceDir } = {}) 
           topic: stored.topic,
           unread: stored.unread === true,
         })
+      }
+
+      const nextIngestProgress = normalizeIngestProgress(input.ingestProgress, {
+        batch: ingestProgress.batch + 1,
+        batchSize: storedRows.length,
+        totalIngested: ingestProgress.totalIngested + storedRows.length,
+        updatedAt: ingestProgress.updatedAt,
+      })
+      ingestProgress = {
+        ...nextIngestProgress,
+        updatedAt: new Date().toISOString(),
       }
 
       await persistStoreStateToDisk()
@@ -599,5 +656,72 @@ export default function createNewsAgentWorkspaceProvider({ workspaceDir } = {}) 
         articleId,
       }
     },
+
+    reset_unread_articles: async () => {
+      await ensureStoreInitialized()
+      const result = clearUnreadArticles()
+      await clearStoreStateFromDisk()
+      storeInitialized = false
+      return {
+        cleared: true,
+        ...result,
+      }
+    },
+  }
+}
+
+export function createIngressConnectors() {
+  const rssPollConnector = createPollingIngressConnector({
+    normalizeInput: (input) => toObject(input),
+    poll: async (input) => {
+      const feeds = normalizeFeedList(input.feeds ?? input.sources)
+      if (feeds.length === 0) return { items: [] }
+
+      const fetchLimitRaw = Number(input.fetchLimit)
+      const fetchLimit = Number.isFinite(fetchLimitRaw)
+        ? Math.max(1, Math.min(250, Math.floor(fetchLimitRaw)))
+        : 100
+      const fetchTimeoutMsRaw = Number(input.fetchTimeoutMs)
+      const fetchTimeoutMs = Number.isFinite(fetchTimeoutMsRaw)
+        ? Math.max(500, Math.floor(fetchTimeoutMsRaw))
+        : 4000
+      const limitRaw = Number(input.limit)
+      const limit = Number.isFinite(limitRaw)
+        ? Math.max(1, Math.min(100, Math.floor(limitRaw)))
+        : 10
+
+      const rssCandidatesByFeed = await fetchRssCandidates(feeds, {
+        limit: fetchLimit,
+        timeoutMs: fetchTimeoutMs,
+      })
+      const items = pickNewRssItemsFromFeeds(feeds, rssCandidatesByFeed, {
+        maxItems: limit,
+        pollIndex,
+        deliveredIds: deliveredArticleIds,
+      })
+      pollIndex += 1
+      return { items }
+    },
+    mapItemsToEvents: (items, { input }) => {
+      return mapRssItemsToIngressEvents(items, {
+        eventType: input.eventType,
+        source: 'rss_poll',
+      })
+    },
+    defaultEventType: 'rss_item',
+  })
+
+  return {
+    user_message: async (payload) => {
+      const value = String(payload?.value ?? '').trim()
+      if (!value) throw new Error('user_message ingress requires a non-empty value')
+      return [{ type: 'user_message', value }]
+    },
+
+    poll: async () => {
+      return [{ type: 'news_tick', value: 'ingress' }]
+    },
+
+    rss_poll: async (payload) => rssPollConnector(payload),
   }
 }

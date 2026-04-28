@@ -6,3 +6,10 @@ on external "mark_read"
   state.unreadCount = length(deduped_unread)
   emit("user_output", concat("Marked read: ", to_json(result)))
 end
+
+on "reset_unread_articles"
+  result = tool("reset_unread_articles", {})
+  state.unreadArticles = []
+  state.unreadCount = 0
+  emit("user_output", concat("Cleared unread articles: ", to_json(result)))
+end

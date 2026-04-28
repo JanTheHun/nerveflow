@@ -1,13 +1,31 @@
 on "summarize_urgent"
   urgent_snapshot = tool("query_articles", { unread: true, priority: "urgent", limit: 50 })
-  urgent_articles = urgent_snapshot.articles
   urgent_count = urgent_snapshot.count
+  output json urgent_snapshot.titles
+  output voice to_json(urgent_snapshot.titles)
+end
 
-  if urgent_count == 0
-    emit("user_output", "No urgent articles at the moment.")
+on "summarize_high"
+  high_snapshot = tool("query_articles", { unread: true, priority: "high", limit: 50 })
+  high_count = high_snapshot.count
+
+  if high_count == 0
+    emit("user_output", "No high-priority articles at the moment.")
   else
-    emit("user_output", concat(urgent_count, " urgent article(s):"))
-    emit("user_output", urgent_snapshot.titles)
+    emit("user_output", concat(high_count, " high-priority article(s):"))
+    emit("user_output", high_snapshot.titles)
+  end
+end
+
+on "summarize_normal"
+  normal_snapshot = tool("query_articles", { unread: true, priority: "normal", limit: 50 })
+  normal_count = normal_snapshot.count
+
+  if normal_count == 0
+    emit("user_output", "No normal-priority articles at the moment.")
+  else
+    emit("user_output", concat(normal_count, " normal-priority article(s):"))
+    emit("user_output", normal_snapshot.titles)
   end
 end
 

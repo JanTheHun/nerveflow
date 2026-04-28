@@ -1,4 +1,93 @@
 on "set_topics"
-  state.favoriteTopics = event.value
+  state.topic_markets = event.value.markets == true
+  state.topic_geopolitics = event.value.geopolitics == true
+  state.topic_ai = event.value.ai == true
+  state.topic_energy = event.value.energy == true
+  state.topic_other = event.value.other == true
+
+  next_topics = []
+  if state.topic_markets == true
+    next_topics += ["markets"]
+  end
+  if state.topic_geopolitics == true
+    next_topics += ["geopolitics"]
+  end
+  if state.topic_ai == true
+    next_topics += ["ai"]
+  end
+  if state.topic_energy == true
+    next_topics += ["energy"]
+  end
+  if state.topic_other == true
+    next_topics += ["other"]
+  end
+
+  state.favoriteTopics = next_topics
   emit("user_output", concat("Topics updated: ", to_json(state.favoriteTopics)))
+end
+
+on "add_topics"
+  state.topic_markets = state.topic_markets == true || event.value.markets == true
+  state.topic_geopolitics = state.topic_geopolitics == true || event.value.geopolitics == true
+  state.topic_ai = state.topic_ai == true || event.value.ai == true
+  state.topic_energy = state.topic_energy == true || event.value.energy == true
+  state.topic_other = state.topic_other == true || event.value.other == true
+
+  next_topics = []
+  if state.topic_markets == true
+    next_topics += ["markets"]
+  end
+  if state.topic_geopolitics == true
+    next_topics += ["geopolitics"]
+  end
+  if state.topic_ai == true
+    next_topics += ["ai"]
+  end
+  if state.topic_energy == true
+    next_topics += ["energy"]
+  end
+  if state.topic_other == true
+    next_topics += ["other"]
+  end
+
+  state.favoriteTopics = next_topics
+  emit("user_output", concat("Topics added. Favorites: ", to_json(state.favoriteTopics)))
+end
+
+on "remove_topics"
+  if event.value.markets == true
+    state.topic_markets = false
+  end
+  if event.value.geopolitics == true
+    state.topic_geopolitics = false
+  end
+  if event.value.ai == true
+    state.topic_ai = false
+  end
+  if event.value.energy == true
+    state.topic_energy = false
+  end
+  if event.value.other == true
+    state.topic_other = false
+  end
+
+  next_topics = []
+  if state.topic_markets == true
+    next_topics += ["markets"]
+  end
+  if state.topic_geopolitics == true
+    next_topics += ["geopolitics"]
+  end
+  if state.topic_ai == true
+    next_topics += ["ai"]
+  end
+  if state.topic_energy == true
+    next_topics += ["energy"]
+  end
+  if state.topic_other == true
+    next_topics += ["other"]
+  end
+
+  state.favoriteTopics = next_topics
+  emit("user_output", concat("Topics removed. Favorites: ", to_json(state.favoriteTopics)))
 end

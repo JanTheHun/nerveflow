@@ -6,11 +6,73 @@ function isPlainObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value)
 }
 
+function emptyRoleBuckets() {
+  return {
+    toolProviders: [],
+    ingressConnectors: [],
+    effectRealizers: [],
+  }
+}
+
 function normalizeProviderValue(value) {
   if (!value) return []
   if (Array.isArray(value)) return value.filter(Boolean)
   if (typeof value === 'function' || isPlainObject(value)) return [value]
   return []
+}
+
+function hasRoleKeys(value) {
+  if (!isPlainObject(value)) return false
+  return (
+    Object.prototype.hasOwnProperty.call(value, 'toolProviders')
+    || Object.prototype.hasOwnProperty.call(value, 'providers')
+    || Object.prototype.hasOwnProperty.call(value, 'tools')
+    || Object.prototype.hasOwnProperty.call(value, 'ingressConnectors')
+    || Object.prototype.hasOwnProperty.call(value, 'connectors')
+    || Object.prototype.hasOwnProperty.call(value, 'effectRealizers')
+    || Object.prototype.hasOwnProperty.call(value, 'realizers')
+  )
+}
+
+function normalizeRoleValue(value, fallbackRole = 'tools') {
+  const buckets = emptyRoleBuckets()
+
+  if (!value) return buckets
+
+  if (Array.isArray(value)) {
+    const normalized = normalizeProviderValue(value)
+    if (fallbackRole === 'connectors') buckets.ingressConnectors.push(...normalized)
+    else if (fallbackRole === 'realizers') buckets.effectRealizers.push(...normalized)
+    else buckets.toolProviders.push(...normalized)
+    return buckets
+  }
+
+  if (typeof value === 'function') {
+    if (fallbackRole === 'connectors') buckets.ingressConnectors.push(value)
+    else if (fallbackRole === 'realizers') buckets.effectRealizers.push(value)
+    else buckets.toolProviders.push(value)
+    return buckets
+  }
+
+  if (!isPlainObject(value)) return buckets
+
+  if (hasRoleKeys(value)) {
+    buckets.toolProviders.push(...normalizeProviderValue(value.toolProviders ?? value.providers ?? value.tools))
+    buckets.ingressConnectors.push(...normalizeProviderValue(value.ingressConnectors ?? value.connectors))
+    buckets.effectRealizers.push(...normalizeProviderValue(value.effectRealizers ?? value.realizers))
+    return buckets
+  }
+
+  if (fallbackRole === 'connectors') buckets.ingressConnectors.push(value)
+  else if (fallbackRole === 'realizers') buckets.effectRealizers.push(value)
+  else buckets.toolProviders.push(value)
+  return buckets
+}
+
+function mergeRoleBuckets(target, source) {
+  target.toolProviders.push(...source.toolProviders)
+  target.ingressConnectors.push(...source.ingressConnectors)
+  target.effectRealizers.push(...source.effectRealizers)
 }
 
 async function resolveProviderEntry(entry, context) {
@@ -21,14 +83,22 @@ async function resolveProviderEntry(entry, context) {
   return normalizeProviderValue(entry)
 }
 
-async function loadWorkspaceProviders(workspaceDir) {
+async function resolveRoleEntry(entry, context, fallbackRole = 'tools') {
+  if (typeof entry === 'function') {
+    const resolved = await entry(context)
+    return normalizeRoleValue(resolved, fallbackRole)
+  }
+  return normalizeRoleValue(entry, fallbackRole)
+}
+
+async function loadWorkspaceRoles(workspaceDir) {
   const hostModulesDir = path.resolve(workspaceDir, 'host_modules')
-  if (!fs.existsSync(hostModulesDir)) return []
+  if (!fs.existsSync(hostModulesDir)) return emptyRoleBuckets()
 
   const indexPath = path.resolve(hostModulesDir, 'index.js')
   if (!fs.existsSync(indexPath)) {
     console.warn('[host-modules] host_modules exists but no index.js found; skipping workspace providers')
-    return []
+    return emptyRoleBuckets()
   }
 
   try {
@@ -38,33 +108,111 @@ async function loadWorkspaceProviders(workspaceDir) {
       hostModulesDir,
     }
 
-    const providers = []
+    const knownExports = new Set([
+      'default',
+      'createHostModules',
+      'createProviders',
+      'createConnectors',
+      'createIngressConnectors',
+      'createRealizers',
+      'createEffectRealizers',
+    ])
+
+    const roles = emptyRoleBuckets()
 
     if (loaded.default != null) {
-      providers.push(...await resolveProviderEntry(loaded.default, context))
+      mergeRoleBuckets(roles, await resolveRoleEntry(loaded.default, context, 'tools'))
     }
 
     if (loaded.createHostModules != null) {
-      providers.push(...await resolveProviderEntry(loaded.createHostModules, context))
+      mergeRoleBuckets(roles, await resolveRoleEntry(loaded.createHostModules, context, 'tools'))
     }
 
     if (loaded.createProviders != null) {
-      providers.push(...await resolveProviderEntry(loaded.createProviders, context))
+      mergeRoleBuckets(roles, await resolveRoleEntry(loaded.createProviders, context, 'tools'))
     }
 
-    if (providers.length === 0) {
+    if (loaded.createConnectors != null) {
+      mergeRoleBuckets(roles, await resolveRoleEntry(loaded.createConnectors, context, 'connectors'))
+    }
+
+    if (loaded.createIngressConnectors != null) {
+      mergeRoleBuckets(roles, await resolveRoleEntry(loaded.createIngressConnectors, context, 'connectors'))
+    }
+
+    if (loaded.createRealizers != null) {
+      mergeRoleBuckets(roles, await resolveRoleEntry(loaded.createRealizers, context, 'realizers'))
+    }
+
+    if (loaded.createEffectRealizers != null) {
+      mergeRoleBuckets(roles, await resolveRoleEntry(loaded.createEffectRealizers, context, 'realizers'))
+    }
+
+    const foundKnownRoleExports = (
+      roles.toolProviders.length > 0
+      || roles.ingressConnectors.length > 0
+      || roles.effectRealizers.length > 0
+    )
+
+    if (!foundKnownRoleExports) {
       for (const [name, value] of Object.entries(loaded)) {
-        if (name === 'default' || name === 'createHostModules' || name === 'createProviders') continue
+        if (knownExports.has(name)) continue
         if (!name.startsWith('create')) continue
-        providers.push(...await resolveProviderEntry(value, context))
+        mergeRoleBuckets(roles, await resolveRoleEntry(value, context, 'tools'))
       }
     }
 
-    return providers.filter(Boolean)
+    roles.toolProviders = roles.toolProviders.filter(Boolean)
+    roles.ingressConnectors = roles.ingressConnectors.filter(Boolean)
+    roles.effectRealizers = roles.effectRealizers.filter(Boolean)
+    return roles
   } catch (error) {
     console.error('[host-modules] Failed to load workspace providers:', error.message)
-    return []
+    return emptyRoleBuckets()
   }
+}
+
+/**
+ * Load host modules grouped by role.
+ *
+ * Roles:
+ * - toolProviders: callable workflow tools
+ * - ingressConnectors: external event ingress connectors
+ * - effectRealizers: output/effect channel realizers
+ */
+export async function loadHostModulesByRole(options = {}) {
+  const roles = emptyRoleBuckets()
+  const { workspaceDir, builtinOnly = false } = options
+
+  try {
+    const { createRuntimeBuiltinToolProvider } = await import('./builtin/index.js')
+    roles.toolProviders.push(createRuntimeBuiltinToolProvider())
+  } catch (error) {
+    console.error('[host-modules] Failed to load builtin provider:', error.message)
+  }
+
+  if (builtinOnly) {
+    return roles
+  }
+
+  try {
+    const { createPublicHostModuleProviders } = await import('./public/index.js')
+    const publicProviders = await resolveProviderEntry(createPublicHostModuleProviders, {
+      workspaceDir,
+      hostModulesDir: workspaceDir ? path.resolve(workspaceDir, 'host_modules') : undefined,
+    })
+    roles.toolProviders.push(...publicProviders)
+  } catch (error) {
+    console.error('[host-modules] Failed to load public providers:', error.message)
+  }
+
+  if (builtinOnly || !workspaceDir) {
+    return roles
+  }
+
+  const workspaceRoles = await loadWorkspaceRoles(workspaceDir)
+  mergeRoleBuckets(roles, workspaceRoles)
+  return roles
 }
 
 /**
@@ -84,41 +232,6 @@ async function loadWorkspaceProviders(workspaceDir) {
  * @returns {Promise<Array<Object|Function>>} Ordered array of provider maps or functions
  */
 export async function loadHostModules(options = {}) {
-  const providers = []
-  const { workspaceDir, builtinOnly = false } = options
-
-  // Always include builtin provider first
-  try {
-    const { createRuntimeBuiltinToolProvider } = await import('./builtin/index.js')
-    providers.push(createRuntimeBuiltinToolProvider())
-  } catch (error) {
-    console.error('[host-modules] Failed to load builtin provider:', error.message)
-    // Continue without builtin; caller may have other providers
-  }
-
-  // builtinOnly intentionally means builtin only.
-  if (builtinOnly) {
-    return providers
-  }
-
-  // Include public providers after builtin providers
-  try {
-    const { createPublicHostModuleProviders } = await import('./public/index.js')
-    const publicProviders = await resolveProviderEntry(createPublicHostModuleProviders, {
-      workspaceDir,
-      hostModulesDir: workspaceDir ? path.resolve(workspaceDir, 'host_modules') : undefined,
-    })
-    providers.push(...publicProviders)
-  } catch (error) {
-    console.error('[host-modules] Failed to load public providers:', error.message)
-  }
-
-  // Skip workspace discovery if disabled
-  if (builtinOnly || !workspaceDir) {
-    return providers
-  }
-
-  providers.push(...await loadWorkspaceProviders(workspaceDir))
-
-  return providers
+  const roles = await loadHostModulesByRole(options)
+  return roles.toolProviders
 }

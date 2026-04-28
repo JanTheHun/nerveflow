@@ -186,6 +186,107 @@ function parseEffectsPolicy(raw, sourceLabel) {
   return normalizedPolicy
 }
 
+function parseRequiresMap(raw, sourceLabel) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`${sourceLabel} must be an object map of capability -> requirement.`)
+  }
+
+  const map = {}
+  for (const [capabilityRaw, requirementRaw] of Object.entries(raw)) {
+    const capability = String(capabilityRaw ?? '').trim()
+    if (!capability) {
+      throw new Error(`${sourceLabel}: capability names must be non-empty strings.`)
+    }
+
+    if (typeof requirementRaw === 'boolean') {
+      map[capability] = {
+        required: requirementRaw,
+        provider: null,
+      }
+      continue
+    }
+
+    if (typeof requirementRaw === 'string') {
+      const provider = requirementRaw.trim()
+      if (!provider) {
+        throw new Error(`${sourceLabel}: capability "${capability}" provider string must be non-empty.`)
+      }
+      map[capability] = {
+        required: true,
+        provider,
+      }
+      continue
+    }
+
+    if (!requirementRaw || typeof requirementRaw !== 'object' || Array.isArray(requirementRaw)) {
+      throw new Error(
+        `${sourceLabel}: capability "${capability}" requirement must be a boolean, string, or object.`,
+      )
+    }
+
+    const required = requirementRaw.required == null ? true : requirementRaw.required === true
+    if (requirementRaw.required != null && typeof requirementRaw.required !== 'boolean') {
+      throw new Error(`${sourceLabel}: capability "${capability}.required" must be a boolean when provided.`)
+    }
+
+    const rawProvider = requirementRaw.provider ?? requirementRaw.module ?? null
+    if (rawProvider != null && typeof rawProvider !== 'string') {
+      throw new Error(`${sourceLabel}: capability "${capability}.provider" must be a string when provided.`)
+    }
+
+    const provider = String(rawProvider ?? '').trim() || null
+    map[capability] = {
+      required,
+      provider,
+    }
+  }
+
+  return map
+}
+
+function parseModulesMap(raw, sourceLabel) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`${sourceLabel} must be an object map of module -> config.`)
+  }
+
+  const map = {}
+  for (const [moduleNameRaw, moduleConfigRaw] of Object.entries(raw)) {
+    const moduleName = String(moduleNameRaw ?? '').trim()
+    if (!moduleName) {
+      throw new Error(`${sourceLabel}: module names must be non-empty strings.`)
+    }
+
+    if (!moduleConfigRaw || typeof moduleConfigRaw !== 'object' || Array.isArray(moduleConfigRaw)) {
+      throw new Error(`${sourceLabel}: module "${moduleName}" config must be an object.`)
+    }
+
+    const moduleConfig = { ...moduleConfigRaw }
+
+    if (moduleConfig.provider != null && typeof moduleConfig.provider !== 'string') {
+      throw new Error(`${sourceLabel}: module "${moduleName}.provider" must be a string when provided.`)
+    }
+
+    if (moduleConfig.endpoint != null && typeof moduleConfig.endpoint !== 'string') {
+      throw new Error(`${sourceLabel}: module "${moduleName}.endpoint" must be a string when provided.`)
+    }
+
+    if (moduleConfig.mode != null) {
+      if (typeof moduleConfig.mode !== 'string') {
+        throw new Error(`${sourceLabel}: module "${moduleName}.mode" must be a string when provided.`)
+      }
+      const mode = moduleConfig.mode.trim().toLowerCase()
+      if (!mode || (mode !== 'embedded' && mode !== 'external')) {
+        throw new Error(`${sourceLabel}: module "${moduleName}.mode" must be either "embedded" or "external".`)
+      }
+      moduleConfig.mode = mode
+    }
+
+    map[moduleName] = moduleConfig
+  }
+
+  return map
+}
+
 export function loadWorkspaceNextVConfig({
   workspaceDir,
   toWorkspaceDisplayPath,
@@ -225,6 +326,18 @@ export function loadWorkspaceNextVConfig({
       source: `${nextVDisplayPath}#effects`,
       map: {},
     },
+    requires: {
+      status: 'missing',
+      file: `${nextVDisplayPath}#requires`,
+      source: `${nextVDisplayPath}#requires`,
+      map: {},
+    },
+    modules: {
+      status: 'missing',
+      file: `${nextVDisplayPath}#modules`,
+      source: `${nextVDisplayPath}#modules`,
+      map: {},
+    },
   }
 
   if (existsSync(nextVPath)) {
@@ -259,6 +372,18 @@ export function loadWorkspaceNextVConfig({
       config.effects.map = parseEffectsMap(config.nextv.config.effects, 'nextv.json#effects')
       config.effects.status = 'loaded'
       config.effects.source = `${nextVDisplayPath}#effects`
+    }
+
+    if (config.nextv.config.requires != null) {
+      config.requires.map = parseRequiresMap(config.nextv.config.requires, 'nextv.json#requires')
+      config.requires.status = 'loaded'
+      config.requires.source = `${nextVDisplayPath}#requires`
+    }
+
+    if (config.nextv.config.modules != null) {
+      config.modules.map = parseModulesMap(config.nextv.config.modules, 'nextv.json#modules')
+      config.modules.status = 'loaded'
+      config.modules.source = `${nextVDisplayPath}#modules`
     }
 
     const rawTimers = config.nextv.config.timers
@@ -357,6 +482,18 @@ export function getDeclaredExternals(workspaceConfig) {
 
 export function getDeclaredEffectChannels(workspaceConfig) {
   const declared = workspaceConfig?.effects?.map
+  if (!declared || typeof declared !== 'object' || Array.isArray(declared)) return {}
+  return { ...declared }
+}
+
+export function getRequiredCapabilities(workspaceConfig) {
+  const declared = workspaceConfig?.requires?.map
+  if (!declared || typeof declared !== 'object' || Array.isArray(declared)) return {}
+  return { ...declared }
+}
+
+export function getConfiguredModules(workspaceConfig) {
+  const declared = workspaceConfig?.modules?.map
   if (!declared || typeof declared !== 'object' || Array.isArray(declared)) return {}
   return { ...declared }
 }

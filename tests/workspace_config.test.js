@@ -279,3 +279,109 @@ test('rejects invalid effectsPolicy in nextv.json', () => {
     rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
   }
 })
+
+test('loads capability requirements from nextv.json', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      requires: {
+        speech_to_text: true,
+        text_to_speech: 'piper',
+        email: {
+          required: false,
+          provider: 'smtp',
+        },
+      },
+    }),
+  })
+
+  try {
+    const config = loadConfig(workspaceDir)
+    assert.equal(config.requires.status, 'loaded')
+    assert.deepEqual(config.requires.map, {
+      speech_to_text: {
+        required: true,
+        provider: null,
+      },
+      text_to_speech: {
+        required: true,
+        provider: 'piper',
+      },
+      email: {
+        required: false,
+        provider: 'smtp',
+      },
+    })
+  } finally {
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})
+
+test('rejects invalid requires declaration shape', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      requires: ['speech_to_text'],
+    }),
+  })
+
+  try {
+    assert.throws(
+      () => loadConfig(workspaceDir),
+      /nextv\.json#requires must be an object map of capability -> requirement\./,
+    )
+  } finally {
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})
+
+test('loads workspace module bindings from nextv.json', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      modules: {
+        whisper: {
+          mode: 'EXTERNAL',
+          endpoint: '${WHISPER_HOST}',
+        },
+        piper: {
+          mode: 'embedded',
+        },
+      },
+    }),
+  })
+
+  try {
+    const config = loadConfig(workspaceDir)
+    assert.equal(config.modules.status, 'loaded')
+    assert.deepEqual(config.modules.map, {
+      whisper: {
+        mode: 'external',
+        endpoint: '${WHISPER_HOST}',
+      },
+      piper: {
+        mode: 'embedded',
+      },
+    })
+  } finally {
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})
+
+test('rejects invalid module mode in nextv.json', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      modules: {
+        whisper: {
+          mode: 'daemon',
+        },
+      },
+    }),
+  })
+
+  try {
+    assert.throws(
+      () => loadConfig(workspaceDir),
+      /nextv\.json#modules: module "whisper\.mode" must be either "embedded" or "external"\./,
+    )
+  } finally {
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})

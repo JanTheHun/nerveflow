@@ -26,8 +26,10 @@ import {
   validateOutputContract,
 } from '../src/index.js'
 import {
+  getConfiguredModules as getConfiguredModulesCore,
   getDeclaredEffectChannels as getDeclaredEffectChannelsCore,
   getDeclaredExternals as getDeclaredExternalsCore,
+  getRequiredCapabilities as getRequiredCapabilitiesCore,
   loadWorkspaceNextVConfig as loadWorkspaceNextVConfigCore,
 } from '../src/host_core/workspace_config.js'
 import {
@@ -35,7 +37,13 @@ import {
   hasMeaningfulNextVExecutionEvents as hasMeaningfulNextVExecutionEventsCore,
   normalizeEffectsPolicy as normalizeEffectsPolicyCore,
   validateDeclaredEffectBindings as validateDeclaredEffectBindingsCore,
+  validateRequiredCapabilityBindings as validateRequiredCapabilityBindingsCore,
 } from '../src/host_core/runtime_policy.js'
+import {
+  createEffectRealizerRuntime,
+  createIngressConnectorRuntime,
+  createToolRuntime,
+} from '../src/host_core/tool_runtime.js'
 import {
   clearTimerHandles,
   normalizeInputEvent as normalizeInputEventCore,
@@ -53,6 +61,9 @@ import {
 import {
   createNextVRuntimeController,
 } from '../src/host_core/runtime_controller.js'
+import {
+  loadHostModulesByRole,
+} from '../src/host_modules/index.js'
 import { createMqttRemoteBridge } from './mqtt-remote-bridge.js'
 import { createWsRemoteBridge } from './ws-remote-bridge.js'
 import { connect as mqttConnect } from 'mqtt'
@@ -325,16 +336,17 @@ function sendRemoteConnectionUnavailable(res, message = 'remote runtime websocke
 
 function sendRemoteCommandResponse(res, response, fallbackMessage) {
   if (response?.ok === true) {
-    return null
+    return false
   }
 
   const statusCode = mapRemoteCommandErrorStatus(response?.error?.code)
-  return sendJson(res, statusCode, {
+  sendJson(res, statusCode, {
     ok: false,
     code: String(response?.error?.code ?? 'runtime_error'),
     error: String(response?.error?.message ?? fallbackMessage),
     ...buildRemoteModeMetadata(),
   })
+  return true
 }
 
 const MIME_BY_EXT = {
@@ -731,6 +743,43 @@ function appendOllamaDebugRecord(record) {
   }
 }
 
+let activeToolRuntime = createToolRuntime({ providers: [] })
+let activeIngressRuntime = createIngressConnectorRuntime({ connectors: [] })
+let activeEffectRuntime = createEffectRealizerRuntime({ realizers: [] })
+let activeHostModulesSummary = {
+  toolProviders: 0,
+  ingressConnectors: 0,
+  effectRealizers: 0,
+  workspaceDir: '.',
+}
+
+async function configureRuntimeHostModules(workspaceDirValueRaw) {
+  const workspaceDir = resolveWorkspaceDirectory(workspaceDirValueRaw)
+  const roles = await loadHostModulesByRole({ workspaceDir: workspaceDir.absolutePath })
+  activeToolRuntime = createToolRuntime({ providers: roles.toolProviders })
+  activeIngressRuntime = createIngressConnectorRuntime({ connectors: roles.ingressConnectors })
+  activeEffectRuntime = createEffectRealizerRuntime({ realizers: roles.effectRealizers })
+  activeHostModulesSummary = {
+    toolProviders: Array.isArray(roles.toolProviders) ? roles.toolProviders.length : 0,
+    ingressConnectors: Array.isArray(roles.ingressConnectors) ? roles.ingressConnectors.length : 0,
+    effectRealizers: Array.isArray(roles.effectRealizers) ? roles.effectRealizers.length : 0,
+    workspaceDir: workspaceDir.relativePath,
+  }
+  return activeHostModulesSummary
+}
+
+const dynamicToolRuntime = {
+  call: async (payload = {}) => activeToolRuntime.call(payload),
+}
+
+const dynamicIngressRuntime = {
+  dispatch: async (payload = {}) => activeIngressRuntime.dispatch(payload),
+}
+
+const dynamicEffectRuntime = {
+  realize: async (payload = {}) => activeEffectRuntime.realize(payload),
+}
+
 const runtimeController = createNextVRuntimeController({
   eventBus,
   createRunner: (options) => new NextVEventRunner(options),
@@ -751,9 +800,12 @@ const runtimeController = createNextVRuntimeController({
   resolvePathFromBaseDirectory,
   existsSync,
   getDeclaredEffectChannels: getDeclaredEffectChannelsCore,
+  getRequiredCapabilities: getRequiredCapabilitiesCore,
+  getConfiguredModules: getConfiguredModulesCore,
   getDeclaredExternals: getDeclaredExternalsCore,
   normalizeEffectsPolicy: normalizeEffectsPolicyCore,
   validateDeclaredEffectBindings: validateDeclaredEffectBindingsCore,
+  validateRequiredCapabilityBindings: validateRequiredCapabilityBindingsCore,
   areJsonStatesEqual: areJsonStatesEqualCore,
   hasMeaningfulNextVExecutionEvents: hasMeaningfulNextVExecutionEventsCore,
   normalizeInputEvent: normalizeInputEventCore,
@@ -765,6 +817,9 @@ const runtimeController = createNextVRuntimeController({
   normalizeAgentFormattedOutput,
   validateAgentReturnContract,
   buildAgentReturnContractGuidance,
+  toolRuntime: dynamicToolRuntime,
+  ingressRuntime: dynamicIngressRuntime,
+  effectRuntime: dynamicEffectRuntime,
   callAgent: callOllamaAgent,
   defaultModel: process.env.OLLAMA_MODEL ?? '',
 })
@@ -1104,10 +1159,12 @@ async function handleApi(req, res, url) {
     }
 
     try {
+      const hostModules = await configureRuntimeHostModules(body?.workspaceDir)
       const runtimeStarted = await runtimeController.start(body)
       return sendJson(res, 200, {
         ok: true,
         ...runtimeStarted,
+        hostModules,
         ...buildRemoteModeMetadata(),
       })
     } catch (err) {
@@ -1188,6 +1245,54 @@ async function handleApi(req, res, url) {
     try {
       const { snapshot } = runtimeController.enqueue(body)
       return sendJson(res, 200, { ok: true, snapshot })
+    } catch (err) {
+      return sendJson(res, 400, { error: String(err?.message ?? err) })
+    }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/nextv/ingress') {
+    if (isRemoteObserveOnlyMode) {
+      return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
+    }
+    if (isRemoteControlMode) {
+      let body
+      try {
+        body = await readRequestBody(req)
+      } catch (err) {
+        return sendJson(res, 400, { error: err.message })
+      }
+
+      let response
+      try {
+        response = await sendRemoteRuntimeCommand('dispatch_ingress', body)
+      } catch (err) {
+        return sendRemoteConnectionUnavailable(res, String(err?.message ?? err))
+      }
+
+      const errorResponse = sendRemoteCommandResponse(res, response, 'failed to dispatch remote ingress')
+      if (errorResponse) return errorResponse
+
+      return sendJson(res, 200, {
+        ok: true,
+        ...(response?.data ?? {}),
+        ...buildRemoteModeMetadata(),
+      })
+    }
+
+    if (!runtimeController.isActive()) {
+      return sendJson(res, 404, { error: 'nextV runtime not active' })
+    }
+
+    let body
+    try {
+      body = await readRequestBody(req)
+    } catch (err) {
+      return sendJson(res, 400, { error: err.message })
+    }
+
+    try {
+      const dispatched = await runtimeController.dispatchIngress(body)
+      return sendJson(res, 200, { ok: true, ...dispatched })
     } catch (err) {
       return sendJson(res, 400, { error: String(err?.message ?? err) })
     }

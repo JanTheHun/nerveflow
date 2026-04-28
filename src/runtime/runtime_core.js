@@ -19,8 +19,10 @@ import {
   createEventBus,
   createHostAdapter,
   createNextVRuntimeController,
+  getConfiguredModules,
   getDeclaredEffectChannels,
   getDeclaredExternals,
+  getRequiredCapabilities,
   hasMeaningfulNextVExecutionEvents,
   loadWorkspaceNextVConfig,
   normalizeEffectsPolicy,
@@ -30,6 +32,7 @@ import {
   resolveStateDiscoveryBaseDir,
   startTimerHandles,
   validateDeclaredEffectBindings,
+  validateRequiredCapabilityBindings,
 } from '../host_core/index.js'
 
 export function createRuntimeResolvers({ repoRoot }) {
@@ -127,6 +130,8 @@ export function createRuntimeCore({
     throw new Error('agent transport is not configured for runtime')
   },
   toolRuntime = null,
+  ingressRuntime = null,
+  effectRuntime = null,
   defaultModel = '',
   resolvers,
 } = {}) {
@@ -153,9 +158,12 @@ export function createRuntimeCore({
     resolvePathFromBaseDirectory: resolvers.resolvePathFromBaseDirectory,
     existsSync: resolvers.existsSync,
     getDeclaredEffectChannels,
+    getRequiredCapabilities,
+    getConfiguredModules,
     getDeclaredExternals,
     normalizeEffectsPolicy,
     validateDeclaredEffectBindings,
+    validateRequiredCapabilityBindings,
     areJsonStatesEqual,
     hasMeaningfulNextVExecutionEvents,
     normalizeInputEvent,
@@ -169,6 +177,8 @@ export function createRuntimeCore({
     buildAgentReturnContractGuidance,
     buildAgentRetryPrompt,
     toolRuntime,
+    ingressRuntime,
+    effectRuntime,
     callAgent,
     defaultModel,
   })
@@ -217,6 +227,10 @@ export function createRuntimeCore({
     return runtimeController.enqueue(payload)
   }
 
+  async function dispatchIngress(payload) {
+    return await runtimeController.dispatchIngress(payload)
+  }
+
   function getSnapshot() {
     return runtimeController.getSnapshot()
   }
@@ -255,6 +269,7 @@ export function createRuntimeCore({
     start,
     stop,
     enqueue,
+    dispatchIngress,
     getSnapshot,
     attachSurface,
     shutdown,

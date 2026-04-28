@@ -7,6 +7,8 @@ export {
 } from './event_bus.js'
 
 export {
+  createEffectRealizerRuntime,
+  createIngressConnectorRuntime,
   createToolRuntime,
 } from './tool_runtime.js'
 
@@ -15,6 +17,7 @@ export {
   hasMeaningfulNextVExecutionEvents,
   normalizeEffectsPolicy,
   validateDeclaredEffectBindings,
+  validateRequiredCapabilityBindings,
 } from './runtime_policy.js'
 
 export {
@@ -28,8 +31,10 @@ export {
 } from './runtime_lifecycle.js'
 
 export {
+  getConfiguredModules,
   getDeclaredEffectChannels,
   getDeclaredExternals,
+  getRequiredCapabilities,
   loadWorkspaceNextVConfig,
 } from './workspace_config.js'
 

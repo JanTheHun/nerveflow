@@ -8,6 +8,7 @@ import {
 import {
   normalizeEffectsPolicy,
   validateDeclaredEffectBindings,
+  validateRequiredCapabilityBindings,
 } from '../src/host_core/runtime_policy.js'
 
 function createFakeRunnerFactory() {
@@ -59,6 +60,7 @@ function createController(options = {}) {
 
   const FakeRunner = createFakeRunnerFactory()
   const {
+    createRunner = () => new FakeRunner(),
     workspaceConfig = {
       agents: { status: 'missing', source: '' },
       tools: { status: 'missing', source: '' },
@@ -66,12 +68,17 @@ function createController(options = {}) {
       operators: { status: 'missing', source: '' },
     },
     getDeclaredEffectChannels = () => ({}),
+    getRequiredCapabilities = () => ({}),
+    getConfiguredModules = () => ({}),
     validateEffectBindings = null,
+    validateCapabilityBindings = null,
+    ingressRuntime = null,
+    effectRuntime = null,
   } = options
 
   const controller = createNextVRuntimeController({
     eventBus,
-    createRunner: () => new FakeRunner(),
+    createRunner,
     createHostAdapter: () => ({
       callAgent: async () => '',
       callTool: async () => '',
@@ -87,10 +94,14 @@ function createController(options = {}) {
     resolvePathFromBaseDirectory: (baseDir, rawPath) => ({ absolutePath: `${baseDir}/${rawPath}`, relativePath: rawPath }),
     existsSync: () => false,
     getDeclaredEffectChannels,
+    getRequiredCapabilities,
+    getConfiguredModules,
     validateEffectBindings,
+    validateCapabilityBindings,
     getDeclaredExternals: () => [],
     normalizeEffectsPolicy,
     validateDeclaredEffectBindings,
+    validateRequiredCapabilityBindings,
     areJsonStatesEqual: (left, right) => JSON.stringify(left) === JSON.stringify(right),
     hasMeaningfulNextVExecutionEvents: (events) => Array.isArray(events) && events.length > 0,
     normalizeInputEvent: (event) => event,
@@ -100,6 +111,8 @@ function createController(options = {}) {
     validateOutputContract: () => {},
     appendAgentFormatInstructions: (prompt) => prompt,
     normalizeAgentFormattedOutput: (value) => value,
+    ingressRuntime,
+    effectRuntime,
     callAgent: async () => '',
     defaultModel: '',
   })
@@ -126,6 +139,8 @@ test('controller start publishes started event and activates runtime', async () 
   assert.equal(result.entrypointPath, 'main.nrv')
   assert.equal(result.trace.enabled, false)
   assert.equal(published.some((entry) => entry.eventName === 'nextv_started'), true)
+  assert.equal(result.capabilities.required, 0)
+  assert.equal(result.capabilities.unsupportedBindings, 0)
 })
 
 test('controller enqueue publishes queued event and snapshot while active', async () => {
@@ -240,6 +255,261 @@ test('controller start allows declared effects when host validator accepts bindi
   assert.equal(result.effects.unsupportedBindings, 0)
   assert.equal(published.some((entry) => entry.eventName === 'nextv_warning'), false)
   assert.equal(published.some((entry) => entry.eventName === 'nextv_started'), true)
+})
+
+test('controller start warns for unsupported required capabilities in warn mode and continues startup', async () => {
+  const { controller, published } = createController({
+    workspaceConfig: {
+      agents: { status: 'missing', source: '' },
+      tools: { status: 'missing', source: '' },
+      nextv: {
+        status: 'loaded',
+        file: 'nextv.json',
+        config: { effectsPolicy: 'warn' },
+        timers: [],
+        timersSource: '',
+      },
+      operators: { status: 'missing', source: '' },
+    },
+    getRequiredCapabilities: () => ({
+      speech_to_text: { required: true, provider: 'whisper' },
+    }),
+    getConfiguredModules: () => ({}),
+  })
+
+  const result = await controller.start({ entrypointPath: 'main.nrv' })
+
+  assert.equal(controller.isActive(), true)
+  assert.equal(result.capabilities.required, 1)
+  assert.equal(result.capabilities.unsupportedBindings, 1)
+  assert.equal(
+    published.some((entry) => entry.eventName === 'nextv_warning' && entry.payload?.code === 'UNSUPPORTED_CAPABILITY_BINDING'),
+    true,
+  )
+  assert.equal(published.some((entry) => entry.eventName === 'nextv_started'), true)
+})
+
+test('controller start fails for unsupported required capabilities in strict mode', async () => {
+  const { controller, published } = createController({
+    workspaceConfig: {
+      agents: { status: 'missing', source: '' },
+      tools: { status: 'missing', source: '' },
+      nextv: {
+        status: 'loaded',
+        file: 'nextv.json',
+        config: { effectsPolicy: 'strict' },
+        timers: [],
+        timersSource: '',
+      },
+      operators: { status: 'missing', source: '' },
+    },
+    getRequiredCapabilities: () => ({
+      speech_to_text: { required: true, provider: 'whisper' },
+    }),
+    getConfiguredModules: () => ({}),
+  })
+
+  await assert.rejects(
+    () => controller.start({ entrypointPath: 'main.nrv' }),
+    /unsupported required capability binding/i,
+  )
+
+  assert.equal(controller.isActive(), false)
+  assert.equal(published.some((entry) => entry.eventName === 'nextv_warning'), false)
+  assert.equal(published.some((entry) => entry.eventName === 'nextv_started'), false)
+})
+
+test('controller realizes declared output effects through effect runtime', async () => {
+  class EffectEmittingRunner {
+    constructor(options = {}) {
+      this.options = options
+      this.running = false
+    }
+
+    start() {
+      this.running = true
+    }
+
+    stop() {
+      this.running = false
+    }
+
+    enqueue(event) {
+      if (!this.running) return false
+      if (typeof this.options.onEvent === 'function') {
+        this.options.onEvent({
+          event,
+          runtimeEvent: {
+            type: 'output',
+            format: 'json',
+            effectChannelId: 'voice',
+            payload: { text: 'hello' },
+          },
+          snapshot: this.getSnapshot(),
+        })
+      }
+      return true
+    }
+
+    getSnapshot() {
+      return {
+        running: this.running,
+        executionCount: 0,
+        pendingEvents: 0,
+        state: {},
+        locals: {},
+      }
+    }
+  }
+
+  const calls = []
+  const { controller, published } = createController({
+    createRunner: (options) => new EffectEmittingRunner(options),
+    effectRuntime: {
+      realize: async (payload) => {
+        calls.push(payload)
+        return { ok: true, channel: payload.effectChannelId }
+      },
+    },
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  controller.enqueue({ type: 'user_message', value: 'ping' })
+
+  await new Promise((resolve) => setTimeout(resolve, 0))
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].effectChannelId, 'voice')
+  assert.equal(
+    published.some((entry) => entry.eventName === 'nextv_effect_realized' && entry.payload?.effectChannelId === 'voice'),
+    true,
+  )
+})
+
+test('controller warns when effect realizer fails', async () => {
+  class EffectEmittingRunner {
+    constructor(options = {}) {
+      this.options = options
+      this.running = false
+    }
+
+    start() {
+      this.running = true
+    }
+
+    stop() {
+      this.running = false
+    }
+
+    enqueue(event) {
+      if (!this.running) return false
+      if (typeof this.options.onEvent === 'function') {
+        this.options.onEvent({
+          event,
+          runtimeEvent: {
+            type: 'output',
+            format: 'json',
+            effectChannelId: 'visual',
+            payload: { text: 'boom' },
+          },
+          snapshot: this.getSnapshot(),
+        })
+      }
+      return true
+    }
+
+    getSnapshot() {
+      return {
+        running: this.running,
+        executionCount: 0,
+        pendingEvents: 0,
+        state: {},
+        locals: {},
+      }
+    }
+  }
+
+  const { controller, published } = createController({
+    createRunner: (options) => new EffectEmittingRunner(options),
+    effectRuntime: {
+      realize: async () => {
+        throw new Error('realizer failed')
+      },
+    },
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  controller.enqueue({ type: 'user_message', value: 'ping' })
+
+  await new Promise((resolve) => setTimeout(resolve, 0))
+
+  assert.equal(
+    published.some((entry) => entry.eventName === 'nextv_warning' && entry.payload?.code === 'EFFECT_REALIZER_FAILED'),
+    true,
+  )
+})
+
+test('controller dispatchIngress routes ingress connector output into runtime queue', async () => {
+  const enqueuedEvents = []
+
+  class IngressRunner {
+    constructor() {
+      this.running = false
+    }
+
+    start() {
+      this.running = true
+    }
+
+    stop() {
+      this.running = false
+    }
+
+    enqueue(event) {
+      if (!this.running) return false
+      enqueuedEvents.push(event)
+      return true
+    }
+
+    getSnapshot() {
+      return {
+        running: this.running,
+        executionCount: 0,
+        pendingEvents: 0,
+        state: {},
+        locals: {},
+      }
+    }
+  }
+
+  const { controller, published } = createController({
+    createRunner: () => new IngressRunner(),
+    ingressRuntime: {
+      dispatch: async ({ name, payload }) => ({
+        type: `ingress_${name}`,
+        value: payload?.value ?? null,
+        payload,
+        source: 'ingress',
+      }),
+    },
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  const dispatched = await controller.dispatchIngress({
+    name: 'mqtt_bridge',
+    payload: { value: '42' },
+  })
+
+  assert.equal(dispatched.ingressName, 'mqtt_bridge')
+  assert.equal(dispatched.dispatchedCount, 1)
+  assert.equal(enqueuedEvents.length, 1)
+  assert.equal(enqueuedEvents[0].type, 'ingress_mqtt_bridge')
+  assert.equal(enqueuedEvents[0].value, '42')
+  assert.equal(enqueuedEvents[0].source, 'ingress')
+  assert.equal(
+    published.some((entry) => entry.eventName === 'nextv_ingress_dispatched' && entry.payload?.ingressName === 'mqtt_bridge'),
+    true,
+  )
 })
 
 // --- Multi-Surface Attachment Acceptance Criteria Tests ---

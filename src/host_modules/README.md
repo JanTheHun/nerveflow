@@ -16,7 +16,7 @@ The host-modules layer is the bridge between Nerveflow's deterministic runtime (
 
 ```
 src/host_modules/
-├── index.js                  # Public API: loadHostModules, createRuntimeBuiltinToolProvider
+├── index.js                  # Public API: loadHostModules, loadHostModulesByRole, createRuntimeBuiltinToolProvider
 ├── loader.js                 # Provider discovery and composition
 ├── builtin/
 │   ├── index.js              # Re-export builtin provider
@@ -36,10 +36,26 @@ import { createToolRuntime } from '../src/host_core/index.js'
 
 // Discover and compose providers from workspace
 const providers = await loadHostModules({ workspaceDir: process.cwd() })
-const toolRuntime = createToolRuntime(providers)
+const toolRuntime = createToolRuntime({ providers })
 
 // Pass to runtime composition
 const runtime = createNextVRuntimeCore({ toolRuntime, ... })
+```
+
+Role-aware composition is also available:
+
+```javascript
+import { loadHostModulesByRole } from '../src/host_modules/index.js'
+import {
+  createEffectRealizerRuntime,
+  createIngressConnectorRuntime,
+  createToolRuntime,
+} from '../src/host_core/index.js'
+
+const roles = await loadHostModulesByRole({ workspaceDir: process.cwd() })
+const toolRuntime = createToolRuntime({ providers: roles.toolProviders })
+const ingressRuntime = createIngressConnectorRuntime({ connectors: roles.ingressConnectors })
+const effectRuntime = createEffectRealizerRuntime({ realizers: roles.effectRealizers })
 ```
 
 ## Usage: Custom Providers
@@ -62,7 +78,16 @@ Supported workspace export shapes:
 - `export default <provider | providerFactory | providerArray>`
 - `export function createHostModules() { ... }`
 - `export function createProviders() { ... }`
+- `export function createConnectors() { ... }`
+- `export function createIngressConnectors() { ... }`
+- `export function createRealizers() { ... }`
+- `export function createEffectRealizers() { ... }`
 - `export function createXxxProvider() { ... }` (auto-discovered fallback)
+
+Role-aware return shapes are supported from the default export and creator exports:
+
+- `{ toolProviders, ingressConnectors, effectRealizers }`
+- alias keys `{ providers|tools, connectors, realizers }`
 
 Then in bin/nerve-runtime.js:
 
@@ -121,6 +146,11 @@ Default provider order:
 1. Builtin providers
 2. Public shared providers
 3. Workspace providers
+
+For role-aware loading:
+
+- builtin + public currently populate `toolProviders`
+- workspace may populate any role bucket
 
 ### Error handling
 

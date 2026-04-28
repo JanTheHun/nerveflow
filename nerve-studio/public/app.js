@@ -174,6 +174,8 @@ const nextVAutoSaveInput = document.getElementById('nextv-autosave')
 const nextVEventValueInput = document.getElementById('nextv-event-value')
 const nextVEventTypeInput = document.getElementById('nextv-event-type')
 const nextVEventSourceInput = document.getElementById('nextv-event-source')
+const nextVIngressNameInput = document.getElementById('nextv-ingress-name')
+const nextVIngressValueInput = document.getElementById('nextv-ingress-value')
 const nextVImageDropzone = document.getElementById('nextv-image-dropzone')
 const nextVImageInput = document.getElementById('nextv-image-input')
 const nextVImageCount = document.getElementById('nextv-image-count')
@@ -814,20 +816,39 @@ function getNextVGraphBaseMetrics() {
   }
 }
 
+function getNextVGraphZoomProfile(zoom) {
+  const normalizedZoom = clampNextVGraphZoom(zoom)
+  const zoomOutProgress = Math.max(0, Math.min(1, (1 - normalizedZoom) / 0.75))
+  return {
+    density: 1 - (0.18 * zoomOutProgress),
+    nodeScale: 1 + (0.22 * zoomOutProgress),
+    paddingScale: 1 - (0.32 * zoomOutProgress),
+  }
+}
+
+function getNextVGraphRenderScale(zoom) {
+  const normalizedZoom = clampNextVGraphZoom(zoom)
+  const profile = getNextVGraphZoomProfile(normalizedZoom)
+  return normalizedZoom * profile.density
+}
+
 function getNextVGraphScaledPadding(zoom, viewport = getNextVGraphViewport()) {
   const { padding } = getNextVGraphBaseMetrics()
-  const scaledPadding = padding * zoom
+  const normalizedZoom = clampNextVGraphZoom(zoom)
+  const profile = getNextVGraphZoomProfile(normalizedZoom)
+  const renderScale = normalizedZoom * profile.density
+  const scaledPadding = padding * renderScale
   if (!viewport) {
     return { x: scaledPadding, y: scaledPadding }
   }
 
   const minHorizontalPadding = Math.max(
-    260,
-    viewport.clientWidth * 0.8,
+    170,
+    viewport.clientWidth * (0.8 * profile.paddingScale),
   )
   const minVerticalPadding = Math.max(
-    180,
-    viewport.clientHeight * 0.5,
+    120,
+    viewport.clientHeight * (0.5 * profile.paddingScale),
   )
   return {
     x: Math.max(scaledPadding, minHorizontalPadding),
@@ -856,16 +877,21 @@ function applyNextVGraphZoom() {
   const viewport = getNextVGraphViewport()
   const zoomLabel = document.getElementById('nextv-graph-zoom-label')
   const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
+  const profile = getNextVGraphZoomProfile(zoom)
+  const renderScale = zoom * profile.density
   nextVGraphState.zoom = zoom
 
   if (canvas && svg) {
     const { width: baseWidth, height: baseHeight } = getNextVGraphBaseMetrics()
-    const scaledWidth = baseWidth * zoom
-    const scaledHeight = baseHeight * zoom
+    const scaledWidth = baseWidth * renderScale
+    const scaledHeight = baseHeight * renderScale
     const scaledPadding = getNextVGraphScaledPadding(zoom, viewport)
+    const zoomOutProgress = Math.max(0, Math.min(1, (1 - zoom) / 0.75))
     canvas.style.width = `${scaledWidth + (scaledPadding.x * 2)}px`
     canvas.style.height = `${scaledHeight + (scaledPadding.y * 2)}px`
     canvas.style.padding = `${scaledPadding.y}px ${scaledPadding.x}px`
+    canvas.style.setProperty('--nextv-graph-node-scale', String(profile.nodeScale))
+    canvas.style.setProperty('--nextv-graph-edge-attenuation', String(1 - (0.45 * zoomOutProgress)))
     svg.style.width = `${scaledWidth}px`
     svg.style.height = `${scaledHeight}px`
   }
@@ -886,9 +912,10 @@ function positionNextVGraphPopover() {
 
   const viewport = getNextVGraphViewport()
   const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
+  const renderScale = getNextVGraphRenderScale(zoom)
   const scaledPadding = getNextVGraphScaledPadding(zoom, viewport)
-  const nodeX = scaledPadding.x + (pos.x * zoom)
-  const nodeY = scaledPadding.y + (pos.y * zoom)
+  const nodeX = scaledPadding.x + (pos.x * renderScale)
+  const nodeY = scaledPadding.y + (pos.y * renderScale)
   const margin = 14
   const gap = 28
 
@@ -995,7 +1022,8 @@ function centerNextVGraphViewport() {
 
 function captureNextVGraphViewportState(viewport = getNextVGraphViewport()) {
   const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
-  if (!Number.isFinite(zoom) || zoom <= 0) return null
+  const renderScale = getNextVGraphRenderScale(zoom)
+  if (!Number.isFinite(renderScale) || renderScale <= 0) return null
   if (!viewport || viewport.clientWidth < 2 || viewport.clientHeight < 2) {
     return { zoom }
   }
@@ -1004,8 +1032,8 @@ function captureNextVGraphViewportState(viewport = getNextVGraphViewport()) {
   const scaledPadding = getNextVGraphScaledPadding(zoom, viewport)
   const centerX = viewport.clientWidth / 2
   const centerY = viewport.clientHeight / 2
-  const graphCenterX = (viewport.scrollLeft + centerX - scaledPadding.x) / zoom
-  const graphCenterY = (viewport.scrollTop + centerY - scaledPadding.y) / zoom
+  const graphCenterX = (viewport.scrollLeft + centerX - scaledPadding.x) / renderScale
+  const graphCenterY = (viewport.scrollTop + centerY - scaledPadding.y) / renderScale
   const graphCenterRatioX = baseWidth > 0 ? (graphCenterX / baseWidth) : 0.5
   const graphCenterRatioY = baseHeight > 0 ? (graphCenterY / baseHeight) : 0.5
 
@@ -1023,7 +1051,8 @@ function restoreNextVGraphViewportState(viewportState, viewport = getNextVGraphV
   if (viewport.clientWidth < 2 || viewport.clientHeight < 2) return false
 
   const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
-  if (!Number.isFinite(zoom) || zoom <= 0) return false
+  const renderScale = getNextVGraphRenderScale(zoom)
+  if (!Number.isFinite(renderScale) || renderScale <= 0) return false
 
   const { width: baseWidth, height: baseHeight } = getNextVGraphBaseMetrics()
   const ratioX = Number(viewportState.graphCenterRatioX)
@@ -1052,8 +1081,8 @@ function restoreNextVGraphViewportState(viewportState, viewport = getNextVGraphV
   const scaledPadding = getNextVGraphScaledPadding(zoom, viewport)
   const centerX = viewport.clientWidth / 2
   const centerY = viewport.clientHeight / 2
-  const nextScrollLeft = (graphCenterX * zoom) + scaledPadding.x - centerX
-  const nextScrollTop = (graphCenterY * zoom) + scaledPadding.y - centerY
+  const nextScrollLeft = (graphCenterX * renderScale) + scaledPadding.x - centerX
+  const nextScrollTop = (graphCenterY * renderScale) + scaledPadding.y - centerY
 
   const maxScrollLeft = Math.max(0, viewport.scrollWidth - viewport.clientWidth)
   const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight)
@@ -1083,6 +1112,8 @@ function setNextVGraphZoom(value, options = {}) {
   const viewport = getNextVGraphViewport()
   const previousZoom = clampNextVGraphZoom(nextVGraphState.zoom)
   const nextZoom = clampNextVGraphZoom(value)
+  const previousRenderScale = getNextVGraphRenderScale(previousZoom)
+  const nextRenderScale = getNextVGraphRenderScale(nextZoom)
   const previousPadding = getNextVGraphScaledPadding(previousZoom, viewport)
   const nextPadding = getNextVGraphScaledPadding(nextZoom, viewport)
 
@@ -1092,15 +1123,15 @@ function setNextVGraphZoom(value, options = {}) {
     viewport
     && Number.isFinite(anchorClientX)
     && Number.isFinite(anchorClientY)
-    && previousZoom > 0
+    && previousRenderScale > 0
   ) {
     const rect = viewport.getBoundingClientRect()
     const pointerX = anchorClientX - rect.left
     const pointerY = anchorClientY - rect.top
-    const graphX = (viewport.scrollLeft + pointerX - previousPadding.x) / previousZoom
-    const graphY = (viewport.scrollTop + pointerY - previousPadding.y) / previousZoom
-    nextScrollLeft = (graphX * nextZoom) + nextPadding.x - pointerX
-    nextScrollTop = (graphY * nextZoom) + nextPadding.y - pointerY
+    const graphX = (viewport.scrollLeft + pointerX - previousPadding.x) / previousRenderScale
+    const graphY = (viewport.scrollTop + pointerY - previousPadding.y) / previousRenderScale
+    nextScrollLeft = (graphX * nextRenderScale) + nextPadding.x - pointerX
+    nextScrollTop = (graphY * nextRenderScale) + nextPadding.y - pointerY
   }
 
   nextVGraphState.zoom = nextZoom
@@ -1292,9 +1323,10 @@ function flashNextVGraphEventValue(eventType, value, options = {}) {
   if (!canvas) return
 
   const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
+  const renderScale = getNextVGraphRenderScale(zoom)
   const scaledPadding = getNextVGraphScaledPadding(zoom, getNextVGraphViewport())
-  const nodeX = scaledPadding.x + (nodePos.x * zoom)
-  const nodeY = scaledPadding.y + (nodePos.y * zoom)
+  const nodeX = scaledPadding.x + (nodePos.x * renderScale)
+  const nodeY = scaledPadding.y + (nodePos.y * renderScale)
 
   const badge = document.createElement('div')
   badge.className = 'nextv-graph-emit-value-flash'
@@ -1351,10 +1383,11 @@ function getNextVGraphEdgeFlashAnchor(edgeKey) {
   if (!point) return null
 
   const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
+  const renderScale = getNextVGraphRenderScale(zoom)
   const scaledPadding = getNextVGraphScaledPadding(zoom, getNextVGraphViewport())
   return {
-    x: scaledPadding.x + (point.x * zoom),
-    y: scaledPadding.y + (point.y * zoom),
+    x: scaledPadding.x + (point.x * renderScale),
+    y: scaledPadding.y + (point.y * renderScale),
   }
 }
 
@@ -1902,10 +1935,26 @@ function buildNextVGraphLayout(graphNodes, options = {}) {
   const layoutDirection = normalizeNextVGraphDirection(options.layoutDirection)
 
   // ── 1. Build file group membership ────────────────────────────────────────
+  // For event nodes, group by the handler's sourcePath so the event renders
+  // alongside its handler, not alongside its emitter.
+  const handlerGroupKeyByEvent = new Map()
+  for (const nodeObj of graphNodes) {
+    if (nodeObj?.kind === 'handler') {
+      const key = getNextVGraphNodeGroupKey(nodeObj, entrypointPath)
+      if (key) handlerGroupKeyByEvent.set(String(nodeObj.eventType ?? ''), key)
+    }
+  }
+
   const fileGroups = new Map()
   const nodeGroupById = new Map()
   for (const nodeObj of graphNodes) {
-    const key = getNextVGraphNodeGroupKey(nodeObj, entrypointPath)
+    let key
+    if (nodeObj?.kind === 'event') {
+      key = handlerGroupKeyByEvent.get(String(nodeObj.eventType ?? nodeObj.id ?? ''))
+        ?? getNextVGraphNodeGroupKey(nodeObj, entrypointPath)
+    } else {
+      key = getNextVGraphNodeGroupKey(nodeObj, entrypointPath)
+    }
     if (!fileGroups.has(key)) fileGroups.set(key, [])
     fileGroups.get(key).push(nodeObj)
     nodeGroupById.set(nodeObj.id, key)
@@ -1945,11 +1994,119 @@ function buildNextVGraphLayout(graphNodes, options = {}) {
     if (dn) positions.set(nodeObj.id, { x: dn.x, y: dn.y })
   }
 
+  // ── 3.5 Fold long linear chains into compact 2D blocks ───────────────────
+  const movedNodeIds = new Set()
+  const chainEligibleNodes = new Set(
+    graphNodes
+      .filter((nodeObj) => {
+        const nodeId = String(nodeObj?.id ?? '')
+        const kind = String(nodeObj?.kind ?? '')
+        return positions.has(nodeId)
+          && !externalNodeIds.has(nodeId)
+          && (kind === 'event' || kind === 'handler')
+      })
+      .map((nodeObj) => String(nodeObj.id))
+  )
+
+  const incomingByNode = new Map()
+  const outgoingByNode = new Map()
+  const addNeighbor = (mapRef, from, to) => {
+    if (!mapRef.has(from)) mapRef.set(from, [])
+    mapRef.get(from).push(to)
+  }
+
+  for (const edge of graphEdges) {
+    const fromId = String(edge?.from ?? '')
+    const toId = String(edge?.to ?? '')
+    const edgeType = String(edge?.type ?? '')
+    if (!chainEligibleNodes.has(fromId) || !chainEligibleNodes.has(toId)) continue
+    if (fromId === toId) continue
+    if (edgeType !== 'emit' && edgeType !== 'subscription') continue
+
+    const fromGroup = nodeGroupById.get(fromId)
+    const toGroup = nodeGroupById.get(toId)
+    if (!fromGroup || fromGroup !== toGroup) continue
+
+    addNeighbor(outgoingByNode, fromId, toId)
+    addNeighbor(incomingByNode, toId, fromId)
+  }
+
+  const getVisualSize = (nodeId) => {
+    const nodeObj = graphNodes.find((node) => String(node.id) === nodeId)
+    if (!nodeObj) return { width: 128, height: 56 }
+    const effectLabel = nodeObj.kind === 'effect' ? String(effectNodeById.get(nodeObj.id)?.label ?? '') : ''
+    return getNextVGraphNodeVisual(nodeObj, effectLabel)
+  }
+
+  const visitedChainNodes = new Set()
+  const minChainLength = 6
+
+  for (const startId of chainEligibleNodes) {
+    if (visitedChainNodes.has(startId)) continue
+
+    const inDeg = (incomingByNode.get(startId) ?? []).length
+    const outDeg = (outgoingByNode.get(startId) ?? []).length
+    if (outDeg !== 1 || inDeg === 1) continue
+
+    const chain = [startId]
+    const chainSeen = new Set(chain)
+    let cursor = startId
+
+    while (true) {
+      const outgoing = outgoingByNode.get(cursor) ?? []
+      if (outgoing.length !== 1) break
+
+      const nextId = outgoing[0]
+      const nextIncoming = incomingByNode.get(nextId) ?? []
+      if (nextIncoming.length !== 1) break
+      if (chainSeen.has(nextId)) break
+
+      chain.push(nextId)
+      chainSeen.add(nextId)
+      cursor = nextId
+    }
+
+    for (const nodeId of chain) visitedChainNodes.add(nodeId)
+    if (chain.length < minChainLength) continue
+
+    let anchorX = Infinity
+    let anchorY = Infinity
+    let maxNodeWidth = 0
+    let maxNodeHeight = 0
+    for (const nodeId of chain) {
+      const pos = positions.get(nodeId)
+      if (!pos) continue
+      anchorX = Math.min(anchorX, pos.x)
+      anchorY = Math.min(anchorY, pos.y)
+      const visual = getVisualSize(nodeId)
+      maxNodeWidth = Math.max(maxNodeWidth, Number(visual?.width) || 120)
+      maxNodeHeight = Math.max(maxNodeHeight, Number(visual?.height) || 50)
+    }
+    if (!Number.isFinite(anchorX) || !Number.isFinite(anchorY)) continue
+
+    const columns = Math.max(2, Math.min(6, Math.round(Math.sqrt(chain.length))))
+    const cellW = maxNodeWidth + 54
+    const cellH = maxNodeHeight + 42
+
+    for (let index = 0; index < chain.length; index++) {
+      const nodeId = chain[index]
+      const row = Math.floor(index / columns)
+      const idxInRow = index % columns
+      const col = row % 2 === 0 ? idxInRow : (columns - 1 - idxInRow)
+      positions.set(nodeId, {
+        x: anchorX + (col * cellW),
+        y: anchorY + (row * cellH),
+      })
+      movedNodeIds.add(nodeId)
+    }
+  }
+
   // ── 4. Extract edge bendpoints ─────────────────────────────────────────────
   const edgeBendpoints = new Map()
   for (const e of g.edges()) {
     const ed = g.edge(e)
     if (ed && Array.isArray(ed.points) && ed.points.length >= 2) {
+      if (movedNodeIds.has(String(e.v)) || movedNodeIds.has(String(e.w))) continue
       edgeBendpoints.set(`${e.v}\u0000${e.w}`, ed.points)
     }
   }
@@ -1959,7 +2116,6 @@ function buildNextVGraphLayout(graphNodes, options = {}) {
   const containerPadTop = 38
   const containerPadBottom = 22
   const containers = []
-  const containerByKey = new Map()
   for (const [key, members] of fileGroups.entries()) {
     const internalMembers = members.filter((n) => !externalNodeIds.has(n.id))
     const positioned = internalMembers.filter((n) => positions.has(n.id))
@@ -1976,6 +2132,7 @@ function buildNextVGraphLayout(graphNodes, options = {}) {
       minY = Math.min(minY, pos.y - halfH)
       maxY = Math.max(maxY, pos.y + halfH)
     }
+
     const box = {
       key,
       label: compactNextVGraphFileLabel(key),
@@ -1986,7 +2143,6 @@ function buildNextVGraphLayout(graphNodes, options = {}) {
       memberCount: members.length,
     }
     containers.push(box)
-    containerByKey.set(key, box)
   }
 
   // Recompute layout bounds after Dagre layout.
@@ -4118,10 +4274,29 @@ function formatWorkspaceConfigStatus(config = {}) {
   const agentsStatus = String(config.agents ?? 'missing')
   const toolsStatus = String(config.tools ?? 'missing')
   const nextvStatus = String(config.nextv ?? 'missing')
+  const operatorsStatus = String(config.operators ?? 'missing')
   const agentsSource = pathBasename(config.agentsSource) || 'agents.json'
   const toolsSource = pathBasename(config.toolsSource) || 'tools.json'
   const nextvSource = pathBasename(config.nextvSource) || 'nextv.json'
-  return `[nextv:workspace-config] agents=${agentsSource} tools=${toolsSource} nextv=${nextvSource}`
+  const operatorsSource = pathBasename(config.operatorsSource) || 'operators.json'
+  return `[nextv:workspace-config] agents=${agentsSource}(${agentsStatus}) tools=${toolsSource}(${toolsStatus}) nextv=${nextvSource}(${nextvStatus}) operators=${operatorsSource}(${operatorsStatus})`
+}
+
+function formatCapabilityStatus(summary = {}, effects = {}) {
+  const required = Number(summary.required ?? 0)
+  const unsupported = Number(summary.unsupportedBindings ?? 0)
+  const declaredEffects = Number(effects.declared ?? 0)
+  const unsupportedEffects = Number(effects.unsupportedBindings ?? 0)
+  const policy = String(effects.policy ?? 'warn')
+  return `[nextv:capabilities] required=${required} unsupported=${unsupported} effects=${declaredEffects} effectUnsupported=${unsupportedEffects} policy=${policy}`
+}
+
+function formatHostModulesStatus(hostModules = {}) {
+  const toolProviders = Number(hostModules.toolProviders ?? 0)
+  const ingressConnectors = Number(hostModules.ingressConnectors ?? 0)
+  const effectRealizers = Number(hostModules.effectRealizers ?? 0)
+  const workspaceDir = String(hostModules.workspaceDir ?? '').trim() || '.'
+  return `[nextv:host-modules] tools=${toolProviders} ingress=${ingressConnectors} effects=${effectRealizers} workspace=${workspaceDir}`
 }
 
 function toPrettyJson(value) {
@@ -4944,6 +5119,12 @@ function openNextVStream() {
       if (payload?.trace && typeof payload.trace === 'object') {
         appendNextVLogRow(`[nextv:trace] enabled=${payload.trace.enabled === true} state=${payload.trace.includeState === true}`, 'result')
       }
+      if (payload?.capabilities && typeof payload.capabilities === 'object') {
+        appendNextVLogRow(formatCapabilityStatus(payload.capabilities, payload.effects), 'result')
+      }
+      if (payload?.hostModules && typeof payload.hostModules === 'object') {
+        appendNextVLogRow(formatHostModulesStatus(payload.hostModules), 'result')
+      }
       renderNextVSnapshot(payload.snapshot)
       setStatus('nextv runtime started')
     } catch {
@@ -5181,6 +5362,12 @@ async function startNextVRuntime() {
     if (data?.trace && typeof data.trace === 'object') {
       appendNextVLogRow(`[nextv:trace] enabled=${data.trace.enabled === true} state=${data.trace.includeState === true}`, 'result')
     }
+    if (data?.capabilities && typeof data.capabilities === 'object') {
+      appendNextVLogRow(formatCapabilityStatus(data.capabilities, data.effects), 'result')
+    }
+    if (data?.hostModules && typeof data.hostModules === 'object') {
+      appendNextVLogRow(formatHostModulesStatus(data.hostModules), 'result')
+    }
 
     persistNextVConfig()
 
@@ -5264,6 +5451,39 @@ async function sendNextVEvent() {
   } catch (err) {
     appendNextVErrorLog(err)
     setStatus('nextv event failed', 'responding')
+  }
+}
+
+async function sendNextVIngress() {
+  const name = String(nextVIngressNameInput?.value ?? '').trim()
+  const value = String(nextVIngressValueInput?.value ?? '')
+
+  if (!name) {
+    setStatus('ingress dispatch requires a connector name', 'responding')
+    return
+  }
+
+  if (!nextVRuntimeRunning) {
+    setStatus('nextv runtime not running', 'responding')
+    return
+  }
+
+  try {
+    const res = await fetch('/api/nextv/ingress', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, value }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'failed to dispatch ingress')
+    }
+    const count = Number(data.dispatchedCount ?? 0)
+    appendNextVLogRow(`[nextv:ingress] dispatched name=${name} events=${count}`, 'step')
+    setStatus(`ingress dispatched: ${name} (${count} event${count === 1 ? '' : 's'})`)
+  } catch (err) {
+    appendNextVErrorLog(err)
+    setStatus('ingress dispatch failed', 'responding')
   }
 }
 

@@ -340,7 +340,8 @@ test('extractEventGraph annotates nodes with sourcePath for include-expanded han
 
     assert.equal(loginHandler.sourcePath, authPath)
     assert.equal(routeHandler.sourcePath, chatPath)
-    assert.equal(routeEvent.sourcePath, chatPath)
+    // route event node gets its location from the emit site (auth.nrv), not the subscriber
+    assert.equal(routeEvent.sourcePath, authPath)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

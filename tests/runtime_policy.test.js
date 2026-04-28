@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   normalizeEffectsPolicy,
   validateDeclaredEffectBindings,
+  validateRequiredCapabilityBindings,
 } from '../src/host_core/runtime_policy.js'
 
 test('normalizeEffectsPolicy defaults to warn when missing', () => {
@@ -107,4 +108,64 @@ test('validateDeclaredEffectBindings captures validator exceptions', () => {
   assert.equal(issues.length, 1)
   assert.equal(issues[0].reason, 'validator_error')
   assert.equal(issues[0].message, 'validator exploded')
+})
+
+test('validateRequiredCapabilityBindings ignores optional requirements and accepts configured bindings', () => {
+  const issues = validateRequiredCapabilityBindings({
+    requiredCapabilities: {
+      speech_to_text: { required: true, provider: 'whisper' },
+      telemetry: { required: false, provider: 'metrics' },
+    },
+    configuredModules: {
+      whisper: { mode: 'external' },
+    },
+  })
+
+  assert.deepEqual(issues, [])
+})
+
+test('validateRequiredCapabilityBindings reports missing required bindings', () => {
+  const issues = validateRequiredCapabilityBindings({
+    requiredCapabilities: {
+      speech_to_text: { required: true, provider: 'whisper' },
+    },
+    configuredModules: {},
+  })
+
+  assert.equal(issues.length, 1)
+  assert.equal(issues[0].reason, 'missing_binding')
+  assert.equal(issues[0].capabilityId, 'speech_to_text')
+  assert.equal(issues[0].moduleId, 'whisper')
+})
+
+test('validateRequiredCapabilityBindings supports validator failures and exceptions', () => {
+  const stringIssues = validateRequiredCapabilityBindings({
+    requiredCapabilities: {
+      speech_to_text: { required: true, provider: 'whisper' },
+    },
+    configuredModules: {
+      whisper: { mode: 'external' },
+    },
+    validateCapabilityBindings: () => 'unsupported capability in host',
+  })
+
+  assert.equal(stringIssues.length, 1)
+  assert.equal(stringIssues[0].reason, 'unsupported_binding')
+  assert.equal(stringIssues[0].message, 'unsupported capability in host')
+
+  const exceptionIssues = validateRequiredCapabilityBindings({
+    requiredCapabilities: {
+      speech_to_text: { required: true, provider: 'whisper' },
+    },
+    configuredModules: {
+      whisper: { mode: 'external' },
+    },
+    validateCapabilityBindings: () => {
+      throw new Error('capability validator exploded')
+    },
+  })
+
+  assert.equal(exceptionIssues.length, 1)
+  assert.equal(exceptionIssues[0].reason, 'validator_error')
+  assert.equal(exceptionIssues[0].message, 'capability validator exploded')
 })

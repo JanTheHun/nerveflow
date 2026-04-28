@@ -15,6 +15,7 @@
  * - start: Create and run runtime in workspace
  * - stop: Halt runtime
  * - enqueue_event: Feed input event to runtime
+ * - dispatch_ingress: Dispatch ingress connector output into runtime queue
  * - snapshot: Get current runtime state
  * - subscribe: Attach surface to runtime events
  * - unsubscribe: Detach surface from runtime events
@@ -28,6 +29,8 @@
  * - nextv_error: Execution error
  * - nextv_timer_pulse: Periodic timer fired
  * - nextv_event_queued: Event added to queue
+ * - nextv_ingress_dispatched: Ingress dispatch routed and enqueued
+ * - nextv_effect_realized: Declared effect channel realized by host
  * 
  * Error codes indicate protocol or policy violations:
  * - policy_denied: Tool/effect not allowed
@@ -44,6 +47,7 @@ const HOST_COMMAND_TYPES = Object.freeze([
   'start',
   'stop',
   'enqueue_event',
+  'dispatch_ingress',
   'snapshot',
   'subscribe',
   'unsubscribe',
@@ -58,6 +62,8 @@ const HOST_EVENT_NAMES = Object.freeze([
   'nextv_error',
   'nextv_timer_pulse',
   'nextv_event_queued',
+  'nextv_ingress_dispatched',
+  'nextv_effect_realized',
 ])
 
 const HOST_ERROR_CODES = Object.freeze([

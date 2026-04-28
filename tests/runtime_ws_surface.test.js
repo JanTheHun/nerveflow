@@ -117,9 +117,11 @@ function closeWs(ws) {
   })
 }
 
-async function createRuntimeSurfaceHarness() {
+async function createRuntimeSurfaceHarness(options = {}) {
+  const ingressRuntime = options.ingressRuntime ?? null
   const runtimeCore = createRuntimeCore({
     resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
+    ingressRuntime,
   })
 
   await runtimeCore.start({ workspaceDir: 'examples/mqtt-simple-host' })
@@ -237,6 +239,57 @@ test('runtime continues after one ws surface detaches', async () => {
     assert.equal(queuedEvent.eventName, 'nextv_event_queued')
   } finally {
     await closeWs(ws2)
+    await harness.close()
+  }
+})
+
+test('runtime ws surface supports dispatch_ingress command', async () => {
+  const harness = await createRuntimeSurfaceHarness({
+    ingressRuntime: {
+      async dispatch(payload) {
+        return {
+          eventType: `ingress_${payload?.name ?? 'unknown'}`,
+          value: payload?.value ?? '',
+        }
+      },
+    },
+  })
+  const ws = new WebSocket(harness.wsUrl)
+
+  try {
+    const handshakePromise = waitForWsMessage(
+      ws,
+      (message) => message?.type === 'response' && !message?.requestId,
+    )
+    await waitForWsOpen(ws)
+    await handshakePromise
+
+    const responsePromise = waitForWsMessage(
+      ws,
+      (message) => message?.type === 'response' && message?.requestId === 'ing-1',
+    )
+    const eventPromise = waitForWsMessage(
+      ws,
+      (message) => message?.type === 'event' && message?.eventName === 'nextv_ingress_dispatched',
+    )
+
+    ws.send(JSON.stringify({
+      type: 'dispatch_ingress',
+      requestId: 'ing-1',
+      payload: { name: 'mqtt_bridge', value: '42' },
+    }))
+
+    const response = await responsePromise
+    assert.equal(response.ok, true)
+    assert.equal(response.data.ingressName, 'mqtt_bridge')
+    assert.equal(response.data.dispatchedCount, 1)
+
+    const dispatchedEvent = await eventPromise
+    assert.equal(dispatchedEvent.eventName, 'nextv_ingress_dispatched')
+    assert.equal(dispatchedEvent.payload.ingressName, 'mqtt_bridge')
+    assert.equal(dispatchedEvent.payload.dispatchedCount, 1)
+  } finally {
+    await closeWs(ws)
     await harness.close()
   }
 })

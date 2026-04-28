@@ -139,6 +139,7 @@ test('protocol constants include required v1 values', () => {
     'start',
     'stop',
     'enqueue_event',
+    'dispatch_ingress',
     'snapshot',
     'subscribe',
     'unsubscribe',
@@ -160,5 +161,7 @@ test('protocol constants include required v1 values', () => {
     'nextv_error',
     'nextv_timer_pulse',
     'nextv_event_queued',
+    'nextv_ingress_dispatched',
+    'nextv_effect_realized',
   ])
 })

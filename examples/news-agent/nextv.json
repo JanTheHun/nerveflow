@@ -4,7 +4,7 @@
   "timers": [
     {
       "event": "news_tick",
-      "interval": 300000,
+      "interval": 30000,
       "runOnStart": true
     }
   ],

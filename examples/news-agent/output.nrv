@@ -1,16 +1,3 @@
 on "user_output"
   output json event.value
 end
-
-on "priority_contract_violation"
-  output text concat(
-    "WARNING: priority contract violation field=",
-    event.value.field,
-    " expected=",
-    event.value.expected,
-    " actual=",
-    event.value.actual,
-    " source_event=",
-    event.value.source_event.type
-  )
-end

@@ -3,34 +3,62 @@ function normalizeProviders(providersRaw) {
   return providersRaw.filter(Boolean)
 }
 
+function resolveNamedRuntimeCall(providersList, runtimeLabel, name, payload) {
+  if (!name) {
+    throw new Error(`${runtimeLabel} requires a non-empty name.`)
+  }
+
+  return (async () => {
+    for (const provider of providersList) {
+      if (typeof provider === 'function') {
+        const result = await provider({ ...payload, name })
+        if (result && typeof result === 'object' && result.handled === true) {
+          return result.result
+        }
+        continue
+      }
+
+      if (provider && typeof provider === 'object' && !Array.isArray(provider)) {
+        const handler = provider[name]
+        if (typeof handler === 'function') {
+          return await handler({ ...payload, name })
+        }
+      }
+    }
+
+    throw new Error(`${runtimeLabel} "${name}" is not available in this host yet.`)
+  })()
+}
+
 export function createToolRuntime({ providers = [] } = {}) {
   const providersList = normalizeProviders(providers)
 
   return {
     call: async (payload = {}) => {
       const toolName = String(payload?.name ?? '').trim()
-      if (!toolName) {
-        throw new Error('tool runtime requires a non-empty tool name.')
-      }
+      return await resolveNamedRuntimeCall(providersList, 'Tool', toolName, payload)
+    },
+  }
+}
 
-      for (const provider of providersList) {
-        if (typeof provider === 'function') {
-          const result = await provider({ ...payload, name: toolName })
-          if (result && typeof result === 'object' && result.handled === true) {
-            return result.result
-          }
-          continue
-        }
+export function createIngressConnectorRuntime({ connectors = [] } = {}) {
+  const providersList = normalizeProviders(connectors)
 
-        if (provider && typeof provider === 'object' && !Array.isArray(provider)) {
-          const handler = provider[toolName]
-          if (typeof handler === 'function') {
-            return await handler({ ...payload, name: toolName })
-          }
-        }
-      }
+  return {
+    dispatch: async (payload = {}) => {
+      const eventName = String(payload?.name ?? payload?.eventName ?? payload?.eventType ?? '').trim()
+      return await resolveNamedRuntimeCall(providersList, 'Ingress connector', eventName, payload)
+    },
+  }
+}
 
-      throw new Error(`Tool "${toolName}" is not available in this host yet.`)
+export function createEffectRealizerRuntime({ realizers = [] } = {}) {
+  const providersList = normalizeProviders(realizers)
+
+  return {
+    realize: async (payload = {}) => {
+      const effectName = String(payload?.name ?? payload?.effectName ?? payload?.channelId ?? payload?.effectChannelId ?? '').trim()
+      return await resolveNamedRuntimeCall(providersList, 'Effect realizer', effectName, payload)
     },
   }
 }

@@ -10,11 +10,13 @@ import {
 } from '../src/runtime/index.js'
 
 import {
+  createEffectRealizerRuntime,
+  createIngressConnectorRuntime,
   createToolRuntime,
 } from '../src/host_core/index.js'
 
 import {
-  loadHostModules,
+  loadHostModulesByRole,
 } from '../src/host_modules/index.js'
 
 function parseCliOptions(argv) {
@@ -211,24 +213,73 @@ function appendOllamaDebugRecord(record) {
 
 const resolvers = createRuntimeResolvers({ repoRoot })
 
-// Load host-modules providers (builtin + workspace discovery)
-const providers = await loadHostModules({ workspaceDir: options.workspaceDir })
-const toolRuntime = createToolRuntime({ providers })
+// Load host-modules by role (builtin + public + workspace discovery)
+const roles = await loadHostModulesByRole({ workspaceDir: options.workspaceDir })
+const toolRuntime = createToolRuntime({ providers: roles.toolProviders })
+const ingressRuntime = createIngressConnectorRuntime({ connectors: roles.ingressConnectors })
+const effectRuntime = createEffectRealizerRuntime({ realizers: roles.effectRealizers })
 
 const runtimeCore = createRuntimeCore({
   resolvers,
   callAgent: callOllamaAgent,
   toolRuntime,
+  ingressRuntime,
+  effectRuntime,
   defaultModel: process.env.OLLAMA_MODEL ?? '',
 })
 
-const server = createServer((req, res) => {
+function sendJson(res, statusCode, payload) {
+  res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' })
+  res.end(JSON.stringify(payload))
+}
+
+function readRequestBody(req) {
+  return new Promise((resolveBody, rejectBody) => {
+    const chunks = []
+    req.on('data', (chunk) => chunks.push(chunk))
+    req.on('error', rejectBody)
+    req.on('end', () => {
+      try {
+        const text = Buffer.concat(chunks).toString('utf8').trim()
+        resolveBody(text ? JSON.parse(text) : {})
+      } catch {
+        rejectBody(new Error('Request body must be valid JSON'))
+      }
+    })
+  })
+}
+
+const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`)
 
   if (url.pathname === '/health') {
     const status = runtimeCore.getStatus()
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
-    res.end(JSON.stringify({ ok: true, mode: 'runtime', status }))
+    sendJson(res, 200, { ok: true, mode: 'runtime', status })
+    return
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/runtime/ingress') {
+    if (!runtimeCore.isActive()) {
+      sendJson(res, 404, { ok: false, error: 'nextV runtime not active' })
+      return
+    }
+
+    let body
+    try {
+      body = await readRequestBody(req)
+    } catch (err) {
+      sendJson(res, 400, { ok: false, error: String(err?.message ?? err) })
+      return
+    }
+
+    try {
+      const dispatched = await runtimeCore.dispatchIngress(body)
+      sendJson(res, 200, { ok: true, ...dispatched })
+      return
+    } catch (err) {
+      sendJson(res, 400, { ok: false, error: String(err?.message ?? err) })
+      return
+    }
     return
   }
 

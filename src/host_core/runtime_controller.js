@@ -23,10 +23,14 @@ export function createNextVRuntimeController({
   resolvePathFromBaseDirectory,
   existsSync,
   getDeclaredEffectChannels = () => ({}),
+  getRequiredCapabilities = () => ({}),
+  getConfiguredModules = () => ({}),
   validateEffectBindings = null,
+  validateCapabilityBindings = null,
   getDeclaredExternals,
   normalizeEffectsPolicy = () => 'warn',
   validateDeclaredEffectBindings = () => [],
+  validateRequiredCapabilityBindings = () => [],
   areJsonStatesEqual,
   hasMeaningfulNextVExecutionEvents,
   normalizeInputEvent,
@@ -40,6 +44,8 @@ export function createNextVRuntimeController({
   buildAgentReturnContractGuidance = null,
   buildAgentRetryPrompt = null,
   toolRuntime = null,
+  ingressRuntime = null,
+  effectRuntime = null,
   callAgent,
   defaultModel = '',
 }) {
@@ -87,6 +93,8 @@ export function createNextVRuntimeController({
     const entrypoint = resolveEntrypoint(workspaceDir, requestedEntrypointPath, workspaceConfig)
     const suppressTimerNoOps = workspaceConfig?.nextv?.config?.suppressTimerNoOps !== false
     const declaredEffectChannels = getDeclaredEffectChannels(workspaceConfig)
+    const requiredCapabilities = getRequiredCapabilities(workspaceConfig)
+    const configuredModules = getConfiguredModules(workspaceConfig)
     const effectsPolicy = normalizeEffectsPolicy(workspaceConfig?.nextv?.config?.effectsPolicy)
     const effectBindingIssues = validateDeclaredEffectBindings({
       declaredEffectChannels,
@@ -102,6 +110,24 @@ export function createNextVRuntimeController({
         message,
         policy: effectsPolicy,
         issues: effectBindingIssues,
+      })
+    }
+
+    const capabilityBindingIssues = validateRequiredCapabilityBindings({
+      requiredCapabilities,
+      configuredModules,
+      validateCapabilityBindings,
+    })
+    if (capabilityBindingIssues.length > 0) {
+      const message = `Detected ${capabilityBindingIssues.length} unsupported required capability binding(s).`
+      if (effectsPolicy === 'strict') {
+        throw new Error(`${message} Set nextv.json#effectsPolicy to "warn" to allow startup.`)
+      }
+      eventBus.publish('nextv_warning', {
+        code: 'UNSUPPORTED_CAPABILITY_BINDING',
+        message,
+        policy: effectsPolicy,
+        issues: capabilityBindingIssues,
       })
     }
 
@@ -223,6 +249,40 @@ export function createNextVRuntimeController({
           if (runtimeEventType !== 'output') return
         }
         eventBus.publish('nextv_runtime_event', { event, runtimeEvent, snapshot })
+        const effectChannelId = String(runtimeEvent?.effectChannelId ?? '').trim()
+        if (runtimeEvent?.type === 'output' && effectChannelId && effectRuntime && typeof effectRuntime.realize === 'function') {
+          Promise
+            .resolve()
+            .then(async () => effectRuntime.realize({
+              name: effectChannelId,
+              effectName: effectChannelId,
+              channelId: effectChannelId,
+              effectChannelId,
+              event,
+              runtimeEvent,
+              snapshot,
+              workspaceDir: workspaceDir.relativePath,
+              entrypointPath: entrypoint.relativePath,
+            }))
+            .then((result) => {
+              eventBus.publish('nextv_effect_realized', {
+                effectChannelId,
+                result,
+                event,
+                runtimeEvent,
+                snapshot,
+              })
+            })
+            .catch((err) => {
+              eventBus.publish('nextv_warning', {
+                code: 'EFFECT_REALIZER_FAILED',
+                message: `Effect realizer for channel "${effectChannelId}" failed: ${String(err?.message ?? err)}`,
+                policy: effectsPolicy,
+                effectChannelId,
+                error: String(err?.message ?? err),
+              })
+            })
+        }
       },
       onExecution: ({ event, result, events, snapshot }) => {
         const eventSource = String(event?.source ?? '').trim()
@@ -295,6 +355,10 @@ export function createNextVRuntimeController({
         declared: Object.keys(declaredEffectChannels).length,
         unsupportedBindings: effectBindingIssues.length,
       },
+      capabilities: {
+        required: Object.values(requiredCapabilities).filter((entry) => entry?.required !== false).length,
+        unsupportedBindings: capabilityBindingIssues.length,
+      },
       snapshot,
     }
 
@@ -316,6 +380,10 @@ export function createNextVRuntimeController({
     }
 
     const event = normalizeInputEvent(rawEvent)
+    return enqueueNormalizedEvent(event)
+  }
+
+  function enqueueNormalizedEvent(event) {
     const ok = nextVRunner.enqueue(event)
     if (!ok) {
       throw new Error('nextV runtime is not running')
@@ -324,6 +392,52 @@ export function createNextVRuntimeController({
     const snapshot = nextVRunner.getSnapshot()
     eventBus.publish('nextv_event_queued', { event, snapshot })
     return { event, snapshot }
+  }
+
+  async function dispatchIngress(rawIngressPayload = {}) {
+    if (!nextVRunner) {
+      throw new Error('nextV runtime not active')
+    }
+    if (!ingressRuntime || typeof ingressRuntime.dispatch !== 'function') {
+      throw new Error('ingress runtime is not configured in this host')
+    }
+
+    const ingressName = String(
+      rawIngressPayload?.name
+      ?? rawIngressPayload?.ingressName
+      ?? rawIngressPayload?.eventName
+      ?? rawIngressPayload?.eventType
+      ?? rawIngressPayload?.type
+      ?? '',
+    ).trim()
+    if (!ingressName) {
+      throw new Error('dispatchIngress requires a non-empty name/eventType')
+    }
+
+    const dispatched = await ingressRuntime.dispatch({
+      ...rawIngressPayload,
+      name: ingressName,
+    })
+
+    const dispatchedEvents = Array.isArray(dispatched) ? dispatched : [dispatched]
+    const enqueued = []
+    for (const nextRawEvent of dispatchedEvents) {
+      if (!nextRawEvent || typeof nextRawEvent !== 'object') continue
+      const normalized = normalizeInputEvent(nextRawEvent)
+      enqueued.push(enqueueNormalizedEvent(normalized))
+    }
+
+    eventBus.publish('nextv_ingress_dispatched', {
+      ingressName,
+      input: rawIngressPayload,
+      dispatchedCount: enqueued.length,
+    })
+
+    return {
+      ingressName,
+      dispatchedCount: enqueued.length,
+      enqueued,
+    }
   }
 
   function getSnapshot() {
@@ -338,6 +452,7 @@ export function createNextVRuntimeController({
     start,
     stop,
     enqueue,
+    dispatchIngress,
     getSnapshot,
     getActiveSnapshot,
     isActive: () => Boolean(nextVRunner),

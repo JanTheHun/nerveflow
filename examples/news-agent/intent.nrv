@@ -1,21 +1,43 @@
 on external "user_message"
   route = agent(
     "priority",
-    event.value,
-    "Classify the user message intent for the news assistant. Choose \"news\" when the user is asking about news, updates, headlines, unread items, summaries, or priorities. Choose \"urgent\" when the user is asking specifically about urgent articles or urgent news. Choose \"poll\" when the user wants to fetch, check, or refresh new articles now. Choose \"set_topics\" when the user wants to set, update, or change their topic preferences or interests. Otherwise choose \"other\". If intent is \"set_topics\", also extract the topics as a JSON array of strings into the \"topics\" field; otherwise set \"topics\" to null.",
-    returns={ intent: ["news", "urgent", "poll", "set_topics", "other"], topics: null },
-    retry_on_contract_violation=1
+    concat(
+      "Current favorite topics: ",
+      to_json(state.favoriteTopics),
+      "\\n\\nUser message: ",
+      event.value
+    ),
+    "Classify the user message intent for the news assistant. Choose \"news\" when the user is asking about news, updates, headlines, unread items, summaries, or priorities. Choose \"urgent\" when the user is asking specifically about urgent articles or urgent news. Choose \"high\" when the user asks specifically for high-priority articles. Choose \"normal\" when the user asks specifically for normal-priority articles. Choose \"poll\" when the user wants to fetch, check, or refresh new articles now. Choose \"reset\" when the user wants to clear, reset, or empty the unread articles list. Choose \"set_topics\" when the user wants to replace their favorite topics list. Choose \"add_topics\" when the user wants to add one or more favorite topics while keeping existing ones. Choose \"remove_topics\" when the user wants to remove one or more favorite topics while keeping the rest. Otherwise choose \"other\". Supported topics are: markets, geopolitics, ai, energy, other. Always return \"topics\" as an object with exactly these boolean fields: markets, geopolitics, ai, energy, other. For set/add/remove intents, mark requested topics as true and all others false. For non-topic intents, set all topic fields to false.",
+    returns={ intent: ["news", "urgent", "high", "normal", "poll", "reset", "set_topics", "add_topics", "remove_topics", "other"], topics: { markets: false, geopolitics: false, ai: false, energy: false, other: false } },
+    retry_on_contract_violation=1,
+    on_contract_violation=emit("user_output", concat("[intent-contract] field=", violation.field, " expected=", violation.expected, " actual=", violation.actual))
   )
+
+  output json route
+  emit("user_output", concat("[intent] ", route.intent))
 
   if route.intent == "news"
     emit("summarize_unread_priorities", event.value)
   else if route.intent == "urgent"
     emit("summarize_urgent", event.value)
+  else if route.intent == "high"
+    emit("summarize_high", event.value)
+  else if route.intent == "normal"
+    emit("summarize_normal", event.value)
   else if route.intent == "poll"
+    state.refreshIngestedCount = 0
+    state.refreshBatchCount = 0
     emit("ingest_poll_batch", "poll")
+  else if route.intent == "reset"
+    emit("reset_unread_articles", event.value)
   else if route.intent == "set_topics"
     emit("set_topics", route.topics)
+  else if route.intent == "add_topics"
+    emit("add_topics", route.topics)
+  else if route.intent == "remove_topics"
+    emit("remove_topics", route.topics)
   else
-    emit("user_output", "I can summarize unread news, fetch new articles, or update your topic preferences.")
+    output voice "didn't get that, sorry"
+    emit("user_output", "I can summarize unread news by priority (urgent, high, normal), fetch new articles, reset the unread list, or set/add/remove your topic preferences.")
   end
 end

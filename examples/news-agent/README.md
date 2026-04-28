@@ -3,20 +3,22 @@
 Deterministic news-agent scaffold focused on one vertical slice:
 
 - timer-driven polling (`news_tick`)
-- batch fetch/filter of new unread articles with dedupe
+- batch fetch/filter of new unread articles with dedupe, draining the feed in 10-article passes until no unseen items remain
 - batch prioritization (all new articles) with contract validation
+- one final ingest summary after refresh completes
 - urgent visual alert + alert tool dispatch
 - unread query summarization for user messages
+- unread reset from user intent
 
 ## Scope
 
 Implemented in workflow:
 
 - `intent.nrv`: routes `user_message` to unread summary flow
-- `ingest.nrv`: polls new articles, classifies all priorities in one call, stores results, emits urgent alerts
+- `ingest.nrv`: polls new articles in 10-article passes until exhausted, classifies priorities, stores results, and emits urgent alerts
 - `summary.nrv`: summarizes unread articles for user query
 - `topics.nrv`: updates favorite topics
-- `read.nrv`: marks article as read
+- `read.nrv`: marks articles as read and resets the unread queue on user request
 
 Configured assets:
 
@@ -36,6 +38,7 @@ This workflow expects host tool implementations for:
 - `query_articles`
 - `send_alert`
 - `mark_read`
+- `reset_unread_articles`
 
 This example now includes a local workspace provider at `host_modules/index.js` that implements these tools for local development.
 
@@ -43,6 +46,7 @@ Provider behavior notes:
 
 - `poll_new_articles` uses builtin `rss_fetch` to fetch feeds, filter unseen articles, dedupe by id, and persist unread items to the local store.
 - `poll_next_article` remains available for compatibility and returns one unseen article.
+- `reset_unread_articles` deletes the persisted `state` payload from `news-agent-store.json` so the next refresh starts from a blank slate.
 - If feeds are temporarily unavailable, it falls back to synthetic deterministic articles so ingest workflows can still be exercised offline.
 
 ## Host Integration
@@ -54,6 +58,7 @@ This example relies on real host-side tool plumbing. The workflow requires domai
 - `query_articles` — search stored articles by topic/date
 - `send_alert` — notify user of urgent articles
 - `mark_read` — mark article as read
+- `reset_unread_articles` — clear unread state and cached article history
 
 ### Using the standalone runtime
 
@@ -92,6 +97,10 @@ export function createNewsProvider() {
       // Implement read tracking
       return { marked: true }
     },
+    reset_unread_articles: async () => {
+      // Implement blank-slate reset of unread state and cached article history
+      return { cleared: true, clearedCount: 0, unreadCount: 0, storeCleared: true }
+    },
   }
 }
 ```
@@ -121,6 +130,22 @@ From repository root:
 ```powershell
 node bin/nerve-runtime.js start examples/news-agent --port 4201
 ```
+
+## Voice SPA
+
+There is also a minimal local voice UI under `examples/news-agent/voice-spa`.
+
+It records microphone audio in the browser, posts the audio to a small local server, runs your local Whisper command configured in `voice-spa/.env`, then forwards the transcript to runtime ingress as `user_message` by default.
+
+Transport note: voice-spa now prefers protocol v1 WebSocket transport (`RUNTIME_WS_URL`) for both ingress dispatch and runtime event subscription. If `RUNTIME_WS_URL` is omitted, it falls back to the HTTP ingress/SSE endpoints.
+
+Create `examples/news-agent/voice-spa/.env` from `examples/news-agent/voice-spa/.env.example`, fill in `WHISPER_RUN_PATH`, then run:
+
+```powershell
+node examples/news-agent/voice-spa/server.js
+```
+
+Open `http://127.0.0.1:4318` and use the single record/stop button.
 
 Example user query:
 

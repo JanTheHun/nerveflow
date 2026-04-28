@@ -290,17 +290,8 @@ export function extractEventGraph(astOrIR, options = {}) {
     const subscriptionKind = instr.subscriptionKind === 'external' ? 'external' : 'internal'
     const sourceMeta = getInstructionSourceMeta(instr)
 
-    ensureEventNode(sourceEvent, sourceMeta)
+    ensureEventNode(sourceEvent)
     ensureHandlerNode(sourceEvent, sourceMeta)
-    if (sourceMeta.sourcePath) {
-      const eventNode = nodeById.get(sourceEvent)
-      if (eventNode) {
-        eventNode.sourcePath = sourceMeta.sourcePath
-        if (sourceMeta.sourceLine != null) {
-          eventNode.sourceLine = sourceMeta.sourceLine
-        }
-      }
-    }
     ensureEdge(sourceEvent, toHandlerId(sourceEvent), 'subscription')
     handlersSet.add(sourceEvent)
     if (subscriptionKind === 'external') {

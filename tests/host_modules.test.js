@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert'
-import { loadHostModules } from '../src/host_modules/index.js'
-import { createToolRuntime } from '../src/host_core/index.js'
+import { loadHostModules, loadHostModulesByRole } from '../src/host_modules/index.js'
+import { createEffectRealizerRuntime, createIngressConnectorRuntime, createToolRuntime } from '../src/host_core/index.js'
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -150,6 +150,91 @@ test('loadHostModules preserves builtin-first ordering over workspace collisions
   }
 })
 
+test('loadHostModulesByRole returns separated role buckets and preserves tool compatibility', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nerveflow-host-modules-roles-'))
+  const hostModulesDir = path.join(tempRoot, 'host_modules')
+  await fs.mkdir(hostModulesDir, { recursive: true })
+  await fs.writeFile(
+    path.join(hostModulesDir, 'index.js'),
+    [
+      'export default function createWorkspaceModuleBundle() {',
+      '  return {',
+      '    tools: { workspace_tool: async () => ({ role: "tool" }) },',
+      '    ingressConnectors: { voice_input: async () => ({ role: "connector" }) },',
+      '    effectRealizers: { voice: async () => ({ role: "realizer" }) },',
+      '  }',
+      '}',
+      '',
+    ].join('\n'),
+    'utf8'
+  )
+
+  try {
+    const roles = await loadHostModulesByRole({ workspaceDir: tempRoot })
+    assert(Array.isArray(roles.toolProviders), 'toolProviders should be an array')
+    assert(Array.isArray(roles.ingressConnectors), 'ingressConnectors should be an array')
+    assert(Array.isArray(roles.effectRealizers), 'effectRealizers should be an array')
+
+    const toolRuntime = createToolRuntime({ providers: roles.toolProviders })
+    const connectorRuntime = createIngressConnectorRuntime({ connectors: roles.ingressConnectors })
+    const realizerRuntime = createEffectRealizerRuntime({ realizers: roles.effectRealizers })
+
+    const toolResult = await toolRuntime.call({ name: 'workspace_tool' })
+    const connectorResult = await connectorRuntime.dispatch({ name: 'voice_input' })
+    const realizerResult = await realizerRuntime.realize({ name: 'voice' })
+
+    assert.strictEqual(toolResult.role, 'tool')
+    assert.strictEqual(connectorResult.role, 'connector')
+    assert.strictEqual(realizerResult.role, 'realizer')
+
+    const providers = await loadHostModules({ workspaceDir: tempRoot })
+    const compatibilityRuntime = createToolRuntime({ providers })
+    const compatibilityResult = await compatibilityRuntime.call({ name: 'workspace_tool' })
+    assert.strictEqual(compatibilityResult.role, 'tool', 'loadHostModules should remain tool-only compatible')
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('loadHostModulesByRole discovers explicit role exports', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'nerveflow-host-modules-role-exports-'))
+  const hostModulesDir = path.join(tempRoot, 'host_modules')
+  await fs.mkdir(hostModulesDir, { recursive: true })
+  await fs.writeFile(
+    path.join(hostModulesDir, 'index.js'),
+    [
+      'export function createProviders() {',
+      '  return { workspace_tool: async () => ({ source: "providers" }) }',
+      '}',
+      'export function createIngressConnectors() {',
+      '  return { voice_input: async () => ({ source: "connectors" }) }',
+      '}',
+      'export function createEffectRealizers() {',
+      '  return { voice: async () => ({ source: "realizers" }) }',
+      '}',
+      '',
+    ].join('\n'),
+    'utf8'
+  )
+
+  try {
+    const roles = await loadHostModulesByRole({ workspaceDir: tempRoot })
+    const toolRuntime = createToolRuntime({ providers: roles.toolProviders })
+    const connectorRuntime = createIngressConnectorRuntime({ connectors: roles.ingressConnectors })
+    const realizerRuntime = createEffectRealizerRuntime({ realizers: roles.effectRealizers })
+
+    const toolResult = await toolRuntime.call({ name: 'workspace_tool' })
+    const connectorResult = await connectorRuntime.dispatch({ eventName: 'voice_input' })
+    const realizerResult = await realizerRuntime.realize({ effectName: 'voice' })
+
+    assert.strictEqual(toolResult.source, 'providers')
+    assert.strictEqual(connectorResult.source, 'connectors')
+    assert.strictEqual(realizerResult.source, 'realizers')
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
 test('news-agent workspace provider exposes poll_next_article tool', async () => {
   const workspaceDir = path.join(repoRoot, 'examples', 'news-agent')
   const relativeStorePath = `.data/test-news-store-${Date.now()}-${Math.floor(Math.random() * 100000)}.json`
@@ -238,6 +323,253 @@ test('news-agent workspace provider exposes poll_new_articles batch tool and sto
       process.env.NEWS_AGENT_STORE_PATH = previousStorePath
     }
     await fs.rm(storePath, { force: true })
+  }
+})
+
+test('news-agent workspace provider can reset unread articles', async () => {
+  const workspaceDir = path.join(repoRoot, 'examples', 'news-agent')
+  const relativeStorePath = `.data/test-news-store-${Date.now()}-${Math.floor(Math.random() * 100000)}.json`
+  const storePath = path.join(workspaceDir, relativeStorePath)
+  const previousStorePath = process.env.NEWS_AGENT_STORE_PATH
+  process.env.NEWS_AGENT_STORE_PATH = relativeStorePath
+
+  try {
+    const providers = await loadHostModules({ workspaceDir })
+    const toolRuntime = createToolRuntime({ providers })
+
+    const firstSynthetic = await toolRuntime.call({
+      name: 'poll_next_article',
+      args: {
+        feeds: ['http://127.0.0.1:1/rss.xml'],
+      },
+    })
+
+    assert(firstSynthetic && typeof firstSynthetic === 'object', 'poll_next_article should seed the store before reset')
+
+    await toolRuntime.call({
+      name: 'store_articles_batch',
+      args: {
+        unread: true,
+        articles: [
+          {
+            id: 'reset-test-1',
+            title: 'Reset unread #1',
+            source: 'test',
+            url: 'https://example.test/reset-1',
+          },
+          {
+            id: 'reset-test-2',
+            title: 'Reset unread #2',
+            source: 'test',
+            url: 'https://example.test/reset-2',
+          },
+        ],
+      },
+    })
+
+    const beforeReset = await toolRuntime.call({
+      name: 'query_articles',
+      args: {
+        unread: true,
+        limit: 50,
+      },
+    })
+
+    assert.deepStrictEqual(
+      beforeReset.articles.map((entry) => entry.id).sort(),
+      [firstSynthetic.id, 'reset-test-1', 'reset-test-2'].sort(),
+      'stored unread rows should be visible before reset'
+    )
+
+    const reset = await toolRuntime.call({
+      name: 'reset_unread_articles',
+    })
+
+    assert.strictEqual(reset.cleared, true, 'reset_unread_articles should confirm the reset')
+    assert.strictEqual(reset.clearedCount, 3, 'reset should report cleared unread rows')
+    assert.strictEqual(reset.unreadCount, 0, 'reset should leave zero unread rows')
+    assert.strictEqual(reset.storeCleared, true, 'reset should report that cached store state was cleared')
+
+    const afterReset = await toolRuntime.call({
+      name: 'query_articles',
+      args: {
+        unread: true,
+        limit: 50,
+      },
+    })
+
+    assert.strictEqual(afterReset.articles.length, 0, 'reset should clear unread rows from query results')
+
+    const persistedAfterReset = JSON.parse(await fs.readFile(storePath, 'utf8'))
+    assert.deepStrictEqual(persistedAfterReset, {}, 'reset should remove the persisted news-agent state payload')
+
+    const secondSynthetic = await toolRuntime.call({
+      name: 'poll_next_article',
+      args: {
+        feeds: ['http://127.0.0.1:1/rss.xml'],
+      },
+    })
+
+    assert.strictEqual(
+      secondSynthetic.id,
+      firstSynthetic.id,
+      'blank-slate reset should clear cached article history so the feed can start over'
+    )
+
+    const persisted = JSON.parse(await fs.readFile(storePath, 'utf8'))
+    const unreadPersisted = persisted.state.articleStore.filter((entry) => entry.unread === true)
+    assert.strictEqual(unreadPersisted.length, 1, 'post-reset polling should repopulate unread rows from a blank slate')
+    assert.strictEqual(persisted.state.articleStore.length, 1, 'after reset only the post-reset poll should remain in the store')
+    assert.deepStrictEqual(persisted.state.deliveredArticleIds, [secondSynthetic.id], 'after reset only post-reset delivered ids should remain')
+  } finally {
+    if (previousStorePath == null) {
+      delete process.env.NEWS_AGENT_STORE_PATH
+    } else {
+      process.env.NEWS_AGENT_STORE_PATH = previousStorePath
+    }
+    await fs.rm(storePath, { force: true })
+  }
+})
+
+test('news-agent store_articles_batch persists ingestProgress checkpoints', async () => {
+  const workspaceDir = path.join(repoRoot, 'examples', 'news-agent')
+  const relativeStorePath = `.data/test-news-store-${Date.now()}-${Math.floor(Math.random() * 100000)}.json`
+  const storePath = path.join(workspaceDir, relativeStorePath)
+  const previousStorePath = process.env.NEWS_AGENT_STORE_PATH
+  process.env.NEWS_AGENT_STORE_PATH = relativeStorePath
+
+  try {
+    const providers = await loadHostModules({ workspaceDir })
+    const toolRuntime = createToolRuntime({ providers })
+
+    await toolRuntime.call({
+      name: 'store_articles_batch',
+      args: {
+        unread: true,
+        ingestProgress: {
+          batch: 2,
+          batchSize: 3,
+          totalIngested: 6,
+        },
+        articles: [
+          {
+            id: 'ingest-progress-test-1',
+            title: 'Ingest progress #1',
+            source: 'test',
+            url: 'https://example.test/ingest-1',
+          },
+          {
+            id: 'ingest-progress-test-2',
+            title: 'Ingest progress #2',
+            source: 'test',
+            url: 'https://example.test/ingest-2',
+          },
+          {
+            id: 'ingest-progress-test-3',
+            title: 'Ingest progress #3',
+            source: 'test',
+            url: 'https://example.test/ingest-3',
+          },
+        ],
+      },
+    })
+
+    const persisted = JSON.parse(await fs.readFile(storePath, 'utf8'))
+    assert(typeof persisted?.state === 'object' && persisted.state != null, 'store payload should include state object')
+    assert.deepStrictEqual(
+      {
+        batch: persisted.state.ingestProgress.batch,
+        batchSize: persisted.state.ingestProgress.batchSize,
+        totalIngested: persisted.state.ingestProgress.totalIngested,
+      },
+      { batch: 2, batchSize: 3, totalIngested: 6 },
+      'store should persist ingest progress counters from workflow payload'
+    )
+    assert.strictEqual(
+      typeof persisted.state.ingestProgress.updatedAt,
+      'string',
+      'store should include ingestProgress.updatedAt timestamp'
+    )
+    assert.notStrictEqual(
+      persisted.state.ingestProgress.updatedAt.trim(),
+      '',
+      'ingestProgress.updatedAt should be non-empty'
+    )
+  } finally {
+    if (previousStorePath == null) {
+      delete process.env.NEWS_AGENT_STORE_PATH
+    } else {
+      process.env.NEWS_AGENT_STORE_PATH = previousStorePath
+    }
+    await fs.rm(storePath, { force: true })
+  }
+})
+
+test('news-agent workspace provider exposes poll_source_items generic rss tool', async () => {
+  const workspaceDir = path.join(repoRoot, 'examples', 'news-agent')
+  const relativeStorePath = `.data/test-news-store-${Date.now()}-${Math.floor(Math.random() * 100000)}.json`
+  const storePath = path.join(workspaceDir, relativeStorePath)
+  const previousStorePath = process.env.NEWS_AGENT_STORE_PATH
+  process.env.NEWS_AGENT_STORE_PATH = relativeStorePath
+
+  try {
+    const providers = await loadHostModules({ workspaceDir })
+    const toolRuntime = createToolRuntime({ providers })
+
+    const result = await toolRuntime.call({
+      name: 'poll_source_items',
+      args: {
+        sourceType: 'rss',
+        feeds: ['http://127.0.0.1:1/rss.xml'],
+        limit: 3,
+      },
+    })
+
+    assert(result && typeof result === 'object', 'poll_source_items should return an object')
+    assert.strictEqual(result.sourceType, 'rss', 'poll_source_items should echo sourceType')
+    assert(Number.isInteger(result.count), 'poll_source_items should include item count')
+    assert(Array.isArray(result.items), 'poll_source_items should include items array')
+    assert.strictEqual(result.count, result.items.length, 'count should match items length')
+  } finally {
+    if (previousStorePath == null) {
+      delete process.env.NEWS_AGENT_STORE_PATH
+    } else {
+      process.env.NEWS_AGENT_STORE_PATH = previousStorePath
+    }
+    await fs.rm(storePath, { force: true })
+  }
+})
+
+test('news-agent role connectors expose rss_poll as event batch ingress', async () => {
+  const workspaceDir = path.join(repoRoot, 'examples', 'news-agent')
+  const relativeStorePath = `.data/test-news-store-${Date.now()}-${Math.floor(Math.random() * 100000)}.json`
+  const absoluteStorePath = path.join(workspaceDir, relativeStorePath)
+  const previousStorePath = process.env.NEWS_AGENT_STORE_PATH
+  process.env.NEWS_AGENT_STORE_PATH = relativeStorePath
+
+  try {
+    const roles = await loadHostModulesByRole({ workspaceDir })
+    const connectorRuntime = createIngressConnectorRuntime({ connectors: roles.ingressConnectors })
+
+    const dispatched = await connectorRuntime.dispatch({
+      name: 'rss_poll',
+      feeds: ['http://127.0.0.1:1/rss.xml'],
+      limit: 2,
+      eventType: 'rss_ingested',
+    })
+
+    assert(Array.isArray(dispatched), 'rss_poll connector should return array of events')
+    for (const event of dispatched) {
+      assert.strictEqual(event.type, 'rss_ingested', 'rss_poll should map event type from payload override')
+      assert(event.value && typeof event.value === 'object', 'rss_poll events should include article value object')
+    }
+  } finally {
+    if (previousStorePath == null) {
+      delete process.env.NEWS_AGENT_STORE_PATH
+    } else {
+      process.env.NEWS_AGENT_STORE_PATH = previousStorePath
+    }
+    await fs.rm(absoluteStorePath, { force: true })
   }
 })
 

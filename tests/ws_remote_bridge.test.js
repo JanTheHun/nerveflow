@@ -59,6 +59,8 @@ async function createRemoteBridgeHarness() {
       data: {
         connected: true,
         active: true,
+        workspaceDir: 'workspaces-local/music-agent',
+        entrypointPath: 'entry.nrv',
         snapshot: {
           running: true,
           executionCount: 0,
@@ -86,6 +88,8 @@ async function createRemoteBridgeHarness() {
           ok: true,
           data: {
             running: true,
+            workspaceDir: 'workspaces-local/music-agent',
+            entrypointPath: 'entry.nrv',
             snapshot: {
               running: true,
               queueLength: 0,
@@ -174,6 +178,10 @@ test('ws remote bridge forwards events and supports command round-trip', async (
     const snapshot = await bridge.requestSnapshot()
     assert.equal(snapshot.running, true)
     assert.equal(typeof snapshot.snapshot, 'object')
+    assert.equal(snapshot.workspaceDir, 'workspaces-local/music-agent')
+    assert.equal(snapshot.entrypointPath, 'entry.nrv')
+    assert.equal(bridge.getStatus().workspaceDir, 'workspaces-local/music-agent')
+    assert.equal(bridge.getStatus().entrypointPath, 'entry.nrv')
 
     const enqueueResponse = await bridge.sendCommand({
       type: 'enqueue_event',

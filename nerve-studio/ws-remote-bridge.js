@@ -36,6 +36,8 @@ export function createWsRemoteBridge({
   let sessionId = ''
   let cachedSnapshot = null
   let remoteActive = false
+  let cachedWorkspaceDir = ''
+  let cachedEntrypointPath = ''
 
   const pendingByRequestId = new Map()
 
@@ -49,6 +51,10 @@ export function createWsRemoteBridge({
 
   function updateSnapshotFromPayload(payload) {
     if (!payload || typeof payload !== 'object') return
+    const workspaceDir = String(payload.workspaceDir ?? payload.snapshot?.workspaceDir ?? '').trim()
+    const entrypointPath = String(payload.entrypointPath ?? payload.snapshot?.entrypointPath ?? '').trim()
+    if (workspaceDir) cachedWorkspaceDir = workspaceDir
+    if (entrypointPath) cachedEntrypointPath = entrypointPath
     if (payload.snapshot && typeof payload.snapshot === 'object') {
       cachedSnapshot = payload.snapshot
       remoteActive = payload.snapshot.running === true
@@ -212,6 +218,8 @@ export function createWsRemoteBridge({
     return {
       running: response?.data?.running === true,
       snapshot: response?.data?.snapshot ?? null,
+      workspaceDir: String(response?.data?.workspaceDir ?? cachedWorkspaceDir),
+      entrypointPath: String(response?.data?.entrypointPath ?? cachedEntrypointPath),
     }
   }
 
@@ -222,6 +230,8 @@ export function createWsRemoteBridge({
       connecting,
       sessionId,
       remoteActive,
+      workspaceDir: cachedWorkspaceDir,
+      entrypointPath: cachedEntrypointPath,
       lastError: lastError ? String(lastError.message ?? lastError) : '',
     }
   }

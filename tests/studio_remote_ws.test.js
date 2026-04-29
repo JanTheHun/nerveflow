@@ -2,6 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createServer as createNetServer } from 'node:net'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { join, relative } from 'node:path'
 
 const SERVER_BOOT_TIMEOUT_MS = 20000
 
@@ -185,5 +187,92 @@ test('preview server proxies control commands over remote ws runtime', async () 
   } finally {
     await stopProcess(studioChild)
     await stopProcess(runtimeChild)
+  }
+})
+
+test('preview server graph endpoint returns controlEdges contract', async () => {
+  const studioPort = await findOpenPort()
+  const workspaceAbsolutePath = mkdtempSync(join(process.cwd(), '.tmp-studio-graph-'))
+  const workspaceRelativePath = relative(process.cwd(), workspaceAbsolutePath).replace(/\\/g, '/')
+
+  writeFileSync(join(workspaceAbsolutePath, 'nextv.json'), JSON.stringify({
+    entrypointPath: 'entry.nrv',
+    externals: ['bounded', 'unbounded', 'mixed', 'unknown'],
+  }, null, 2))
+
+  writeFileSync(join(workspaceAbsolutePath, 'entry.nrv'), [
+    'on "bounded"',
+    '  decision = agent("router", event.value, returns={ intent: "" })',
+    '  if decision.intent == "chat"',
+    '    emit("chat", event.value)',
+    '  end',
+    'end',
+    '',
+    'on "unbounded"',
+    '  raw = agent("router", event.value)',
+    '  if raw.intent == "chat"',
+    '    emit("chat", event.value)',
+    '  end',
+    'end',
+    '',
+    'on "mixed"',
+    '  boundedDecision = agent("router", event.value, returns={ intent: "" })',
+    '  unboundedDecision = agent("router", event.value)',
+    '  if boundedDecision.intent == unboundedDecision.intent',
+    '    emit("chat", event.value)',
+    '  end',
+    'end',
+    '',
+    'on "unknown"',
+    '  if state.mode == "debug"',
+    '    emit("chat", event.value)',
+    '  end',
+    'end',
+  ].join('\n'), 'utf8')
+
+  let studioChild
+
+  try {
+    studioChild = spawn(process.execPath, [
+      'nerve-studio/preview-server.js',
+    ], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PORT: String(studioPort),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    await waitForOutput(studioChild, 'nerve-studio preview running at')
+
+    const response = await fetch(
+      `http://127.0.0.1:${studioPort}/api/nextv/graph?workspaceDir=${encodeURIComponent(workspaceRelativePath)}`,
+    )
+    const payload = await response.json().catch(() => ({}))
+
+    assert.equal(response.ok, true)
+    assert.equal(payload.ok, true)
+    assert.equal(payload.workspaceDir, workspaceRelativePath)
+    assert.equal(payload.entrypointPath, 'entry.nrv')
+    assert.ok(Array.isArray(payload.controlEdges))
+    assert.equal(payload.controlEdges.length, 8)
+
+    const allowedProvenance = new Set(['bounded', 'unbounded', 'mixed', 'unknown'])
+    for (const edge of payload.controlEdges) {
+      assert.equal(typeof edge.eventType, 'string')
+      assert.equal(typeof edge.from, 'string')
+      assert.equal(typeof edge.to, 'string')
+      assert.equal(edge.type, 'control')
+      assert.ok(edge.branch === 'if_true' || edge.branch === 'if_false')
+      assert.ok(allowedProvenance.has(edge.provenance))
+      assert.equal(edge.boundedControl, edge.provenance === 'bounded')
+      if (edge.sourcePath) {
+        assert.equal(edge.sourcePath, 'entry.nrv')
+      }
+    }
+  } finally {
+    await stopProcess(studioChild)
+    rmSync(workspaceAbsolutePath, { recursive: true, force: true })
   }
 })

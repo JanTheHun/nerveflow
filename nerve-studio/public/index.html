@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>nerve-studio</title>
-  <link rel="stylesheet" href="styles.css?v=20260425a">
+  <link rel="stylesheet" href="styles.css?v=20260429d">
   <script src="/htmx.js"></script>
 </head>
 <body class="mode-nextv">
@@ -31,10 +31,16 @@
       <details id="settings-menu" class="settings-menu">
         <summary id="settings-btn" class="settings-btn" title="settings" aria-label="settings">⚙</summary>
         <div class="settings-popover" role="menu" aria-label="settings">
-          <div class="settings-group-label">mode</div>
-          <button id="chat-mode-btn" type="button" class="settings-item" role="menuitem" onclick="setChatMode()">chat mode</button>
-          <button id="script-mode-btn" type="button" class="settings-item" role="menuitem" onclick="setScriptMode()">script mode</button>
-          <button id="nextv-mode-btn" type="button" class="settings-item" role="menuitem" onclick="setNextVMode()">nextv mode</button>
+          <div class="settings-group-label">nextv</div>
+          <label class="settings-item" for="nextv-runtime-target">runtime target</label>
+          <select id="nextv-runtime-target" class="settings-item" onchange="setNextVRuntimeTarget(this.value)">
+            <option value="embedded">embedded runtime</option>
+            <option value="external">external runtime process</option>
+          </select>
+          <label class="settings-item check-label settings-item-checkbox" role="menuitemcheckbox" aria-label="show ingress connectors">
+            <input id="nextv-show-ingress-toggle" type="checkbox" onchange="toggleNextVIngressControlsSetting()" checked>
+            show ingress connectors
+          </label>
         </div>
       </details>
     </div>
@@ -64,9 +70,16 @@
           <button type="button" onclick="openNextVWorkspace()">open</button>
           <span class="row-label">entrypoint</span>
           <input id="nextv-entrypoint" type="text" placeholder="path/to/main.nrv (or .wfs)" autocomplete="off" spellcheck="false" />
+          <button type="button" id="nextv-run-btn" onclick="runNextVRuntime()" hidden>run</button>
           <button type="button" id="nextv-start-btn" onclick="startNextVRuntime()">start</button>
           <button type="button" id="nextv-stop-btn" onclick="stopNextVRuntime()" disabled>stop</button>
-          <button id="toggle-user-io-btn" type="button" onclick="toggleUserIOPanel()" aria-pressed="false">input</button>
+          <button id="nextv-refresh-snapshot-btn" type="button" onclick="refreshNextVSnapshot()">snapshot</button>
+        </div>
+        <div id="nextv-ingress-controls-row" class="footer-row nextv-ingress-controls-row">
+          <span class="row-label">ingress</span>
+          <input id="nextv-ingress-name" type="text" placeholder="connector name" autocomplete="off" spellcheck="false" />
+          <input id="nextv-ingress-value" type="text" placeholder="payload value (optional)" autocomplete="off" spellcheck="false" />
+          <button type="button" onclick="sendNextVIngress()">dispatch</button>
         </div>
       </div>
       <div id="script-section" class="panel-section">
@@ -77,6 +90,7 @@
             <button id="nextv-view-graph" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="setNextVPrimaryView('graph')">graph</button>
           </div>
           <div class="nextv-view-actions">
+            <button id="toggle-user-io-btn" type="button" class="panel-action" onclick="toggleUserIOPanel()" aria-pressed="false">input</button>
             <button id="toggle-nextv-dev-console-btn" type="button" class="panel-action" onclick="toggleNextVDevConsole()" aria-pressed="true">hide console</button>
             <button id="toggle-nextv-state-diff-btn" type="button" class="panel-action" onclick="toggleNextVStateDiff()" aria-pressed="false">show state</button>
           </div>
@@ -162,23 +176,19 @@
               <div class="panel-header">
                 <span>input</span>
               </div>
+              <div id="nextv-input-tabs" class="panel-tabs" role="tablist" aria-label="nextv input channels"></div>
               <div id="nextv-input-external-pane" class="nextv-input-pane" role="tabpanel">
                 <div class="panel-controls">
-                  <div class="footer-row nextv-external-row">
-                    <span class="row-label">event</span>
-                    <input id="nextv-event-value" type="text" placeholder="payload value" autocomplete="off" spellcheck="false" />
+                  <div class="footer-row nextv-external-row nextv-external-meta-row">
                     <input id="nextv-event-type" type="text" placeholder="event type (optional)" autocomplete="off" spellcheck="false" />
                     <input id="nextv-event-source" type="text" placeholder="source (optional)" autocomplete="off" spellcheck="false" />
+                  </div>
+                  <div class="footer-row nextv-external-row nextv-external-value-row">
+                    <input id="nextv-event-value" type="text" placeholder="payload value" autocomplete="off" spellcheck="false" />
                     <button type="button" onclick="sendNextVEvent()">enqueue</button>
-                    <button type="button" onclick="refreshNextVSnapshot()">snapshot</button>
+                    <button id="toggle-nextv-images-btn" type="button" onclick="toggleNextVImagesOpen()">show images</button>
                   </div>
-                  <div class="footer-row nextv-ingress-row">
-                    <span class="row-label">ingress</span>
-                    <input id="nextv-ingress-name" type="text" placeholder="connector name" autocomplete="off" spellcheck="false" />
-                    <input id="nextv-ingress-value" type="text" placeholder="payload value (optional)" autocomplete="off" spellcheck="false" />
-                    <button type="button" onclick="sendNextVIngress()">dispatch</button>
-                  </div>
-                  <div class="footer-row nextv-images-row">
+                  <div id="nextv-images-row" class="footer-row nextv-images-row">
                     <span class="row-label">images</span>
                     <div id="nextv-image-dropzone" class="nextv-image-dropzone" role="button" tabindex="0" aria-label="drop images for nextv input event">
                       <span class="nextv-image-drop-title">drop images here</span>
@@ -199,7 +209,8 @@
             <div id="user-output-section" class="panel-section">
               <div class="panel-header">
                 <span>user output</span>
-                <span class="panel-badge badge-output">text</span>
+                <div id="user-output-channel-filters" class="user-output-channel-filters" role="group" aria-label="user output channels">
+                </div>
                 <button type="button" class="panel-action" onclick="clearUserOutputPanel()">clear</button>
               </div>
               <div id="user-output" class="panel-scroll"></div>
@@ -269,6 +280,7 @@
   </main>
 
   <script src="dagre.min.js"></script>
-  <script src="app.js?v=20260425a"></script>
+  <script src="nextv_graph_mapping.js?v=20260429a"></script>
+  <script src="app.js?v=20260429d"></script>
 </body>
 </html>

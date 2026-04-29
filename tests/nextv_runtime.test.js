@@ -7,6 +7,7 @@ import {
   NextVError,
   appendAgentFormatInstructions,
   buildAgentReturnContractGuidance,
+  buildAgentRetryPrompt,
   compileAST,
   normalizeAgentFormattedOutput,
   parseNextVScript,
@@ -1330,6 +1331,20 @@ test('agent() rejects invalid validate mode', async () => {
   )
 })
 
+test('agent() rejects unsupported named arguments such as validation', async () => {
+  await assert.rejects(
+    () => runNextVScript('result = agent("classifier", "route this", returns={ intent: "" }, validation="strict")', {
+      callAgent: async () => ({ intent: 'search' }),
+    }),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_AGENT_ARGUMENT')
+      assert.match(err.message, /validation/)
+      return true
+    },
+  )
+})
+
 test('agent() rejects non-object non-array returns contract', async () => {
   await assert.rejects(
     () => runNextVScript('result = agent("classifier", "route this", returns=42)', {
@@ -1424,6 +1439,99 @@ test('agent() returns strict mode surfaces contract violation metadata via hostA
       return true
     },
   )
+})
+
+test('agent() exhausted contract retries are reflected in final error message', async () => {
+  let callCount = 0
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { classifier: { model: 'llama3' } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => {
+      callCount += 1
+      return '{"intent":[]}'
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions,
+    normalizeAgentFormattedOutput,
+    validateAgentReturnContract,
+    buildAgentReturnContractGuidance,
+    buildAgentRetryPrompt,
+  })
+
+  await assert.rejects(
+    () => runNextVScript(
+      'triage = agent("classifier", event.value, returns={ intent: ["play", "other"] }, validate="strict", retry_on_contract_violation=1)',
+      {
+        hostAdapter: adapter,
+        event: { type: 'user_input', value: 'play music' },
+      },
+    ),
+    (err) => {
+      assert.equal(err.code, 'AGENT_RETURN_CONTRACT_VIOLATION')
+      assert.equal(err.retryCount, 1)
+      assert.equal(err.attempts, 2)
+      assert.match(String(err.message ?? ''), /after 1 retry/i)
+      return true
+    },
+  )
+
+  assert.equal(callCount, 2)
+})
+
+test('agent() contract violation prefers source line/path from include-expanded scripts', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'nextv-source-line-'))
+  const entryPath = join(tmpDir, 'entry.nrv')
+  const includePath = join(tmpDir, 'intent.nrv')
+
+  writeFileSync(entryPath, 'include "intent.nrv"\n', 'utf8')
+  writeFileSync(includePath, [
+    'decision = agent("classifier", event.value, returns={ intent: ["play", "other"] }, validate="strict")',
+  ].join('\n'), 'utf8')
+
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { classifier: { model: 'llama3' } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => '{"intent":[]}',
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions,
+    normalizeAgentFormattedOutput,
+    validateAgentReturnContract,
+    buildAgentReturnContractGuidance,
+  })
+
+  try {
+    await assert.rejects(
+      () => runNextVScriptFromFile(entryPath, {
+        hostAdapter: adapter,
+        event: { type: 'user_input', value: 'play music' },
+      }),
+      (err) => {
+        assert.equal(err.code, 'AGENT_RETURN_CONTRACT_VIOLATION')
+        assert.equal(err.sourceLine, 1)
+        assert.equal(err.line, 1)
+        assert.match(String(err.sourcePath ?? ''), /intent\.nrv$/)
+        return true
+      },
+    )
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true })
+  }
 })
 
 test('agent() on_contract_violation can emit violation payload without eager evaluation', async () => {

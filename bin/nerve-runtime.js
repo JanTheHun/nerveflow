@@ -129,7 +129,47 @@ async function callOllamaAgent({ model, messages }) {
     status: response.status,
     payload,
   })
-  return String(payload?.message?.content ?? payload?.response ?? '').trim()
+
+  const promptTokens = Number.isFinite(Number(payload?.prompt_eval_count))
+    ? Number(payload.prompt_eval_count)
+    : null
+  const completionTokens = Number.isFinite(Number(payload?.eval_count))
+    ? Number(payload.eval_count)
+    : null
+  const totalTokens = (
+    Number.isFinite(promptTokens) && Number.isFinite(completionTokens)
+      ? promptTokens + completionTokens
+      : null
+  )
+
+  return {
+    text: String(payload?.message?.content ?? payload?.response ?? '').trim(),
+    metadata: {
+      provider: 'ollama',
+      model: String(model ?? payload?.model ?? '').trim(),
+      usage: {
+        promptTokens,
+        completionTokens,
+        totalTokens,
+      },
+      timings: {
+        totalDurationNs: Number.isFinite(Number(payload?.total_duration)) ? Number(payload.total_duration) : null,
+        loadDurationNs: Number.isFinite(Number(payload?.load_duration)) ? Number(payload.load_duration) : null,
+        promptEvalDurationNs: Number.isFinite(Number(payload?.prompt_eval_duration)) ? Number(payload.prompt_eval_duration) : null,
+        evalDurationNs: Number.isFinite(Number(payload?.eval_duration)) ? Number(payload.eval_duration) : null,
+      },
+      rawProvider: {
+        createdAt: String(payload?.created_at ?? ''),
+        doneReason: String(payload?.done_reason ?? ''),
+        prompt_eval_count: Number.isFinite(Number(payload?.prompt_eval_count)) ? Number(payload.prompt_eval_count) : null,
+        eval_count: Number.isFinite(Number(payload?.eval_count)) ? Number(payload.eval_count) : null,
+        prompt_eval_duration: Number.isFinite(Number(payload?.prompt_eval_duration)) ? Number(payload.prompt_eval_duration) : null,
+        eval_duration: Number.isFinite(Number(payload?.eval_duration)) ? Number(payload.eval_duration) : null,
+        total_duration: Number.isFinite(Number(payload?.total_duration)) ? Number(payload.total_duration) : null,
+        load_duration: Number.isFinite(Number(payload?.load_duration)) ? Number(payload.load_duration) : null,
+      },
+    },
+  }
 }
 
 function previewDebugText(value, maxLength = 240) {

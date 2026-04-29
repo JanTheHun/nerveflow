@@ -7,6 +7,17 @@ import { extractEventGraph } from './nextv_event_graph.js'
 const DEFAULT_MAX_STEPS = 500
 const OUTPUT_FORMATS = new Set(['text', 'console', 'voice', 'visual', 'json', 'interaction'])
 const VALID_CONTRACT_STATUSES = new Set(['ready', 'needs_input', 'error'])
+const AGENT_NAMED_ARG_ALLOWLIST = new Set([
+  'agent',
+  'prompt',
+  'instructions',
+  'messages',
+  'format',
+  'returns',
+  'validate',
+  'retry_on_contract_violation',
+  'on_contract_violation',
+])
 
 function isoNow() {
   return new Date().toISOString()
@@ -1456,6 +1467,8 @@ async function executeFunctionCall(name, args, context, origin) {
       locals: context.locals,
       line: context.line,
       statement: context.statement,
+        sourcePath: context.sourcePath,
+        sourceLine: context.sourceLine,
     })
   } catch (err) {
     if (err instanceof NextVError) throw err
@@ -1858,8 +1871,19 @@ function buildFunctions(options, runtimeContext) {
 
       return result
     },
-    agent: async ({ positional, named, state, event, locals, line, statement }) => {
+    agent: async ({ positional, named, state, event, locals, line, statement, sourcePath, sourceLine }) => {
       const context = { line, statement }
+      for (const key of Object.keys(named ?? {})) {
+        if (AGENT_NAMED_ARG_ALLOWLIST.has(key)) continue
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_AGENT_ARGUMENT',
+          statement,
+          message: `agent() received unsupported named argument "${key}". Use: agent, prompt, instructions, messages, format, returns, validate, retry_on_contract_violation, on_contract_violation.`,
+        })
+      }
+
       const agentName = String(positional[0] ?? named?.agent ?? '').trim()
       const promptRaw = positional[1] ?? named?.prompt
       const prompt = coerceTextValue(promptRaw, context, 'agent() prompt').trim()
@@ -1930,6 +1954,8 @@ function buildFunctions(options, runtimeContext) {
         locals,
         line,
         statement,
+        sourcePath,
+        sourceLine,
       })
 
       if (callResult && typeof callResult === 'object' && callResult.__nextv_contract_violation__ === true) {
@@ -1949,7 +1975,22 @@ function buildFunctions(options, runtimeContext) {
         return null
       }
 
-      return callResult
+      const normalizedCallResult = (
+        callResult && typeof callResult === 'object' && !Array.isArray(callResult) && Object.prototype.hasOwnProperty.call(callResult, 'value')
+          ? callResult
+          : { value: callResult, metadata: null }
+      )
+
+      if (normalizedCallResult.metadata && Array.isArray(runtimeContext.agentCallMetadata)) {
+        runtimeContext.agentCallMetadata.push({
+          agent: agentName,
+          line,
+          statement,
+          metadata: normalizedCallResult.metadata,
+        })
+      }
+
+      return normalizedCallResult.value
     },
     script: async ({ positional, named, state, event, locals, line, statement }) => {
       const pathValue = String(positional[0] ?? named?.path ?? '').trim()
@@ -2122,6 +2163,7 @@ export async function runNextVScript(source, options = {}) {
   let activeEvent = initialEvent
   const emittedEvents = []
   const warnings = []
+  const agentCallMetadata = []
   const subscriptions = new Map()
   const signalQueue = []
   let eventSequence = 0
@@ -2227,6 +2269,7 @@ export async function runNextVScript(source, options = {}) {
         state,
         event: activeEvent,
         executionRole,
+        agentCallMetadata,
         emitStateUpdates: runtimeOptions.emitStateUpdates === true,
         emitEvent: (payload) => emitEvent(payload, { step: steps, line: instr.line }),
         emitWarning: (payload) => emitEvent({ type: 'warning', severity: 'warning', ...payload }, { step: steps, line: instr.line }),
@@ -2490,6 +2533,7 @@ export async function runNextVScript(source, options = {}) {
     stopped,
     returnValue,
     steps,
+    agentCallMetadata,
     events: emittedEvents,
     ir: instructions,
   }

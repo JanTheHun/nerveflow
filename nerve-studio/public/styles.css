@@ -120,6 +120,11 @@ header {
   text-align: left;
 }
 
+.settings-item-checkbox {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 .chat-header-controls {
   display: flex;
   align-items: center;
@@ -457,7 +462,7 @@ body.mode-nextv .open-file-tabs-row + .panel-editor-shell {
   align-self: flex-start;
   max-width: 100%;
   padding: 8px 10px;
-  border: 1px solid #2f3c48;
+  border: 2px solid #3f556b;
   border-radius: 6px;
   background: #101820;
   color: #d9edf8;
@@ -466,9 +471,100 @@ body.mode-nextv .open-file-tabs-row + .panel-editor-shell {
   line-height: 1.45;
 }
 
+.user-output-message.user-output-channel-text {
+  border-color: #7be8d3;
+}
+
+.user-output-message.user-output-channel-voice {
+  border-color: #76bfff;
+}
+
+.user-output-message.user-output-channel-json {
+  border-color: #bdc7d1;
+}
+
+.user-output-message.user-output-channel-declared {
+  border-color: #e0b66b;
+  background: #1c1610;
+  color: #f4dfb7;
+}
+
 .user-output-empty {
   color: var(--dim);
   opacity: 0.85;
+}
+
+.user-output-channel-filters {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: 8px;
+}
+
+.channel-group-separator {
+  width: 1px;
+  height: 18px;
+  margin: 0 2px 0 4px;
+  background: #3b3326;
+  box-shadow: 1px 0 0 rgba(224, 182, 107, 0.18);
+}
+
+.user-output-channel-chip {
+  background: transparent;
+  cursor: pointer;
+}
+
+.user-output-channel-chip[data-channel="text"] {
+  color: #8ad7c9;
+}
+
+.user-output-channel-chip[data-channel="voice"] {
+  color: #7fb2df;
+}
+
+.user-output-channel-chip[data-channel="json"] {
+  color: #9aa7b4;
+}
+
+.user-output-channel-chip.is-declared {
+  color: #e0b66b;
+  border-color: #6d5530;
+  background: rgba(224, 182, 107, 0.12);
+}
+
+#nextv-input-tabs {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+#nextv-input-tabs .panel-tab:not(.is-declared) {
+  border-color: #3a4652;
+  color: #aeb9c4;
+  background: #111820;
+}
+
+#nextv-input-tabs .panel-tab:not(.is-declared).active {
+  border-color: #7a8c9d;
+  color: #dde7f0;
+  background: #18232d;
+}
+
+#nextv-input-tabs .panel-tab.is-declared {
+  border-color: #6d5530;
+  color: #e0b66b;
+  background: rgba(224, 182, 107, 0.08);
+}
+
+#nextv-input-tabs .panel-tab.is-declared.active {
+  border-color: #e0b66b;
+  color: #f7dfb0;
+  background: rgba(224, 182, 107, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(224, 182, 107, 0.18);
+}
+
+.user-output-channel-chip.is-off {
+  opacity: 0.5;
 }
 
 #user-input-section {
@@ -539,13 +635,6 @@ body.mode-script #panel-splitter {
 
 body.mode-script #conversation-panel {
   display: none;
-}
-
-body.mode-chat #chat-mode-btn,
-body.mode-script #script-mode-btn,
-body.mode-nextv #nextv-mode-btn {
-  border-color: var(--accent);
-  color: var(--accent);
 }
 
 body.mode-nextv .chat-header-controls {
@@ -1366,6 +1455,11 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
   background: #13243a;
 }
 
+.nextv-graph-chip.declared_output {
+  border-color: #5bcfba;
+  background: #0f2220;
+}
+
 .nextv-graph-chip.side_effect {
   border-color: #d16969;
   background: #2c1616;
@@ -1374,6 +1468,31 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
 .nextv-graph-chip.mixed {
   border-color: #d7ba7d;
   background: #2c2414;
+}
+
+.nextv-graph-chip.control-bounded {
+  border-color: #5fd18a;
+  background: #14231a;
+}
+
+.nextv-graph-chip.control-unbounded {
+  border-color: #d16969;
+  background: #2c1616;
+}
+
+.nextv-graph-chip.control-mixed {
+  border-color: #d7ba7d;
+  background: #2c2414;
+}
+
+.nextv-graph-chip.control-unknown {
+  border-color: #8eacc4;
+  background: #17232e;
+}
+
+.nextv-graph-chip.control-overlay-off {
+  border-color: #44515f;
+  background: #17202a;
 }
 
 .graph-empty.error {
@@ -1437,6 +1556,10 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
   stroke: #5aa8ff;
 }
 
+.nextv-graph-edge.declared_output {
+  stroke: #5bcfba;
+}
+
 .nextv-graph-edge.side_effect {
   stroke: #d16969;
 }
@@ -1475,6 +1598,17 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
   opacity: 1;
 }
 
+.nextv-graph-edge-label {
+  font-size: 9px;
+  fill: #6f92ab;
+  pointer-events: none;
+  letter-spacing: 0.02em;
+}
+
+.nextv-graph-edge-label.subscription {
+  fill: #7f9fb6;
+}
+
 /* Timer fires edges (timer node → event node): dashed, muted teal */
 .nextv-graph-edge.timer-fires {
   stroke: #3a6e7a;
@@ -1485,6 +1619,30 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
 .nextv-graph-edge.timer-fires.is-active {
   stroke: #4ec9b0;
   opacity: 1;
+}
+
+.nextv-graph-edge.control-bounded {
+  stroke: #5fd18a;
+  stroke-dasharray: 3 2;
+}
+
+.nextv-graph-edge.control-unbounded {
+  stroke: #d16969;
+  stroke-dasharray: 3 2;
+}
+
+.nextv-graph-edge.control-mixed {
+  stroke: #d7ba7d;
+  stroke-dasharray: 2 2;
+}
+
+.nextv-graph-edge.control-unknown {
+  stroke: #8eacc4;
+  stroke-dasharray: 2 3;
+}
+
+.nextv-graph-edge.control-overlay-off {
+  stroke: #5b6570;
 }
 
 /* Timer nodes: smaller circle, teal accent */
@@ -1498,6 +1656,39 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
 .nextv-graph-node.timer-node text {
   font-size: 9px;
   fill: #6ab0b8;
+}
+
+.nextv-graph-node.control-branch-node .nextv-graph-node-shape {
+  stroke-dasharray: 3 2;
+}
+
+.nextv-graph-node.control-branch-node.control-bounded .nextv-graph-node-shape {
+  fill: #102319;
+  stroke: #5fd18a;
+}
+
+.nextv-graph-node.control-branch-node.control-unbounded .nextv-graph-node-shape {
+  fill: #2a1515;
+  stroke: #d16969;
+}
+
+.nextv-graph-node.control-branch-node.control-mixed .nextv-graph-node-shape {
+  fill: #2a2314;
+  stroke: #d7ba7d;
+}
+
+.nextv-graph-node.control-branch-node.control-unknown .nextv-graph-node-shape {
+  fill: #13202a;
+  stroke: #8eacc4;
+}
+
+.nextv-graph-node.control-branch-node.control-overlay-off .nextv-graph-node-shape {
+  fill: #131a22;
+  stroke: #5b6570;
+}
+
+.nextv-graph-node.control-branch-node text {
+  font-size: 10px;
 }
 
 /* Timer pulse: brief glow flash when timer fires */
@@ -1561,6 +1752,12 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
 .nextv-graph-node.effect .nextv-graph-node-shape {
   fill: #2f1717;
   stroke: #d16969;
+  stroke-dasharray: 4 2;
+}
+
+.nextv-graph-node.effect.declared_output .nextv-graph-node-shape {
+  fill: #102522;
+  stroke: #5bcfba;
   stroke-dasharray: 4 2;
 }
 
@@ -1809,6 +2006,10 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
 
 .nextv-graph-transition.llm {
   border-color: #37648a;
+}
+
+.nextv-graph-transition.declared_output {
+  border-color: #3d6b5e;
 }
 
 .nextv-graph-transition.side_effect {
@@ -2377,7 +2578,8 @@ input[type="text"]:focus { border-color: var(--accent); }
 #loop-event-value { flex: 1; min-width: 160px; }
 #loop-event-type { flex: 0 0 180px; }
 #loop-event-source { flex: 0 0 120px; }
-#nextv-entrypoint { flex: 0 0 220px; min-width: 180px; max-width: 260px; }
+#nextv-workspace-dir { flex: 1 1 360px; min-width: 280px; }
+#nextv-entrypoint { flex: 0 0 150px; min-width: 120px; max-width: 180px; }
 #nextv-state-path { flex: 1; min-width: 160px; }
 #nextv-event-value { flex: 1; min-width: 160px; }
 #nextv-event-type { flex: 0 0 180px; }
@@ -2392,19 +2594,33 @@ input[type="text"]:focus { border-color: var(--accent); }
   flex-wrap: wrap;
 }
 
-.nextv-external-row .row-label {
-  min-width: 0;
+.nextv-external-meta-row {
+  padding-bottom: 2px;
 }
 
-.nextv-external-row #nextv-event-value,
-.nextv-external-row #nextv-event-type,
-.nextv-external-row #nextv-event-source {
-  flex: 1 1 180px;
-  min-width: 140px;
+.nextv-external-meta-row #nextv-event-type,
+.nextv-external-meta-row #nextv-event-source {
+  flex: 1 1 220px;
+  min-width: 160px;
 }
 
-.nextv-external-row button {
+.nextv-external-value-row {
+  padding-top: 2px;
+}
+
+.nextv-external-value-row #nextv-event-value {
+  flex: 1 1 280px;
+  min-width: 180px;
+}
+
+.nextv-external-value-row button {
   flex: 0 0 auto;
+}
+
+.nextv-ingress-controls-row #nextv-ingress-name,
+.nextv-ingress-controls-row #nextv-ingress-value {
+  flex: 1 1 220px;
+  min-width: 160px;
 }
 
 .nextv-images-row {

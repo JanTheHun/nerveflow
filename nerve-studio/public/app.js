@@ -16,6 +16,8 @@ let isRemoteMode = false
 let isRemoteControlMode = false
 let isRemoteRuntimeConnected = true
 let remoteTransport = 'local'
+let remoteRuntimeWorkspaceDir = ''
+let remoteRuntimeEntrypointPath = ''
 let nextVEventSource = null
 let nextVHasLiveRuntimeEvents = false
 let visualOutputWindow = null
@@ -41,6 +43,7 @@ const storageKeys = {
   nextVDevTab: 'local-agent.nextv.devTab',
   nextVDevConsoleOpen: 'local-agent.nextv.devConsoleOpen',
   nextVInputTab: 'local-agent.nextv.inputTab',
+  nextVImagesOpen: 'local-agent.nextv.imagesOpen',
   nextVOpenFile: 'local-agent.nextv.openFilePath',
   nextVTreeWidth: 'local-agent.nextv.treeWidth',
   nextVTreeDrawerOpen: 'local-agent.nextv.treeDrawerOpen',
@@ -49,7 +52,12 @@ const storageKeys = {
   nextVStateFilter: 'local-agent.nextv.stateFilter',
   nextVUserIOOpen: 'local-agent.nextv.userIOOpen',
   nextVUserIOWidth: 'local-agent.nextv.userIOWidth',
+  nextVUserOutputChannels: 'local-agent.nextv.userOutputChannels',
+  nextVIngressControlsVisible: 'local-agent.nextv.ingressControlsVisible',
+  nextVRuntimeTarget: 'local-agent.nextv.runtimeTarget',
   nextVGraphDirection: 'local-agent.nextv.graphDirection',
+  nextVControlOverlay: 'local-agent.nextv.controlOverlay',
+  nextVShowControlBranches: 'local-agent.nextv.showControlBranches',
 }
 
 const MIN_LEFT_PANEL_SECTION_HEIGHT = 90
@@ -90,6 +98,7 @@ const userIOPanelState = {
 const nextVGraphState = {
   nodes: [],
   edges: [],
+  controlEdges: [],
   cycles: [],
   entrypointPath: '',
   ignoredDynamicEmits: [],
@@ -116,6 +125,8 @@ const nextVGraphState = {
   selectedNodeId: '',
   autoFollowEnabled: false,
   layoutDirection: 'TB',
+  controlOverlayEnabled: true,
+  showControlBranches: false,
   setSelectedGraphNodeFn: null,
   layoutPositions: new Map(),
   savedViewportState: null,
@@ -129,8 +140,35 @@ const inputPanelState = {
   currentTab: 'ui',
 }
 
+const nextVInputChannelState = {
+  declaredExternals: [],
+}
+
 const nextVInputImageState = {
   entries: [],
+  open: false,
+}
+
+const nextVIngressControlsState = {
+  visible: true,
+}
+
+const nextVRuntimeTargetState = {
+  target: 'embedded',
+}
+
+const nextVGraphMappingApi = globalThis?.nextVGraphMapping || null
+
+let nextVManagedProcessRunning = false
+
+const DEFAULT_USER_OUTPUT_CHANNELS = ['text', 'json', 'voice']
+
+const userOutputChannelState = {
+  declaredEffects: [],
+}
+
+const userOutputFilterState = {
+  channels: new Set(DEFAULT_USER_OUTPUT_CHANNELS),
 }
 
 // --- DOM helpers ---
@@ -162,8 +200,6 @@ const nextVViewGraph = document.getElementById('nextv-view-graph')
 const toggleNextVDevConsoleBtn = document.getElementById('toggle-nextv-dev-console-btn')
 const toggleUserIOBtn = document.getElementById('toggle-user-io-btn')
 const nextVInputTabs = document.getElementById('nextv-input-tabs')
-const nextVInputTabUi = document.getElementById('nextv-input-tab-ui')
-const nextVInputTabExternal = document.getElementById('nextv-input-tab-external')
 const scriptDirtyBadge = document.getElementById('script-dirty-badge')
 const scriptOpenFileLabel = document.getElementById('script-open-file-label')
 const openFileTabs = document.getElementById('open-file-tabs')
@@ -176,14 +212,21 @@ const nextVEventTypeInput = document.getElementById('nextv-event-type')
 const nextVEventSourceInput = document.getElementById('nextv-event-source')
 const nextVIngressNameInput = document.getElementById('nextv-ingress-name')
 const nextVIngressValueInput = document.getElementById('nextv-ingress-value')
+const nextVIngressControlsRow = document.getElementById('nextv-ingress-controls-row')
+const nextVShowIngressToggle = document.getElementById('nextv-show-ingress-toggle')
+const nextVImagesRow = document.getElementById('nextv-images-row')
+const toggleNextVImagesBtn = document.getElementById('toggle-nextv-images-btn')
 const nextVImageDropzone = document.getElementById('nextv-image-dropzone')
 const nextVImageInput = document.getElementById('nextv-image-input')
 const nextVImageCount = document.getElementById('nextv-image-count')
 const nextVImageList = document.getElementById('nextv-image-list')
 const nextVStartBtn = document.getElementById('nextv-start-btn')
+const nextVRunBtn = document.getElementById('nextv-run-btn')
 const nextVStopBtn = document.getElementById('nextv-stop-btn')
+const nextVRuntimeTargetInput = document.getElementById('nextv-runtime-target')
 const remoteModeBadge = document.getElementById('remote-mode-badge')
 const userOutput = document.getElementById('user-output')
+const userOutputChannelFilters = document.getElementById('user-output-channel-filters')
 const userInputText = document.getElementById('user-input-text')
 const cancelScriptBtn = document.getElementById('cancel-script-btn')
 const scriptSection = document.getElementById('script-section')
@@ -209,7 +252,6 @@ const nextVStateDiffTabState = document.getElementById('nextv-state-diff-tab-sta
 const nextVConsoleOutput = document.getElementById('nextv-console-output')
 const settingsMenu = document.getElementById('settings-menu')
 const scriptEditorPanel = document.getElementById('script-editor-panel')
-const nextVInputUiPane = document.getElementById('nextv-input-ui-pane')
 const nextVInputExternalPane = document.getElementById('nextv-input-external-pane')
 const fileTree = document.getElementById('file-tree')
 const fileTreePane = document.getElementById('file-tree-pane')
@@ -226,7 +268,147 @@ function updateScriptRunControls() {
   }
 }
 
-function appendUserOutputMessage(text) {
+function normalizeDeclaredEffectChannels(rawChannels) {
+  if (Array.isArray(rawChannels)) {
+    return [...new Set(rawChannels.map((channel) => String(channel ?? '').trim().toLowerCase()).filter(Boolean))]
+  }
+  if (!rawChannels || typeof rawChannels !== 'object' || Array.isArray(rawChannels)) {
+    return []
+  }
+  return [...new Set(Object.keys(rawChannels).map((channel) => String(channel ?? '').trim().toLowerCase()).filter(Boolean))]
+}
+
+function getAvailableUserOutputChannels() {
+  return [...new Set([...DEFAULT_USER_OUTPUT_CHANNELS, ...userOutputChannelState.declaredEffects])]
+}
+
+function normalizeUserOutputChannels(raw, allowedChannels = getAvailableUserOutputChannels()) {
+  if (!Array.isArray(raw)) return []
+  const allowed = new Set(allowedChannels.map((channel) => String(channel ?? '').trim().toLowerCase()).filter(Boolean))
+  return [...new Set(raw.map((channel) => String(channel ?? '').trim().toLowerCase()).filter((channel) => allowed.has(channel)))]
+}
+
+function normalizeUserOutputChannel(channel, fallback = 'text') {
+  const normalized = String(channel ?? '').trim().toLowerCase()
+  return normalized || fallback
+}
+
+function isBuiltinUserOutputChannel(channel) {
+  return DEFAULT_USER_OUTPUT_CHANNELS.includes(normalizeUserOutputChannel(channel, ''))
+}
+
+function getUserOutputChannelClassName(channel) {
+  const normalized = normalizeUserOutputChannel(channel)
+  if (isBuiltinUserOutputChannel(normalized)) {
+    return ` user-output-channel-${normalized}`
+  }
+  return ' user-output-channel-declared'
+}
+
+function setDeclaredEffectChannels(channels, options = {}) {
+  const { preserveSelection = true, persist = true } = options
+  const nextDeclared = normalizeDeclaredEffectChannels(channels)
+  const previousAvailable = new Set(getAvailableUserOutputChannels())
+  userOutputChannelState.declaredEffects = nextDeclared
+  const available = getAvailableUserOutputChannels()
+  const availableSet = new Set(available)
+
+  if (preserveSelection) {
+    const nextSelected = new Set(
+      [...userOutputFilterState.channels].filter((channel) => availableSet.has(channel))
+    )
+    for (const channel of available) {
+      if (!previousAvailable.has(channel)) {
+        nextSelected.add(channel)
+      }
+    }
+    if (nextSelected.size === 0) {
+      for (const channel of available) nextSelected.add(channel)
+    }
+    userOutputFilterState.channels = nextSelected
+  } else {
+    userOutputFilterState.channels = new Set(available)
+  }
+
+  renderUserOutputChannelFilters()
+  if (persist) {
+    persistUserOutputChannels()
+  }
+  applyUserOutputChannelVisibility()
+}
+
+function persistUserOutputChannels() {
+  localStorage.setItem(storageKeys.nextVUserOutputChannels, [...userOutputFilterState.channels].join(','))
+}
+
+function renderUserOutputChannelFilters() {
+  if (!userOutputChannelFilters) return
+  const channels = getAvailableUserOutputChannels()
+  userOutputChannelFilters.innerHTML = ''
+  let separatorInserted = false
+
+  for (const channel of channels) {
+    if (!separatorInserted && !isBuiltinUserOutputChannel(channel)) {
+      const separator = document.createElement('span')
+      separator.className = 'channel-group-separator'
+      separator.setAttribute('aria-hidden', 'true')
+      userOutputChannelFilters.appendChild(separator)
+      separatorInserted = true
+    }
+
+    const chip = document.createElement('button')
+    chip.type = 'button'
+    chip.className = 'panel-badge badge-output user-output-channel-chip'
+    chip.setAttribute('data-channel', channel)
+    if (!isBuiltinUserOutputChannel(channel)) {
+      chip.classList.add('is-declared')
+    }
+    chip.textContent = channel
+    chip.addEventListener('click', () => {
+      toggleUserOutputChannel(channel)
+    })
+    userOutputChannelFilters.appendChild(chip)
+  }
+
+  const chips = userOutputChannelFilters.querySelectorAll('[data-channel]')
+  for (const chip of chips) {
+    const channel = normalizeUserOutputChannel(chip.getAttribute('data-channel'))
+    const selected = userOutputFilterState.channels.has(channel)
+    chip.classList.toggle('is-off', !selected)
+    chip.setAttribute('aria-pressed', selected ? 'true' : 'false')
+  }
+}
+
+function toggleUserOutputChannel(channel) {
+  const normalized = normalizeUserOutputChannel(channel, '')
+  if (!normalized) return
+  if (userOutputFilterState.channels.has(normalized)) {
+    userOutputFilterState.channels.delete(normalized)
+  } else {
+    userOutputFilterState.channels.add(normalized)
+  }
+  renderUserOutputChannelFilters()
+  persistUserOutputChannels()
+  applyUserOutputChannelVisibility()
+}
+
+function isUserOutputChannelEnabled(format) {
+  const channel = normalizeUserOutputChannel(format)
+  return userOutputFilterState.channels.has(channel)
+}
+
+function applyUserOutputChannelVisibility() {
+  if (!userOutput) return
+  const rows = userOutput.querySelectorAll('.user-output-message')
+  for (const row of rows) {
+    const rowChannel = normalizeUserOutputChannel(row.getAttribute('data-channel'))
+    const show = isUserOutputChannelEnabled(rowChannel)
+    row.hidden = !show
+    row.style.display = show ? '' : 'none'
+  }
+}
+
+function appendUserOutputMessage(text, channel = 'text') {
   if (!userOutput) return
   const content = String(text ?? '').trim()
   if (!content) return
@@ -235,20 +417,25 @@ function appendUserOutputMessage(text) {
   if (empty) empty.remove()
 
   const row = document.createElement('div')
-  row.className = 'user-output-message'
+  const normalizedChannel = normalizeUserOutputChannel(channel)
+  row.className = `user-output-message${getUserOutputChannelClassName(normalizedChannel)}`
+  row.setAttribute('data-channel', normalizedChannel)
   row.textContent = content
   userOutput.appendChild(row)
+  applyUserOutputChannelVisibility()
   userOutput.scrollTop = userOutput.scrollHeight
 }
 
-function appendUserOutputVoice(event) {
+function appendUserOutputVoice(event, channel = 'voice') {
   if (!userOutput) return
 
   const empty = userOutput.querySelector('.user-output-empty')
   if (empty) empty.remove()
 
+  const normalizedChannel = normalizeUserOutputChannel(channel, 'voice')
   const row = document.createElement('div')
-  row.className = 'user-output-message'
+  row.className = `user-output-message${getUserOutputChannelClassName(normalizedChannel)}`
+  row.setAttribute('data-channel', normalizedChannel)
 
   const content = String(event?.content ?? '').trim()
   if (content) {
@@ -263,6 +450,7 @@ function appendUserOutputVoice(event) {
     errorNode.textContent = `[voice error] ${voiceError}`
     row.appendChild(errorNode)
     userOutput.appendChild(row)
+    applyUserOutputChannelVisibility()
     userOutput.scrollTop = userOutput.scrollHeight
     return
   }
@@ -278,6 +466,7 @@ function appendUserOutputVoice(event) {
   }
 
   userOutput.appendChild(row)
+  applyUserOutputChannelVisibility()
   userOutput.scrollTop = userOutput.scrollHeight
 }
 
@@ -344,6 +533,7 @@ function clearUserOutputPanel() {
   empty.className = 'user-output-empty'
   empty.textContent = 'No user output yet.'
   userOutput.appendChild(empty)
+  applyUserOutputChannelVisibility()
   setStatus('user output cleared')
 }
 
@@ -362,7 +552,7 @@ async function sendNextVUserText() {
   try {
     const eventType = 'user_text'
     const source = 'UI'
-    const res = await fetch('/api/nextv/event', {
+    const res = await fetch(buildNextVApiPath('/api/nextv/event'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ value, eventType, source }),
@@ -525,6 +715,58 @@ function setNextVGraphDirection(direction, options = {}) {
   }
 }
 
+function setNextVControlOverlayEnabled(enabled, options = {}) {
+  const { persist = true, refresh = true } = options
+  const nextEnabled = enabled !== false
+  nextVGraphState.controlOverlayEnabled = nextEnabled
+
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVControlOverlay, nextEnabled ? '1' : '0')
+  }
+
+  if (refresh && isNextVMode() && nextVViewState.currentView === 'graph') {
+    refreshNextVGraph({
+      silent: true,
+      preserveViewport: true,
+      viewportStateOverride: nextVGraphState.savedViewportState,
+    })
+  }
+}
+
+function isNextVControlOverlayEnabled() {
+  return nextVGraphState.controlOverlayEnabled !== false
+}
+
+function setNextVControlBranchesVisible(enabled, options = {}) {
+  const { persist = true, refresh = true } = options
+  const nextEnabled = enabled === true
+  nextVGraphState.showControlBranches = nextEnabled
+
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVShowControlBranches, nextEnabled ? '1' : '0')
+  }
+
+  if (refresh && isNextVMode() && nextVViewState.currentView === 'graph') {
+    refreshNextVGraph({
+      silent: true,
+      preserveViewport: true,
+      viewportStateOverride: nextVGraphState.savedViewportState,
+    })
+  }
+}
+
+function isNextVControlBranchesVisible() {
+  return nextVGraphState.showControlBranches === true
+}
+
+function getControlOverlayClassName(provenance) {
+  if (typeof nextVGraphMappingApi?.getControlOverlayClassName === 'function') {
+    return nextVGraphMappingApi.getControlOverlayClassName(provenance, isNextVControlOverlayEnabled())
+  }
+  if (!isNextVControlOverlayEnabled()) return 'control-overlay-off'
+  return `control-${getControlProvenanceClass(provenance)}`
+}
+
 function setNextVStateDiffTab(tab) {
   const nextTab = tab === 'state' ? 'state' : 'diff'
   if (nextVStateDiffTabDiff) {
@@ -664,23 +906,176 @@ function toggleUserIOPanel() {
   setUserIOPanelOpen(!userIOPanelState.open)
 }
 
+function setNextVImagesOpen(open, options = {}) {
+  const { persist = true } = options
+  nextVInputImageState.open = open === true
+
+  if (nextVImagesRow) {
+    nextVImagesRow.hidden = !nextVInputImageState.open
+    nextVImagesRow.style.display = nextVInputImageState.open ? '' : 'none'
+  }
+
+  const count = nextVInputImageState.entries.length
+  if (toggleNextVImagesBtn) {
+    toggleNextVImagesBtn.textContent = nextVInputImageState.open
+      ? 'hide images'
+      : (count > 0 ? `show images (${count})` : 'show images')
+    toggleNextVImagesBtn.setAttribute('aria-pressed', nextVInputImageState.open ? 'true' : 'false')
+  }
+
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVImagesOpen, nextVInputImageState.open ? '1' : '0')
+  }
+}
+
+function toggleNextVImagesOpen() {
+  setNextVImagesOpen(!nextVInputImageState.open)
+}
+
+function setNextVIngressControlsVisible(visible, options = {}) {
+  const { persist = true } = options
+  nextVIngressControlsState.visible = visible === true
+
+  if (nextVIngressControlsRow) {
+    nextVIngressControlsRow.hidden = !nextVIngressControlsState.visible
+    nextVIngressControlsRow.style.display = nextVIngressControlsState.visible ? '' : 'none'
+  }
+
+  if (nextVShowIngressToggle) {
+    nextVShowIngressToggle.checked = nextVIngressControlsState.visible
+  }
+
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVIngressControlsVisible, nextVIngressControlsState.visible ? '1' : '0')
+  }
+}
+
+function toggleNextVIngressControlsSetting() {
+  const visible = nextVShowIngressToggle?.checked !== false
+  setNextVIngressControlsVisible(visible)
+}
+
+function normalizeNextVRuntimeTarget(value) {
+  return String(value ?? '').trim().toLowerCase() === 'external' ? 'external' : 'embedded'
+}
+
+function getNextVRuntimeTarget() {
+  return normalizeNextVRuntimeTarget(nextVRuntimeTargetState.target)
+}
+
+function setNextVRuntimeTarget(value, options = {}) {
+  const { persist = true, sync = true } = options
+  const normalized = normalizeNextVRuntimeTarget(value)
+  nextVRuntimeTargetState.target = normalized
+  if (nextVRuntimeTargetInput) {
+    nextVRuntimeTargetInput.value = normalized
+  }
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVRuntimeTarget, normalized)
+  }
+  if (sync) {
+    syncNextVRuntimeState()
+  }
+}
+
+function buildNextVApiPath(pathname) {
+  const params = new URLSearchParams()
+  params.set('runtimeTarget', getNextVRuntimeTarget())
+  return `${pathname}?${params.toString()}`
+}
+
+function normalizeDeclaredExternalChannels(rawChannels) {
+  if (!Array.isArray(rawChannels)) return []
+  return [...new Set(rawChannels.map((channel) => String(channel ?? '').trim()).filter(Boolean))]
+}
+
+function getSelectedNextVInputChannel(tab = inputPanelState.currentTab) {
+  const rawTab = String(tab ?? '').trim()
+  if (!rawTab.startsWith('channel:')) return ''
+  const channel = rawTab.slice('channel:'.length).trim()
+  if (!channel) return ''
+  return nextVInputChannelState.declaredExternals.includes(channel) ? channel : ''
+}
+
+function renderNextVInputTabs() {
+  if (!nextVInputTabs) return
+
+  const selectedChannel = getSelectedNextVInputChannel()
+  const selectedTab = selectedChannel ? `channel:${selectedChannel}` : 'manual'
+  const entries = [
+    { id: 'manual', label: 'manual' },
+    ...nextVInputChannelState.declaredExternals.map((channel) => ({
+      id: `channel:${channel}`,
+      label: channel,
+    })),
+  ]
+
+  nextVInputTabs.innerHTML = ''
+  for (const entry of entries) {
+    if (entry.id !== 'manual' && nextVInputTabs.childElementCount === 1) {
+      const separator = document.createElement('span')
+      separator.className = 'channel-group-separator'
+      separator.setAttribute('aria-hidden', 'true')
+      nextVInputTabs.appendChild(separator)
+    }
+
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = `panel-tab${entry.id === selectedTab ? ' active' : ''}`
+    if (entry.id !== 'manual') {
+      button.classList.add('is-declared')
+    }
+    button.setAttribute('role', 'tab')
+    button.setAttribute('aria-selected', entry.id === selectedTab ? 'true' : 'false')
+    button.textContent = entry.label
+    button.addEventListener('click', () => {
+      setNextVInputTab(entry.id)
+    })
+    nextVInputTabs.appendChild(button)
+  }
+}
+
+function syncSelectedInputChannelFields() {
+  const channel = getSelectedNextVInputChannel()
+  if (nextVEventTypeInput) {
+    nextVEventTypeInput.disabled = Boolean(channel)
+    nextVEventTypeInput.value = channel || String(nextVEventTypeInput.value ?? '')
+  }
+  if (nextVEventSourceInput) {
+    nextVEventSourceInput.disabled = false
+    nextVEventSourceInput.value = channel ? '' : String(nextVEventSourceInput.value ?? '')
+  }
+}
+
+function setDeclaredExternalChannels(channels, options = {}) {
+  const { preserveSelection = true } = options
+  nextVInputChannelState.declaredExternals = normalizeDeclaredExternalChannels(channels)
+
+  if (!preserveSelection) {
+    inputPanelState.currentTab = 'manual'
+  }
+
+  const selectedChannel = getSelectedNextVInputChannel(inputPanelState.currentTab)
+  if (!selectedChannel && String(inputPanelState.currentTab ?? '').trim().startsWith('channel:')) {
+    inputPanelState.currentTab = 'manual'
+  }
+
+  renderNextVInputTabs()
+  syncSelectedInputChannelFields()
+}
+
 function setNextVInputTab(tab, options = {}) {
   const { persist = true } = options
-  const nextTab = 'external'
+  const requestedTab = String(tab ?? '').trim()
+  const selectedChannel = getSelectedNextVInputChannel(requestedTab)
+  const nextTab = selectedChannel ? `channel:${selectedChannel}` : 'manual'
   inputPanelState.currentTab = nextTab
 
-  if (nextVInputTabUi) {
-    nextVInputTabUi.classList.toggle('active', nextTab === 'ui')
-    nextVInputTabUi.setAttribute('aria-selected', nextTab === 'ui' ? 'true' : 'false')
-  }
-
-  if (nextVInputTabExternal) {
-    nextVInputTabExternal.classList.toggle('active', nextTab === 'external')
-    nextVInputTabExternal.setAttribute('aria-selected', nextTab === 'external' ? 'true' : 'false')
-  }
+  renderNextVInputTabs()
+  syncSelectedInputChannelFields()
 
   if (nextVInputExternalPane) {
-    const showExternal = isNextVMode() && nextTab === 'external'
+    const showExternal = isNextVMode()
     nextVInputExternalPane.classList.toggle('active-input-pane', showExternal)
   }
 
@@ -690,7 +1085,7 @@ function setNextVInputTab(tab, options = {}) {
 }
 
 function setAppMode(mode) {
-  const nextMode = mode === 'script' || mode === 'nextv' ? mode : 'chat'
+  const nextMode = 'nextv'
   document.body.classList.remove('mode-chat', 'mode-script', 'mode-nextv')
   document.body.classList.add(`mode-${nextMode}`)
   if (settingsMenu) settingsMenu.removeAttribute('open')
@@ -698,24 +1093,18 @@ function setAppMode(mode) {
   setNextVDevTab(tracePanelState.currentTab, { persist: false })
   setNextVInputTab(inputPanelState.currentTab, { persist: false })
   localStorage.setItem(storageKeys.mode, nextMode)
-  if (nextMode === 'script' || nextMode === 'nextv') {
-    window.requestAnimationFrame(() => {
-      applyStoredLeftPanelHeights()
-      setNextVDevConsoleOpen(nextVPanelState.devConsoleOpen, { persist: false })
-    })
-  }
-
-  if (nextMode !== 'nextv' && !nextVRuntimeRunning) {
-    closeNextVStream()
-  }
+  window.requestAnimationFrame(() => {
+    applyStoredLeftPanelHeights()
+    setNextVDevConsoleOpen(nextVPanelState.devConsoleOpen, { persist: false })
+  })
 }
 
 function setChatMode() {
-  setAppMode('chat')
+  setNextVMode({ ensureEntrypoint: false, refreshGraph: false })
 }
 
 function setScriptMode() {
-  setAppMode('script')
+  setNextVMode({ ensureEntrypoint: false, refreshGraph: false })
 }
 
 function setNextVMode(options = {}) {
@@ -729,31 +1118,87 @@ function setNextVMode(options = {}) {
   }
 }
 
+function updateRemoteRuntimeIdentity(data, options = {}) {
+  const { clear = false } = options
+  if (clear) {
+    remoteRuntimeWorkspaceDir = ''
+    remoteRuntimeEntrypointPath = ''
+    return
+  }
+
+  const nextWorkspaceDir = String(
+    data?.remoteRuntimeWorkspaceDir ?? data?.workspaceDir ?? data?.snapshot?.workspaceDir ?? ''
+  ).trim()
+  const nextEntrypointPath = String(
+    data?.remoteRuntimeEntrypointPath ?? data?.entrypointPath ?? data?.snapshot?.entrypointPath ?? ''
+  ).trim()
+
+  if (nextWorkspaceDir) remoteRuntimeWorkspaceDir = nextWorkspaceDir
+  if (nextEntrypointPath) remoteRuntimeEntrypointPath = nextEntrypointPath
+}
+
 function updateRemoteModeBadge() {
   if (!remoteModeBadge) return
   remoteModeBadge.hidden = isRemoteMode !== true
   if (!isRemoteMode) {
     remoteModeBadge.textContent = 'remote runtime'
+    remoteModeBadge.title = 'remote runtime'
     return
   }
 
+  let label = 'remote runtime'
   if (isRemoteControlMode) {
-    remoteModeBadge.textContent = 'remote WS runtime (control)'
-    return
+    label = 'remote WS runtime (control)'
+  } else if (remoteTransport === 'mqtt') {
+    label = 'remote MQTT runtime'
   }
 
-  if (remoteTransport === 'mqtt') {
-    remoteModeBadge.textContent = 'remote MQTT runtime'
-    return
+  const workspaceLabel = remoteRuntimeWorkspaceDir && remoteRuntimeWorkspaceDir !== '.'
+    ? remoteRuntimeWorkspaceDir
+    : ''
+  const entryLabel = pathBasename(remoteRuntimeEntrypointPath) || remoteRuntimeEntrypointPath
+  if (workspaceLabel && entryLabel) {
+    label = `${label}: ${workspaceLabel} / ${entryLabel}`
+  } else if (workspaceLabel) {
+    label = `${label}: ${workspaceLabel}`
+  } else if (entryLabel) {
+    label = `${label}: ${entryLabel}`
   }
 
-  remoteModeBadge.textContent = 'remote runtime'
+  remoteModeBadge.textContent = label
+  remoteModeBadge.title = label
 }
 
 function setNextVRunControls() {
   const hasEntrypoint = Boolean(normalizeRelativePath(nextVEntrypointInput?.value ?? ''))
-  const remoteBlocksControl = isRemoteMode && (!isRemoteControlMode || !isRemoteRuntimeConnected)
-  if (nextVStartBtn) nextVStartBtn.disabled = remoteBlocksControl || nextVRuntimeRunning || isBusy || !hasEntrypoint
+  const isExternalMode = nextVRuntimeTargetState.target === 'external'
+  const remoteBlocksControl = isRemoteMode && !isExternalMode && (!isRemoteControlMode || !isRemoteRuntimeConnected)
+  
+  // In external mode: show run/start buttons separately
+  // In embedded mode: show only start button
+  if (nextVRunBtn) {
+    nextVRunBtn.hidden = !isExternalMode
+    if (nextVManagedProcessRunning) {
+      nextVRunBtn.textContent = 'kill runtime'
+      nextVRunBtn.onclick = killNextVRuntime
+      nextVRunBtn.disabled = isBusy
+    } else {
+      nextVRunBtn.textContent = 'run'
+      nextVRunBtn.onclick = runNextVRuntime
+      nextVRunBtn.disabled = remoteBlocksControl || isBusy || !hasEntrypoint
+    }
+  }
+  
+  // Start button behavior:
+  // - In embedded mode: normal behavior (start the workflow)
+  // - In external mode: only enabled after process is running
+  if (nextVStartBtn) {
+    const startDisabled = isExternalMode
+      ? (remoteBlocksControl || !nextVManagedProcessRunning || nextVRuntimeRunning || isBusy)
+      : (remoteBlocksControl || nextVRuntimeRunning || isBusy || !hasEntrypoint)
+    nextVStartBtn.disabled = startDisabled
+  }
+  
   if (nextVStopBtn) nextVStopBtn.disabled = remoteBlocksControl || !nextVRuntimeRunning || isBusy
 }
 
@@ -1177,19 +1622,199 @@ function renderNextVGraphMessage(message, cls = '') {
 
 function getTransitionClassName(classification) {
   const value = String(classification ?? '').trim().toLowerCase()
-  if (value === 'pure' || value === 'llm' || value === 'side_effect' || value === 'mixed') {
+  if (value === 'pure' || value === 'llm' || value === 'side_effect' || value === 'declared_output' || value === 'mixed') {
     return value
   }
   return 'unknown'
 }
 
+function getControlProvenanceClass(value) {
+  if (typeof nextVGraphMappingApi?.getControlProvenanceClass === 'function') {
+    return nextVGraphMappingApi.getControlProvenanceClass(value)
+  }
+
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (normalized === 'bounded') return 'bounded'
+  if (normalized === 'unbounded') return 'unbounded'
+  if (normalized === 'mixed') return 'mixed'
+  return 'unknown'
+}
+
+function buildNextVControlGraphArtifacts(controlEdges) {
+  if (typeof nextVGraphMappingApi?.buildControlGraphArtifacts === 'function') {
+    return nextVGraphMappingApi.buildControlGraphArtifacts(controlEdges)
+  }
+
+  const controlNodeById = new Map()
+  const controlGraphEdges = []
+  for (const rawEdge of controlEdges) {
+    const from = String(rawEdge?.from ?? '').trim()
+    const to = String(rawEdge?.to ?? '').trim()
+    if (!from || !to) continue
+
+    if (!controlNodeById.has(to)) {
+      controlNodeById.set(to, {
+        id: to,
+        kind: 'control_branch',
+        eventType: String(rawEdge?.eventType ?? '').trim(),
+        branch: String(rawEdge?.branch ?? '').trim(),
+        provenance: getControlProvenanceClass(rawEdge?.provenance),
+        sourcePath: String(rawEdge?.sourcePath ?? '').trim(),
+        sourceLine: Number.isFinite(Number(rawEdge?.sourceLine)) ? Number(rawEdge.sourceLine) : null,
+        statement: String(rawEdge?.statement ?? '').trim(),
+      })
+    }
+
+    controlGraphEdges.push({
+      from,
+      to,
+      type: 'control',
+      branch: String(rawEdge?.branch ?? '').trim(),
+      eventType: String(rawEdge?.eventType ?? '').trim(),
+      provenance: getControlProvenanceClass(rawEdge?.provenance),
+      boundedControl: rawEdge?.boundedControl === true,
+      line: Number.isFinite(Number(rawEdge?.line)) ? Number(rawEdge.line) : null,
+      statement: String(rawEdge?.statement ?? '').trim(),
+    })
+  }
+
+  return {
+    controlNodes: Array.from(controlNodeById.values()),
+    controlGraphEdges,
+  }
+}
+
 function formatTransitionClassification(classification) {
   const value = getTransitionClassName(classification)
-  if (value === 'side_effect') return 'side effect'
+  if (value === 'side_effect') return 'tool effect'
+  if (value === 'declared_output') return 'output'
   if (value === 'llm') return 'llm'
   if (value === 'mixed') return 'mixed'
   if (value === 'pure') return 'pure'
   return 'unknown'
+}
+
+function getNextVGraphHandlerLabel(nodeObj, transition) {
+  const eventLabel = String(nodeObj?.eventType ?? nodeObj?.id ?? '').trim()
+  const agents = Array.isArray(transition?.agents)
+    ? transition.agents.map((name) => String(name ?? '').trim()).filter(Boolean)
+    : []
+  const tools = Array.isArray(transition?.tools)
+    ? transition.tools.map((tool) => String(tool?.name ?? '').trim()).filter(Boolean)
+    : []
+  const outputs = Array.isArray(transition?.outputs)
+    ? transition.outputs.map((out) => String(out ?? '').trim()).filter(Boolean)
+    : []
+
+  const parts = []
+  if (agents.length === 1) {
+    parts.push(`agent:${agents[0]}`)
+  } else if (agents.length > 1) {
+    parts.push(`agents:${agents.length}`)
+  }
+
+  if (tools.length === 1) {
+    parts.push(`tool:${tools[0]}`)
+  } else if (tools.length > 1) {
+    parts.push(`tools:${tools.length}`)
+  }
+
+  // Keep labels concise: include output only when there's no agent/tool summary.
+  if (parts.length === 0) {
+    if (outputs.length === 1) {
+      parts.push(`output:${outputs[0]}`)
+    } else if (outputs.length > 1) {
+      parts.push(`outputs:${outputs.length}`)
+    }
+  }
+
+  if (parts.length > 0) {
+    return parts.slice(0, 2).join('+')
+  }
+
+  const classification = getTransitionClassName(transition?.classification)
+  if (classification === 'pure') return 'logic'
+  if (classification === 'side_effect') return 'tool'
+  if (classification === 'declared_output') return 'output'
+  if (classification === 'mixed') return 'mixed'
+
+  return eventLabel
+}
+
+function splitNextVGraphHandlerLabelLines(label, options = {}) {
+  const maxLineLength = Number.isFinite(Number(options.maxLineLength))
+    ? Math.max(8, Number(options.maxLineLength))
+    : 20
+  const maxLines = Number.isFinite(Number(options.maxLines))
+    ? Math.max(1, Number(options.maxLines))
+    : 3
+
+  const raw = String(label ?? '').trim()
+  if (!raw) return ['']
+
+  const segments = raw.includes('+')
+    ? raw.split('+').map((part) => String(part ?? '').trim()).filter(Boolean)
+    : [raw]
+
+  const lines = []
+  let current = ''
+  for (const segment of segments) {
+    if (!current) {
+      current = segment
+      continue
+    }
+    const candidate = `${current}+${segment}`
+    if (candidate.length <= maxLineLength) {
+      current = candidate
+    } else {
+      lines.push(current)
+      current = segment
+    }
+  }
+  if (current) lines.push(current)
+
+  if (lines.length > maxLines) {
+    const collapsed = lines.slice(0, maxLines - 1)
+    const overflow = lines.slice(maxLines - 1).join('+')
+    collapsed.push(overflow)
+    return collapsed
+  }
+  return lines
+}
+
+function getNextVGraphTransitionScore(transition) {
+  if (!transition || typeof transition !== 'object') return -1
+  const agents = Array.isArray(transition.agents) ? transition.agents.length : 0
+  const tools = Array.isArray(transition.tools) ? transition.tools.length : 0
+  const outputs = Array.isArray(transition.outputs) ? transition.outputs.length : 0
+  const classification = getTransitionClassName(transition.classification)
+  const classScore = classification === 'mixed'
+    ? 5
+    : classification === 'llm'
+      ? 4
+    : classification === 'side_effect'
+      ? 3
+      : classification === 'declared_output'
+        ? 2
+        : classification === 'pure'
+          ? 1
+          : 0
+
+  // Prefer handlers with explicit agent metadata, then tools/outputs.
+  return (agents * 1000) + (tools * 100) + (outputs * 10) + classScore
+}
+
+function buildNextVGraphTransitionLookup(transitions) {
+  const byEvent = new Map()
+  for (const transition of transitions) {
+    const eventType = String(transition?.eventType ?? '').trim()
+    if (!eventType) continue
+    const existing = byEvent.get(eventType)
+    if (!existing || getNextVGraphTransitionScore(transition) > getNextVGraphTransitionScore(existing)) {
+      byEvent.set(eventType, transition)
+    }
+  }
+  return byEvent
 }
 
 function appendTransitionChip(container, text, cls = '') {
@@ -1555,6 +2180,15 @@ function collectNextVGraphExternalNodeCandidates(nodes, edges) {
   return candidates
 }
 
+// Must match BUILTIN_OUTPUT_CHANNELS in src/nextv_event_graph.js
+const BUILTIN_GRAPH_OUTPUT_CHANNELS = new Set(['text', 'json', 'voice', 'console', 'visual', 'interaction'])
+
+function getEffectOutputClassification(channel) {
+  return BUILTIN_GRAPH_OUTPUT_CHANNELS.has(String(channel ?? '').trim())
+    ? 'declared_output'
+    : 'side_effect'
+}
+
 function collectNextVGraphEffects(transitions) {
   const effectNodesById = new Map()
   const effectEdges = []
@@ -1581,6 +2215,7 @@ function collectNextVGraphEffects(transitions) {
           kind: 'effect',
           sourceEvent,
           type: 'output',
+          channel: outputFormat,
           label: `effect: output:${outputFormat}`,
         })
       }
@@ -1643,7 +2278,7 @@ function getNextVGraphNodeVisual(nodeObj, effectLabel = '') {
   const nodeKind = String(nodeObj?.kind ?? 'event')
   const label = nodeKind === 'effect'
     ? String(effectLabel || nodeObj?.id || '')
-    : String(nodeObj?.eventType || nodeObj?.id || '')
+    : String(nodeObj?.displayLabel || nodeObj?.eventType || nodeObj?.id || '')
 
   if (nodeKind === 'event') {
     const minWidth = 88
@@ -1675,10 +2310,27 @@ function getNextVGraphNodeVisual(nodeObj, effectLabel = '') {
     }
   }
 
-  const minWidth = nodeKind === 'handler' ? 96 : 112
-  const maxWidth = nodeKind === 'handler' ? 176 : 206
-  const width = Math.max(minWidth, Math.min(maxWidth, 26 + (label.length * 7)))
-  const height = nodeKind === 'handler' ? 54 : 50
+  if (nodeKind === 'control_branch') {
+    return {
+      shape: 'rounded-rect',
+      width: 86,
+      height: 34,
+      cornerRadius: 8,
+      edgeClip: 43,
+      externalTagOffsetY: 20,
+      badgeOffsetX: 26,
+      badgeOffsetY: -13,
+    }
+  }
+
+  const minWidth = nodeKind === 'handler' ? 108 : 112
+  const maxWidth = nodeKind === 'handler' ? 220 : 206
+  const handlerLines = nodeKind === 'handler'
+    ? splitNextVGraphHandlerLabelLines(label, { maxLineLength: 20, maxLines: 3 })
+    : [label]
+  const longestLine = handlerLines.reduce((max, line) => Math.max(max, String(line ?? '').length), 0)
+  const width = Math.max(minWidth, Math.min(maxWidth, 26 + (longestLine * 7)))
+  const height = nodeKind === 'handler' ? Math.max(54, 38 + (handlerLines.length * 14)) : 50
 
   return {
     shape: 'rounded-rect',
@@ -2177,13 +2829,14 @@ function renderNextVGraph(data = {}, options = {}) {
 
   const nodes = Array.isArray(data.nodes) ? data.nodes : []
   const edges = Array.isArray(data.edges) ? data.edges : []
+  const controlEdges = Array.isArray(data.controlEdges) ? data.controlEdges : []
   const cycles = Array.isArray(data.cycles) ? data.cycles : []
   const ignoredDynamicEmits = Array.isArray(data.ignoredDynamicEmits) ? data.ignoredDynamicEmits : []
   const transitions = Array.isArray(data.transitions) ? data.transitions : []
   const contractWarnings = Array.isArray(data.contractWarnings) ? data.contractWarnings : []
   const declaredExternals = Array.isArray(data.declaredExternals) ? data.declaredExternals : []
   const entrypointPath = String(data.entrypointPath ?? '')
-  const transitionByEvent = new Map(transitions.map((transition) => [String(transition.eventType ?? ''), transition]))
+  const transitionByEvent = buildNextVGraphTransitionLookup(transitions)
   const handlerSourceByEvent = new Map(
     nodes
       .filter((node) => node?.kind === 'handler')
@@ -2199,16 +2852,29 @@ function renderNextVGraph(data = {}, options = {}) {
   }
   const effectNodeById = new Map(effectNodes.map((node) => [node.id, node]))
 
+  const { controlNodes, controlGraphEdges } = buildNextVControlGraphArtifacts(controlEdges)
+  const showControlBranches = isNextVControlBranchesVisible()
+  const visibleControlNodes = showControlBranches ? controlNodes : []
+  const visibleControlGraphEdges = showControlBranches ? controlGraphEdges : []
+
   // Timer nodes sourced from host config: each drives the corresponding event node.
   const rawTimerNodes = Array.isArray(data.timerNodes) ? data.timerNodes : []
   const timerEdges = rawTimerNodes
     .filter((tn) => nodes.some((n) => n.id === tn.eventType))
     .map((tn) => ({ from: tn.id, to: tn.eventType, type: 'fires' }))
 
+  for (const nodeObj of nodes) {
+    if (nodeObj?.kind !== 'handler') continue
+    const transition = transitionByEvent.get(String(nodeObj?.eventType ?? ''))
+    nodeObj.displayLabel = getNextVGraphHandlerLabel(nodeObj, transition)
+  }
+
   // Unified graph node objects: data nodes (event/handler) + effect nodes + timer nodes.
-  const graphNodes = [...nodes, ...effectNodes, ...rawTimerNodes]
+  const graphNodes = [...nodes, ...effectNodes, ...rawTimerNodes, ...visibleControlNodes]
   // Unified edge objects: data edges + effect edges + timer fires edges.
-  const graphEdges = [...edges, ...effectEdges, ...timerEdges]
+  const graphEdges = [...edges, ...effectEdges, ...timerEdges, ...visibleControlGraphEdges]
+
+
 
   // Map of handler-id → [emitted event type strings] for tooltips.
   const emitsByHandler = new Map()
@@ -2224,6 +2890,41 @@ function renderNextVGraph(data = {}, options = {}) {
   // Populate contract state
   nextVGraphState.contractWarnings = contractWarnings
   nextVGraphState.declaredExternalNodes = new Set(declaredExternals.map(String))
+
+  // ── Collapse pass-through internal event nodes ─────────────────────────────
+  // Internal event nodes that have a handler subscription are collapsed:
+  // the event node itself is hidden, and inbound emit edges are rerouted directly
+  // to the handler node. The event name becomes a label on the rerouted edge.
+  const collapsibleEventIds = new Set()
+  for (const nodeObj of nodes) {
+    if (nodeObj.kind !== 'event') continue
+    // Keep external events as visible entry-point nodes.
+    if (externalCandidates.has(nodeObj.id) || nextVGraphState.declaredExternalNodes.has(nodeObj.id)) continue
+    const hasSubscription = edges.some((e) => e.from === nodeObj.id && e.type === 'subscription')
+    if (hasSubscription) collapsibleEventIds.add(nodeObj.id)
+  }
+  // For each collapsible event, record its subscriber handler.
+  const collapsedEventSubscriber = new Map()
+  for (const e of edges) {
+    if (e.type === 'subscription' && collapsibleEventIds.has(e.from)) {
+      collapsedEventSubscriber.set(e.from, e.to)
+    }
+  }
+  // Build virtual direct edges: emitter handler → subscriber handler.
+  const virtualDirectEdges = []
+  const skippedEdgeSignatures = new Set()
+  for (const e of edges) {
+    if (e.type === 'emit' && collapsibleEventIds.has(e.to)) {
+      const subscriberId = collapsedEventSubscriber.get(e.to)
+      if (subscriberId) {
+        virtualDirectEdges.push({ from: e.from, to: subscriberId, waypoint: e.to, type: 'collapsed-emit', eventLabel: String(e.to) })
+      }
+      skippedEdgeSignatures.add(`${e.from}\u0000${e.to}`)
+    }
+    if (e.type === 'subscription' && collapsibleEventIds.has(e.from)) {
+      skippedEdgeSignatures.add(`${e.from}\u0000${e.to}`)
+    }
+  }
   nextVGraphState.contractWarningNodes.clear()
   for (const cw of contractWarnings) {
     const eventType = String(cw.eventType ?? '')
@@ -2236,6 +2937,7 @@ function renderNextVGraph(data = {}, options = {}) {
 
   nextVGraphState.nodes = nodes
   nextVGraphState.edges = edges
+  nextVGraphState.controlEdges = controlEdges
   nextVGraphState.cycles = cycles
   nextVGraphState.entrypointPath = entrypointPath
   nextVGraphState.ignoredDynamicEmits = ignoredDynamicEmits
@@ -2257,6 +2959,7 @@ function renderNextVGraph(data = {}, options = {}) {
 
     const isHandlerNode = nodeObj.kind === 'handler'
     const isEffectNode = nodeObj.kind === 'effect'
+    const isControlBranchNode = nodeObj.kind === 'control_branch'
     const effectMeta = isEffectNode ? effectNodeById.get(normalizedNodeId) : null
     const transitionEventType = isHandlerNode
       ? String(nodeObj.eventType ?? '')
@@ -2264,9 +2967,10 @@ function renderNextVGraph(data = {}, options = {}) {
         ? String(effectMeta?.sourceEvent ?? '')
         : String(nodeObj.eventType ?? nodeObj.id)
     const transition = transitionByEvent.get(transitionEventType)
-    const transitionClass = getTransitionClassName(
-      isEffectNode ? 'side_effect' : transition?.classification
-    )
+    const effectClassification = effectMeta?.type === 'output' ? getEffectOutputClassification(effectMeta.channel) : 'side_effect'
+    const transitionClass = isControlBranchNode
+      ? getControlOverlayClassName(nodeObj?.provenance)
+      : getTransitionClassName(isEffectNode ? effectClassification : transition?.classification)
 
     const card = document.createElement('div')
     card.className = `nextv-graph-transition ${transitionClass}`
@@ -2281,14 +2985,18 @@ function renderNextVGraph(data = {}, options = {}) {
     eventName.className = 'nextv-graph-transition-event'
     const label = isEffectNode
       ? String(effectMeta?.label ?? normalizedNodeId)
+      : isControlBranchNode
+        ? String(nodeObj?.branch === 'if_true' ? 'branch: if true' : 'branch: if false')
       : isHandlerNode
-        ? String(nodeObj.eventType ?? normalizedNodeId)
+        ? getNextVGraphHandlerLabel(nodeObj, transition)
         : String(nodeObj.eventType ?? normalizedNodeId)
     eventName.textContent = label
 
     const badge = document.createElement('span')
     badge.className = `nextv-graph-chip ${transitionClass}`
-    badge.textContent = formatTransitionClassification(isEffectNode ? 'side_effect' : transition?.classification)
+    badge.textContent = isControlBranchNode
+      ? `control ${getControlProvenanceClass(nodeObj?.provenance)}`
+      : formatTransitionClassification(isEffectNode ? effectClassification : transition?.classification)
 
     const closeBtn = document.createElement('button')
     closeBtn.type = 'button'
@@ -2339,6 +3047,16 @@ function renderNextVGraph(data = {}, options = {}) {
         for (const warning of warnings) {
           addLine(`warning: ${String(warning.message ?? warning.code ?? 'unknown warning')}`, 'warning')
         }
+      }
+    }
+
+    if (isControlBranchNode) {
+      addLine(`provenance: ${getControlProvenanceClass(nodeObj?.provenance)}`)
+      if (Number.isFinite(Number(nodeObj?.line))) {
+        addLine(`line: ${Number(nodeObj.line)}`)
+      }
+      if (nodeObj?.statement) {
+        addLine(`condition: ${String(nodeObj.statement)}`)
       }
     }
 
@@ -2451,6 +3169,26 @@ function renderNextVGraph(data = {}, options = {}) {
   autoFollowLabel.appendChild(autoFollowCheckbox)
   autoFollowLabel.appendChild(document.createTextNode('auto-follow'))
 
+  const controlBranchesBtn = document.createElement('button')
+  controlBranchesBtn.type = 'button'
+  controlBranchesBtn.className = 'nextv-graph-layout-btn'
+  controlBranchesBtn.classList.toggle('active', isNextVControlBranchesVisible())
+  controlBranchesBtn.textContent = isNextVControlBranchesVisible() ? 'hide branches' : 'show branches'
+  controlBranchesBtn.title = 'toggle control branch nodes'
+  controlBranchesBtn.addEventListener('click', () => {
+    setNextVControlBranchesVisible(!isNextVControlBranchesVisible())
+  })
+
+  const controlOverlayBtn = document.createElement('button')
+  controlOverlayBtn.type = 'button'
+  controlOverlayBtn.className = 'nextv-graph-layout-btn'
+  controlOverlayBtn.classList.toggle('active', isNextVControlOverlayEnabled())
+  controlOverlayBtn.textContent = isNextVControlOverlayEnabled() ? 'boundedness on' : 'boundedness off'
+  controlOverlayBtn.title = 'toggle boundedness overlay'
+  controlOverlayBtn.addEventListener('click', () => {
+    setNextVControlOverlayEnabled(!isNextVControlOverlayEnabled())
+  })
+
   toolbar.appendChild(layoutLrBtn)
   toolbar.appendChild(layoutTbBtn)
   toolbar.appendChild(zoomOutBtn)
@@ -2459,17 +3197,21 @@ function renderNextVGraph(data = {}, options = {}) {
   toolbar.appendChild(zoomLabel)
   toolbar.appendChild(hint)
   toolbar.appendChild(autoFollowLabel)
+  toolbar.appendChild(controlBranchesBtn)
+  toolbar.appendChild(controlOverlayBtn)
   wrap.appendChild(toolbar)
 
   const meta = document.createElement('div')
   meta.className = 'nextv-graph-meta nextv-graph-toolbar-meta'
   const cycleLabel = cycles.length === 1 ? '1 cycle' : `${cycles.length} cycles`
   const mixedCount = transitions.filter((transition) => transition?.classification === 'mixed').length
+  const boundedControlCount = visibleControlGraphEdges.filter((edge) => edge.provenance === 'bounded').length
+  const unboundedControlCount = visibleControlGraphEdges.filter((edge) => edge.provenance === 'unbounded').length
   const effectCount = effectNodes.length
   const handlerCount = nodes.filter((n) => n.kind === 'handler').length
   const timerCount = rawTimerNodes.length
   const entrypointLabel = pathBasename(entrypointPath) || 'entrypoint'
-  meta.textContent = `${entrypointLabel} • ${handlerCount} handlers • ${edges.length} edges${timerCount ? ` • ${timerCount} timers` : ''}${effectCount ? ` • ${effectCount} effects` : ''}${cycles.length ? ` • ${cycleLabel}` : ''}${mixedCount ? ` • ${mixedCount} mixed` : ''}`
+  meta.textContent = `${entrypointLabel} • ${handlerCount} handlers • ${edges.length} edges${timerCount ? ` • ${timerCount} timers` : ''}${effectCount ? ` • ${effectCount} effects` : ''}${visibleControlGraphEdges.length ? ` • ${visibleControlGraphEdges.length} control` : ''}${cycles.length ? ` • ${cycleLabel}` : ''}${mixedCount ? ` • ${mixedCount} mixed` : ''}${boundedControlCount ? ` • ${boundedControlCount} bounded-control` : ''}${unboundedControlCount ? ` • ${unboundedControlCount} unbounded-control` : ''}`
   toolbar.appendChild(meta)
 
   if (transitions.length > 0) {
@@ -2477,9 +3219,20 @@ function renderNextVGraph(data = {}, options = {}) {
     legend.className = 'nextv-graph-legend'
     appendTransitionChip(legend, 'pure', 'pure')
     appendTransitionChip(legend, 'llm', 'llm')
-    appendTransitionChip(legend, 'side effect', 'side_effect')
+    appendTransitionChip(legend, 'output', 'declared_output')
+    appendTransitionChip(legend, 'tool effect', 'side_effect')
     appendTransitionChip(legend, 'mixed', 'mixed')
     wrap.appendChild(legend)
+  }
+
+  if (visibleControlGraphEdges.length > 0 && isNextVControlOverlayEnabled()) {
+    const controlLegend = document.createElement('div')
+    controlLegend.className = 'nextv-graph-legend'
+    appendTransitionChip(controlLegend, 'control bounded', 'control-bounded')
+    appendTransitionChip(controlLegend, 'control unbounded', 'control-unbounded')
+    appendTransitionChip(controlLegend, 'control mixed', 'control-mixed')
+    appendTransitionChip(controlLegend, 'control unknown', 'control-unknown')
+    wrap.appendChild(controlLegend)
   }
 
   const viewport = document.createElement('div')
@@ -2700,7 +3453,12 @@ function renderNextVGraph(data = {}, options = {}) {
     }
   }
 
-  for (const edge of graphEdges) {
+  const allRenderedEdges = [
+    ...graphEdges.filter((e) => !skippedEdgeSignatures.has(`${e.from}\u0000${e.to}`)),
+    ...virtualDirectEdges,
+  ]
+
+  for (const edge of allRenderedEdges) {
     const from = edge.from
     const to = edge.to
     const edgeType = edge.type ?? 'emit'
@@ -2713,16 +3471,24 @@ function renderNextVGraph(data = {}, options = {}) {
     const srcEventType = from.startsWith('handler:') ? from.slice('handler:'.length) : null
     const fromTransition = srcEventType ? transitionByEvent.get(srcEventType) : transitionByEvent.get(from)
     const fromEffectNode = effectNodeById.get(from)
-    const classification = fromEffectNode
-      ? 'side_effect'
-      : edgeType === 'subscription'
-        ? 'subscription'
-        : edgeType === 'fires'
-          ? 'timer-fires'
-          : getTransitionClassName(fromTransition?.classification)
+    const controlProvenance = getControlProvenanceClass(edge.provenance)
+    const classification = edgeType === 'control'
+      ? getControlOverlayClassName(controlProvenance)
+      : fromEffectNode
+        ? fromEffectNode.type === 'output'
+          ? getEffectOutputClassification(fromEffectNode.channel)
+          : 'side_effect'
+        : edgeType === 'subscription'
+          ? 'subscription'
+          : edgeType === 'fires'
+            ? 'timer-fires'
+            : getTransitionClassName(fromTransition?.classification)
     const hasWarnings = edgeType !== 'subscription' && Array.isArray(fromTransition?.warnings) && fromTransition.warnings.length > 0
     const edgeClass = `nextv-graph-edge ${classification}${isCycleEdge ? ' cycle' : ''}${hasWarnings ? ' warning' : ''}`
     const edgeKey = getNextVGraphEdgeKey(from, to)
+    const edgeTitleText = edgeType === 'control'
+      ? `control (${String(edge.branch || 'branch')}): ${controlProvenance}`
+      : `${edgeType}: ${classification}`
 
     // Determine node radii for endpoint clipping.
     const toNode = graphNodes.find((n) => n.id === to)
@@ -2731,6 +3497,32 @@ function renderNextVGraph(data = {}, options = {}) {
     const fromNodeObj = graphNodes.find((n) => n.id === from)
     const fromEffectLabel = fromNodeObj?.kind === 'effect' ? String(effectNodeById.get(from)?.label ?? '') : ''
     const fromRadius = fromNodeObj ? getNextVGraphNodeVisual(fromNodeObj, fromEffectLabel).edgeClip : 24
+
+    const getSubscriptionEdgeLabelText = () => {
+      if (edgeType === 'collapsed-emit') return String(edge.eventLabel ?? '').trim()
+      if (edgeType !== 'subscription') return ''
+      return String(edge.from ?? '').trim()
+    }
+
+    // Place label near the arrowhead: at parameter t along the final segment, offset to the side.
+    const appendEdgeLabelAt = (ax, ay, bx, by, t = 0.78) => {
+      const labelText = getSubscriptionEdgeLabelText()
+      if (!labelText) return
+      const lx = ax + (bx - ax) * t
+      const ly = ay + (by - ay) * t
+      // Perpendicular offset so label doesn't sit on the line.
+      const len = Math.hypot(bx - ax, by - ay) || 1
+      const nx = -(by - ay) / len
+      const ny = (bx - ax) / len
+      const offset = 11
+      const edgeLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+      edgeLabel.setAttribute('class', 'nextv-graph-edge-label subscription')
+      edgeLabel.setAttribute('x', String(Math.round(lx + nx * offset)))
+      edgeLabel.setAttribute('y', String(Math.round(ly + ny * offset)))
+      edgeLabel.setAttribute('text-anchor', 'middle')
+      edgeLabel.textContent = labelText
+      svg.appendChild(edgeLabel)
+    }
 
     if (from === to) {
       // Self-loop: cubic bezier arc above the node.
@@ -2742,9 +3534,57 @@ function renderNextVGraph(data = {}, options = {}) {
       path.dataset.to = to
       path.setAttribute('d', `M ${start.x} ${start.y - 22} C ${start.x + 42} ${start.y - 60}, ${start.x - 42} ${start.y - 60}, ${start.x} ${start.y - 22}`)
       path.setAttribute('marker-end', isCycleEdge ? 'url(#nextv-graph-arrow-cycle)' : 'url(#nextv-graph-arrow)')
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title')
+      title.textContent = edgeTitleText
+      path.appendChild(title)
       nextVGraphState.edgeElements.set(edgeKey, path)
       svg.appendChild(path)
       continue
+    }
+
+    // Collapsed-emit: two-segment path routed through the waypoint (old event node position).
+    if (edgeType === 'collapsed-emit' && edge.waypoint) {
+      const waypoint = positions.get(edge.waypoint)
+      if (waypoint) {
+        const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
+
+        // Clip start point away from `from` node boundary toward waypoint.
+        const dx1 = waypoint.x - start.x
+        const dy1 = waypoint.y - start.y
+        const d1 = Math.hypot(dx1, dy1) || 1
+        const sx = start.x + (dx1 / d1) * fromRadius
+        const sy = start.y + (dy1 / d1) * fromRadius
+
+        // Clip end point away from `to` node boundary toward waypoint.
+        const dx2 = waypoint.x - end.x
+        const dy2 = waypoint.y - end.y
+        const d2 = Math.hypot(dx2, dy2) || 1
+        const ex = end.x + (dx2 / d2) * toRadius
+        const ey = end.y + (dy2 / d2) * toRadius
+
+        const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+        pathEl.setAttribute('class', edgeClass)
+        pathEl.setAttribute('fill', 'none')
+        pathEl.dataset.edgeKey = edgeKey
+        pathEl.dataset.from = from
+        pathEl.dataset.to = to
+        // Smooth elbow: cubic bezier from start through waypoint to end.
+        pathEl.setAttribute('d',
+          `M ${Math.round(sx)} ${Math.round(sy)} ` +
+          `C ${Math.round(sx + (waypoint.x - sx) * 0.6)} ${Math.round(sy + (waypoint.y - sy) * 0.6)},` +
+          ` ${Math.round(waypoint.x + (ex - waypoint.x) * 0.4)} ${Math.round(waypoint.y + (ey - waypoint.y) * 0.4)},` +
+          ` ${Math.round(ex)} ${Math.round(ey)}`
+        )
+        pathEl.setAttribute('marker-end', isCycleEdge ? 'url(#nextv-graph-arrow-cycle)' : 'url(#nextv-graph-arrow)')
+        const title = document.createElementNS('http://www.w3.org/2000/svg', 'title')
+        title.textContent = edgeTitleText
+        pathEl.appendChild(title)
+        nextVGraphState.edgeElements.set(edgeKey, pathEl)
+        svg.appendChild(pathEl)
+        // Label on the second half of the curve, near the arrowhead.
+        appendEdgeLabelAt(waypoint.x, waypoint.y, ex, ey, 0.55)
+        continue
+      }
     }
 
     // Use dagre-computed bendpoints when available; fall back to straight line.
@@ -2758,8 +3598,16 @@ function renderNextVGraph(data = {}, options = {}) {
       pathEl.dataset.to = to
       pathEl.setAttribute('d', buildSmoothPath(bendpoints))
       pathEl.setAttribute('marker-end', isCycleEdge ? 'url(#nextv-graph-arrow-cycle)' : 'url(#nextv-graph-arrow)')
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title')
+      title.textContent = edgeTitleText
+      pathEl.appendChild(title)
       nextVGraphState.edgeElements.set(edgeKey, pathEl)
       svg.appendChild(pathEl)
+
+      // Label near the arrowhead: use the segment from the second-to-last to the last bendpoint.
+      const lastIdx = bendpoints.length - 1
+      const secondLastIdx = Math.max(0, lastIdx - 1)
+      appendEdgeLabelAt(bendpoints[secondLastIdx].x, bendpoints[secondLastIdx].y, bendpoints[lastIdx].x, bendpoints[lastIdx].y)
       continue
     }
 
@@ -2782,8 +3630,12 @@ function renderNextVGraph(data = {}, options = {}) {
     line.setAttribute('x2', String(x2))
     line.setAttribute('y2', String(y2))
     line.setAttribute('marker-end', isCycleEdge ? 'url(#nextv-graph-arrow-cycle)' : 'url(#nextv-graph-arrow)')
+    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title')
+    title.textContent = edgeTitleText
+    line.appendChild(title)
     nextVGraphState.edgeElements.set(edgeKey, line)
     svg.appendChild(line)
+    appendEdgeLabelAt(x1, y1, x2, y2)
   }
 
   for (const nodeObj of graphNodes) {
@@ -2796,11 +3648,19 @@ function renderNextVGraph(data = {}, options = {}) {
     const isHandlerNode = nodeKind === 'handler'
     const isEventNode = nodeKind === 'event'
     const isTimerNode = nodeKind === 'timer'
+    const isControlBranchNode = nodeKind === 'control_branch'
+    // Collapsed internal event nodes: position is used as edge waypoint only — no box rendered.
+    const isCollapsedEvent = isEventNode && collapsibleEventIds.has(nodeId)
+    if (isCollapsedEvent) continue
 
     const effectMeta = isEffectNode ? effectNodeById.get(nodeId) : null
     const transition = isHandlerNode ? transitionByEvent.get(nodeObj.eventType) : null
     const classification = isEffectNode
-      ? 'side_effect'
+      ? effectMeta?.type === 'output'
+        ? getEffectOutputClassification(effectMeta.channel)
+        : 'side_effect'
+      : isControlBranchNode
+        ? getControlOverlayClassName(nodeObj.provenance)
       : isHandlerNode
         ? getTransitionClassName(transition?.classification)
         : '' // event and timer nodes carry no classification color
@@ -2827,6 +3687,7 @@ function renderNextVGraph(data = {}, options = {}) {
       isEventNode ? 'event-node' : '',
       isHandlerNode ? 'handler-node' : '',
       isTimerNode ? 'timer-node' : '',
+      isControlBranchNode ? 'control-branch-node' : '',
       isExternal ? 'external' : '',
       isDeclaredExternal ? 'declared-external' : '',
       hasContractWarnings ? 'contract-warning' : '',
@@ -2836,13 +3697,24 @@ function renderNextVGraph(data = {}, options = {}) {
     if (nodeObj.eventType) group.dataset.eventType = nodeObj.eventType
 
     const title = document.createElementNS('http://www.w3.org/2000/svg', 'title')
-    const label = isEffectNode ? String(effectMeta?.label ?? nodeId) : (nodeObj.eventType ?? nodeId)
+    const label = isEffectNode
+      ? String(effectMeta?.label ?? nodeId)
+      : isControlBranchNode
+        ? String(nodeObj?.branch === 'if_true' ? 'if:true' : 'if:false')
+        : isHandlerNode
+          ? getNextVGraphHandlerLabel(nodeObj, transition)
+          : (nodeObj.eventType ?? nodeId)
+    const labelLines = isHandlerNode
+      ? splitNextVGraphHandlerLabelLines(label, { maxLineLength: 20, maxLines: 3 })
+      : [label]
     const visual = getNextVGraphNodeVisual(nodeObj, isEffectNode ? String(effectMeta?.label ?? '') : '')
     const titleParts = [label]
     if (isHandlerNode) titleParts[0] = `handler: ${nodeObj.eventType}`
     if (isTimerNode) titleParts[0] = `timer: ${nodeObj.eventType}`
+    if (isControlBranchNode) titleParts[0] = `control: ${label}`
     if (isTimerNode && nodeObj.interval) titleParts.push(`interval=${nodeObj.interval}ms`)
     if (isTimerNode && nodeObj.runOnStart) titleParts.push('runOnStart=true')
+    if (isControlBranchNode) titleParts.push(`provenance=${getControlProvenanceClass(nodeObj.provenance)}`)
     if (isExternal) titleParts.push('external=true')
     if (isDeclaredExternal) titleParts.push('declared-external=true')
     if (hasContractWarnings) titleParts.push(`contract-warnings=${nodeContractWarnings.map((cw) => cw.code).join(', ')}`)
@@ -2878,7 +3750,20 @@ function renderNextVGraph(data = {}, options = {}) {
     text.setAttribute('x', String(pos.x))
     text.setAttribute('y', String(pos.y))
     text.setAttribute('dominant-baseline', 'middle')
-    text.textContent = isEffectNode ? String(effectMeta?.label ?? nodeId) : (nodeObj.eventType ?? nodeId)
+    if (isHandlerNode && labelLines.length > 1) {
+      text.textContent = ''
+      const lineHeight = 12
+      const startDy = -((labelLines.length - 1) * lineHeight) / 2
+      for (let idx = 0; idx < labelLines.length; idx++) {
+        const tspan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan')
+        tspan.setAttribute('x', String(pos.x))
+        tspan.setAttribute('dy', String(idx === 0 ? startDy : lineHeight))
+        tspan.textContent = String(labelLines[idx] ?? '')
+        text.appendChild(tspan)
+      }
+    } else {
+      text.textContent = label
+    }
     group.appendChild(text)
 
     if (isEventNode && isExternal) {
@@ -4226,11 +5111,13 @@ function persistNextVConfig() {
   const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
   const entrypointPath = normalizeRelativePath(nextVEntrypointInput?.value ?? '')
   const autoSaveEnabled = nextVAutoSaveInput?.checked !== false
+  const runtimeTarget = getNextVRuntimeTarget()
   const graphDirection = normalizeNextVGraphDirection(nextVGraphState.layoutDirection)
 
   localStorage.setItem(storageKeys.nextVWorkspaceDir, workspaceDir)
   localStorage.setItem(storageKeys.nextVEntrypoint, entrypointPath)
   localStorage.setItem(storageKeys.nextVAutoSave, autoSaveEnabled ? '1' : '0')
+  localStorage.setItem(storageKeys.nextVRuntimeTarget, runtimeTarget)
   localStorage.setItem(storageKeys.nextVGraphDirection, graphDirection)
 }
 
@@ -4243,16 +5130,25 @@ function restoreNextVConfig() {
   const autoSaveEnabled = storedAutoSave == null ? false : storedAutoSave === '1'
   const storedDevTab = localStorage.getItem(storageKeys.nextVDevTab)
   const devTab = ['events', 'trace', 'console'].includes(storedDevTab) ? storedDevTab : 'events'
+  const storedInputTab = String(localStorage.getItem(storageKeys.nextVInputTab) ?? '').trim()
+  const runtimeTarget = normalizeNextVRuntimeTarget(localStorage.getItem(storageKeys.nextVRuntimeTarget) ?? 'embedded')
   const devConsoleOpen = localStorage.getItem(storageKeys.nextVDevConsoleOpen) !== '0'
   const graphDirection = normalizeNextVGraphDirection(localStorage.getItem(storageKeys.nextVGraphDirection) ?? 'TB')
+  const controlOverlayEnabled = localStorage.getItem(storageKeys.nextVControlOverlay) !== '0'
+  const showControlBranches = localStorage.getItem(storageKeys.nextVShowControlBranches) === '1'
 
   if (nextVWorkspaceDirInput) nextVWorkspaceDirInput.value = workspaceDir
   if (nextVEntrypointInput) nextVEntrypointInput.value = entrypointPath
   if (nextVAutoSaveInput) nextVAutoSaveInput.checked = autoSaveEnabled
+  nextVRuntimeTargetState.target = runtimeTarget
+  if (nextVRuntimeTargetInput) nextVRuntimeTargetInput.value = runtimeTarget
   tracePanelState.currentTab = devTab
+  inputPanelState.currentTab = storedInputTab || 'manual'
   nextVViewState.currentView = primaryView
   nextVPanelState.devConsoleOpen = devConsoleOpen
   nextVGraphState.layoutDirection = graphDirection
+  nextVGraphState.controlOverlayEnabled = controlOverlayEnabled
+  nextVGraphState.showControlBranches = showControlBranches
 }
 
 function pathBasename(p) {
@@ -4355,6 +5251,82 @@ function summarizeToolResultPayload(result) {
 
   const sizeLabel = formatPayloadByteSize(safeJsonByteSize(result))
   return `${shape} size=${sizeLabel}`
+}
+
+function summarizeExecutionAgentCalls(result) {
+  const agentCalls = Array.isArray(result?.agentCalls) ? result.agentCalls : []
+  if (agentCalls.length === 0) return 'agentCalls=0'
+
+  let promptTokens = 0
+  let completionTokens = 0
+  let totalTokens = 0
+  let hasPromptTokens = false
+  let hasCompletionTokens = false
+  let hasTotalTokens = false
+
+  for (const call of agentCalls) {
+    const usage = call?.metadata?.usage
+
+    const promptValue = Number(usage?.promptTokens)
+    if (Number.isFinite(promptValue)) {
+      promptTokens += promptValue
+      hasPromptTokens = true
+    }
+
+    const completionValue = Number(usage?.completionTokens)
+    if (Number.isFinite(completionValue)) {
+      completionTokens += completionValue
+      hasCompletionTokens = true
+    }
+
+    const totalValue = Number(usage?.totalTokens)
+    if (Number.isFinite(totalValue)) {
+      totalTokens += totalValue
+      hasTotalTokens = true
+    }
+  }
+
+  const promptLabel = hasPromptTokens ? String(promptTokens) : 'n/a'
+  const completionLabel = hasCompletionTokens ? String(completionTokens) : 'n/a'
+  const totalLabel = hasTotalTokens ? String(totalTokens) : 'n/a'
+
+  return `agentCalls=${agentCalls.length} tokens=${promptLabel}/${completionLabel}/${totalLabel}`
+}
+
+function summarizeExecutionAgentCallDetails(result) {
+  const agentCalls = Array.isArray(result?.agentCalls) ? result.agentCalls : []
+  if (agentCalls.length === 0) return ''
+
+  const byAgent = new Map()
+
+  for (const call of agentCalls) {
+    const agentName = String(call?.agent ?? '').trim() || 'unknown'
+    const usage = call?.metadata?.usage
+    const totalValue = Number(usage?.totalTokens)
+
+    const entry = byAgent.get(agentName) ?? {
+      count: 0,
+      totalTokens: 0,
+      hasTotalTokens: false,
+    }
+
+    entry.count += 1
+    if (Number.isFinite(totalValue)) {
+      entry.totalTokens += totalValue
+      entry.hasTotalTokens = true
+    }
+
+    byAgent.set(agentName, entry)
+  }
+
+  const parts = []
+  for (const [agentName, entry] of byAgent.entries()) {
+    const tokenLabel = entry.hasTotalTokens ? String(entry.totalTokens) : 'n/a'
+    parts.push(`${agentName}=${tokenLabel} (${entry.count}x)`)
+  }
+
+  if (parts.length === 0) return ''
+  return `[nextv:agent_tokens] ${parts.join(', ')}`
 }
 
 function flattenStatePaths(value, basePath = '', out = new Map()) {
@@ -4714,6 +5686,7 @@ function setupNextVUserIOSplitter() {
 
 function appendNextVStateDiffEntry(signalType, changes) {
   if (!nextVStateDiffFeed) return
+  if (!Array.isArray(changes) || changes.length === 0) return
 
   const entry = document.createElement('details')
   entry.className = 'nextv-state-diff-entry'
@@ -4922,8 +5895,12 @@ function renderCanonicalNextVEvents(events) {
 
     if (event.type === 'output') {
       const format = String(event.format ?? 'text')
+      const outputChannel = normalizeUserOutputChannel(
+        event.channel,
+        (format === 'json' || format === 'voice') ? format : 'text',
+      )
       if (format === 'text') {
-        appendUserOutputMessage(String(event.content ?? ''))
+        appendUserOutputMessage(String(event.content ?? ''), outputChannel)
       } else if (format === 'json') {
         const hasValue = Object.prototype.hasOwnProperty.call(event, 'value')
         const rawValue = hasValue ? event.value : parseMaybeJson(event.content)
@@ -4935,9 +5912,9 @@ function renderCanonicalNextVEvents(events) {
             formatted = String(rawValue)
           }
         }
-        appendUserOutputMessage(formatted)
+        appendUserOutputMessage(formatted, outputChannel)
       } else if (format === 'voice') {
-        appendUserOutputVoice(event)
+        appendUserOutputVoice(event, outputChannel)
       } else if (format === 'visual') {
         if (event.visualError) {
           appendErrorRow(`[visual error] ${String(event.visualError)}`)
@@ -4956,7 +5933,7 @@ function renderCanonicalNextVEvents(events) {
             ?? 'Operator requests user input.'
         ).trim()
 
-        appendUserOutputMessage(`[interaction] ${promptText}`)
+        appendUserOutputMessage(`[interaction] ${promptText}`, outputChannel)
         appendNextVLogRow('[nextv:interaction] request received (host policy decides follow-up)', 'step')
       }
       appendNextVLogRow(`[nextv:output] format=${format} content=${String(event.content ?? '')}`, 'content')
@@ -5086,7 +6063,7 @@ function closeNextVStream() {
 
 function openNextVStream() {
   closeNextVStream()
-  nextVEventSource = new EventSource('/api/nextv/stream')
+  nextVEventSource = new EventSource(buildNextVApiPath('/api/nextv/stream'))
 
   nextVEventSource.addEventListener('nextv_stream_open', () => {
     // no-op
@@ -5176,7 +6153,12 @@ function openNextVStream() {
       }
       applyNextVGraphRuntimeVisuals()
       fadeNextVGraphActiveHighlights(760)
-      appendNextVLogRow(`[nextv:execution] type=${eventType} source=${source} steps=${Number(payload?.result?.steps ?? 0)}`, 'result')
+      const executionSummary = summarizeExecutionAgentCalls(payload?.result)
+      appendNextVLogRow(`[nextv:execution] type=${eventType} source=${source} steps=${Number(payload?.result?.steps ?? 0)} ${executionSummary}`, 'result')
+      const executionDetails = summarizeExecutionAgentCallDetails(payload?.result)
+      if (executionDetails) {
+        appendNextVLogRow(executionDetails, 'result')
+      }
       const diffBefore = nextVLastKnownState ?? {}
       const diffAfter = payload?.snapshot?.state ?? {}
       appendNextVStateDiffEntry(eventType, buildStateDiff(diffBefore, diffAfter))
@@ -5254,10 +6236,14 @@ function openNextVStream() {
 
 async function refreshNextVSnapshot() {
   try {
-    const res = await fetch('/api/nextv/snapshot')
+    const res = await fetch(buildNextVApiPath('/api/nextv/snapshot'))
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
       throw new Error(data.error ?? 'unable to load nextv snapshot')
+    }
+    if (data?.remoteMode === true) {
+      updateRemoteRuntimeIdentity(data)
+      updateRemoteModeBadge()
     }
     renderNextVSnapshot(data.snapshot, { log: true })
     setStatus('nextv snapshot updated')
@@ -5269,7 +6255,7 @@ async function refreshNextVSnapshot() {
 
 async function syncNextVRuntimeState() {
   try {
-    const res = await fetch('/api/nextv/snapshot')
+    const res = await fetch(buildNextVApiPath('/api/nextv/snapshot'))
     const data = await res.json().catch(() => ({}))
 
     isRemoteMode = data?.remoteMode === true
@@ -5278,6 +6264,11 @@ async function syncNextVRuntimeState() {
     isRemoteRuntimeConnected = isRemoteControlMode
       ? (data?.remoteConnection?.connected === true)
       : true
+    if (isRemoteMode) {
+      updateRemoteRuntimeIdentity(data)
+    } else {
+      updateRemoteRuntimeIdentity(null, { clear: true })
+    }
 
     if (!res.ok) {
       nextVRuntimeRunning = false
@@ -5306,6 +6297,64 @@ async function syncNextVRuntimeState() {
   }
 }
 
+async function runNextVRuntime() {
+  const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
+  const entrypointPath = normalizeRelativePath(nextVEntrypointInput?.value ?? '')
+  if (!entrypointPath) {
+    setStatus('nextv entrypoint required', 'responding')
+    return
+  }
+
+  if (isBusy) {
+    setStatus('busy: wait for current task', 'responding')
+    return
+  }
+
+  try {
+    setNextVMode({ ensureEntrypoint: false, refreshGraph: false })
+    const res = await fetch(buildNextVApiPath('/api/nextv/run'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspaceDir, entrypointPath }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'failed to start runtime process')
+    }
+
+    nextVManagedProcessRunning = true
+    setNextVRunControls()
+    setStatus('nextv runtime process started; click start to begin workflow')
+  } catch (err) {
+    appendNextVErrorLog(err)
+    setStatus('nextv run failed', 'responding')
+  }
+}
+
+async function killNextVRuntime() {
+  if (isBusy) return
+
+  try {
+    const res = await fetch(buildNextVApiPath('/api/nextv/kill'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'failed to kill runtime process')
+    }
+
+    nextVManagedProcessRunning = false
+    nextVRuntimeRunning = false
+    closeNextVStream()
+    setNextVRunControls()
+    setStatus('nextv runtime process stopped')
+  } catch (err) {
+    appendNextVErrorLog(err)
+    setStatus('nextv kill failed', 'responding')
+  }
+}
+
 async function startNextVRuntime() {
   const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
   const entrypointPath = normalizeRelativePath(nextVEntrypointInput?.value ?? '')
@@ -5327,7 +6376,7 @@ async function startNextVRuntime() {
     clearNextVEventsOutput()
     clearNextVConsoleOutput()
     await ensureNextVEntrypointVisible({ logLoaded: true, warnOnDirty: true })
-    const res = await fetch('/api/nextv/start', {
+    const res = await fetch(buildNextVApiPath('/api/nextv/start'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -5353,6 +6402,11 @@ async function startNextVRuntime() {
     if (nextVWorkspaceDirInput) {
       const responseWorkspaceDir = String(data.workspaceDir ?? '')
       nextVWorkspaceDirInput.value = responseWorkspaceDir === '.' ? '' : responseWorkspaceDir
+    }
+
+    if (data?.remoteMode === true) {
+      updateRemoteRuntimeIdentity(data)
+      updateRemoteModeBadge()
     }
 
     if (data?.workspaceConfig && typeof data.workspaceConfig === 'object') {
@@ -5388,7 +6442,7 @@ async function startNextVRuntime() {
 async function stopNextVRuntime() {
   try {
     const hadStream = Boolean(nextVEventSource)
-    const res = await fetch('/api/nextv/stop', {
+    const res = await fetch(buildNextVApiPath('/api/nextv/stop'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     })
@@ -5398,8 +6452,16 @@ async function stopNextVRuntime() {
     }
 
     nextVRuntimeRunning = false
+    // In external mode, stopping the workflow does not kill the process
+    if (nextVRuntimeTargetState.target !== 'external') {
+      nextVManagedProcessRunning = false
+    }
     setNextVRunControls()
     closeNextVStream()
+    if (data?.remoteMode === true) {
+      updateRemoteRuntimeIdentity(data)
+      updateRemoteModeBadge()
+    }
     if (!hadStream) {
       appendNextVLogRow('[nextv:stop] runtime stopped', 'step')
     }
@@ -5413,7 +6475,8 @@ async function stopNextVRuntime() {
 
 async function sendNextVEvent() {
   const value = String(nextVEventValueInput?.value ?? '')
-  const eventType = String(nextVEventTypeInput?.value ?? '')
+  const selectedChannel = getSelectedNextVInputChannel()
+  const eventType = selectedChannel || String(nextVEventTypeInput?.value ?? '').trim()
   const source = String(nextVEventSourceInput?.value ?? '').trim()
   const attachedImages = nextVInputImageState.entries.map((entry) => entry.base64).filter(Boolean)
 
@@ -5428,7 +6491,7 @@ async function sendNextVEvent() {
       requestBody.payload = { images: attachedImages }
     }
 
-    const res = await fetch('/api/nextv/event', {
+    const res = await fetch(buildNextVApiPath('/api/nextv/event'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
@@ -5469,7 +6532,7 @@ async function sendNextVIngress() {
   }
 
   try {
-    const res = await fetch('/api/nextv/ingress', {
+    const res = await fetch(buildNextVApiPath('/api/nextv/ingress'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, value }),
@@ -5499,6 +6562,7 @@ function updateNextVEventImageUI() {
       nextVImageList.textContent = nextVInputImageState.entries.map((entry) => entry.name).join(' | ')
     }
   }
+  setNextVImagesOpen(nextVInputImageState.open, { persist: false })
 }
 
 function readImageFileAsBase64(file) {
@@ -5536,6 +6600,7 @@ async function addNextVEventImages(filesLike) {
     }
 
     nextVInputImageState.entries.push(...loaded)
+    setNextVImagesOpen(true)
     updateNextVEventImageUI()
     setStatus(`${loaded.length} image${loaded.length === 1 ? '' : 's'} attached to nextv input`)
   } catch (err) {
@@ -6399,14 +7464,19 @@ async function openNextVWorkspace() {
 
   // 1. Try to read entrypoint from nextv.json workspace config
   let configEntrypoint = ''
+  let configDeclaredExternals = []
+  let configDeclaredEffects = []
   try {
     const cfgRes = await fetch(`/api/nextv/workspace-config?workspaceDir=${encodeURIComponent(workspaceDir)}`)
     if (cfgRes.ok) {
       const cfg = await cfgRes.json()
       configEntrypoint = String(cfg.entrypointPath ?? '').trim()
+      configDeclaredExternals = normalizeDeclaredExternalChannels(cfg.declaredExternals)
+      configDeclaredEffects = normalizeDeclaredEffectChannels(cfg.declaredEffects)
     }
   } catch {
-    // ignore — fall through to heuristic
+    configDeclaredExternals = []
+    configDeclaredEffects = []
   }
 
   // 2. Determine candidate entrypoint: config first, then step.nrv, then step.wfs
@@ -6474,6 +7544,8 @@ async function openNextVWorkspace() {
   }
 
   persistNextVConfig()
+  setDeclaredExternalChannels(configDeclaredExternals, { preserveSelection: true })
+  setDeclaredEffectChannels(configDeclaredEffects, { preserveSelection: true })
   setNextVRunControls()
   await refreshNextVGraph({ silent: true })
   if (loadedEntrypoint) {
@@ -7365,8 +8437,7 @@ window.addEventListener('beforeunload', () => {
 
 // --- Init ---
 function initLayoutState() {
-  const savedMode = localStorage.getItem(storageKeys.mode)
-  setAppMode(savedMode === 'script' || savedMode === 'nextv' ? savedMode : 'nextv')
+  setAppMode('nextv')
 
   const savedWidth = Number(localStorage.getItem(storageKeys.leftWidth))
   if (Number.isFinite(savedWidth) && savedWidth > 0) {
@@ -7385,8 +8456,15 @@ function initLayoutState() {
   setNextVDevConsoleOpen(nextVPanelState.devConsoleOpen, { persist: false })
   setNextVPrimaryView(nextVViewState.currentView, { persist: false })
   setNextVDevTab(tracePanelState.currentTab, { persist: false })
-  inputPanelState.currentTab = 'external'
+  setDeclaredExternalChannels([], { preserveSelection: true })
+  setDeclaredEffectChannels([], { preserveSelection: false, persist: false })
   setNextVInputTab(inputPanelState.currentTab, { persist: false })
+  const imagesStored = localStorage.getItem(storageKeys.nextVImagesOpen) === '1'
+  setNextVImagesOpen(imagesStored, { persist: false })
+  const ingressControlsVisibleStored = localStorage.getItem(storageKeys.nextVIngressControlsVisible)
+  const ingressControlsVisible = ingressControlsVisibleStored == null ? true : ingressControlsVisibleStored === '1'
+  setNextVIngressControlsVisible(ingressControlsVisible, { persist: false })
+  setNextVRuntimeTarget(nextVRuntimeTargetState.target, { persist: false, sync: false })
   const drawerStored = localStorage.getItem(storageKeys.nextVTreeDrawerOpen)
   setNextVFileDrawerOpen(drawerStored !== '0', { persist: false })
 
@@ -7404,6 +8482,16 @@ function initLayoutState() {
   }
   setNextVRunControls()
   setActiveScriptRunId('')
+
+  const storedChannels = String(localStorage.getItem(storageKeys.nextVUserOutputChannels) ?? '').trim()
+  const parsedStoredChannels = storedChannels
+    ? normalizeUserOutputChannels(storedChannels.split(','), getAvailableUserOutputChannels())
+    : []
+  userOutputFilterState.channels = parsedStoredChannels.length > 0
+    ? new Set(parsedStoredChannels)
+    : new Set(getAvailableUserOutputChannels())
+  renderUserOutputChannelFilters()
+  applyUserOutputChannelVisibility()
 
   const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
   if (workspaceDir && isNextVMode()) {

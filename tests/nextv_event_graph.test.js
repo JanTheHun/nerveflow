@@ -103,7 +103,7 @@ test('extractEventGraph ignores dynamic emit targets and detectCycles finds simp
   assert.deepEqual(result.cycles, [['alpha', 'beta', 'alpha']])
 })
 
-test('extractEventGraph classifies pure, llm, side_effect, and mixed transitions', () => {
+test('extractEventGraph classifies pure, llm, declared_output, side_effect, and mixed transitions', () => {
   const ast = parseNextVScript([
     'on "pure"',
     '  state.count = state.count + 1',
@@ -114,6 +114,9 @@ test('extractEventGraph classifies pure, llm, side_effect, and mixed transitions
     'on "side"',
     '  output text "hello"',
     '  state.now = tool("get_time")',
+    'end',
+    'on "sideonly"',
+    '  state.file = tool("write_file", path="x.txt", content="hi")',
     'end',
     'on "mixed"',
     '  response = agent("triage", event.value)',
@@ -127,8 +130,11 @@ test('extractEventGraph classifies pure, llm, side_effect, and mixed transitions
 
   assert.equal(byEvent.pure.classification, 'pure')
   assert.equal(byEvent.llm.classification, 'llm')
-  assert.equal(byEvent.side.classification, 'side_effect')
+  assert.equal(byEvent.side.classification, 'declared_output')
+  assert.equal(byEvent.sideonly.classification, 'side_effect')
   assert.equal(byEvent.mixed.classification, 'mixed')
+  assert.deepEqual(byEvent.llm.agents, ['triage'])
+  assert.deepEqual(byEvent.mixed.agents, ['triage'])
   assert.deepEqual(byEvent.side.outputs, ['text'])
   assert.deepEqual(byEvent.side.tools, [
     {
@@ -344,5 +350,133 @@ test('extractEventGraph annotates nodes with sourcePath for include-expanded han
     assert.equal(routeEvent.sourcePath, authPath)
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('extractEventGraph marks branch control edges as bounded when condition depends on returns-constrained agent output', () => {
+  const ast = parseNextVScript([
+    'on "route"',
+    '  decision = agent("router", event.value, returns={ intent: "" })',
+    '  if decision.intent == "chat"',
+    '    emit("chat", event.value)',
+    '  end',
+    'end',
+  ].join('\n'))
+
+  const graph = extractEventGraph(ast)
+  assert.ok(Array.isArray(graph.controlEdges), 'expected controlEdges array')
+  assert.equal(graph.controlEdges.length, 2)
+
+  for (const edge of graph.controlEdges) {
+    assert.equal(edge.type, 'control')
+    assert.equal(edge.eventType, 'route')
+    assert.equal(edge.provenance, 'bounded')
+    assert.equal(edge.boundedControl, true)
+  }
+})
+
+test('extractEventGraph marks branch control edges as unbounded when condition depends on unconstrained agent output', () => {
+  const ast = parseNextVScript([
+    'on "route"',
+    '  raw = agent("router", event.value)',
+    '  if raw.intent == "chat"',
+    '    emit("chat", event.value)',
+    '  end',
+    'end',
+  ].join('\n'))
+
+  const graph = extractEventGraph(ast)
+  assert.equal(graph.controlEdges.length, 2)
+
+  for (const edge of graph.controlEdges) {
+    assert.equal(edge.provenance, 'unbounded')
+    assert.equal(edge.boundedControl, false)
+  }
+})
+
+test('extractEventGraph marks mixed and unknown control-edge provenance', () => {
+  const astMixed = parseNextVScript([
+    'on "route"',
+    '  decision = agent("router", event.value, returns={ intent: "" })',
+    '  raw = agent("router", event.value)',
+    '  if decision.intent == raw.intent',
+    '    emit("chat", event.value)',
+    '  end',
+    'end',
+  ].join('\n'))
+
+  const mixedGraph = extractEventGraph(astMixed)
+  assert.equal(mixedGraph.controlEdges.length, 2)
+  for (const edge of mixedGraph.controlEdges) {
+    assert.equal(edge.provenance, 'mixed')
+    assert.equal(edge.boundedControl, false)
+  }
+
+  const astUnknown = parseNextVScript([
+    'on "route"',
+    '  if state.mode == "debug"',
+    '    emit("chat", event.value)',
+    '  end',
+    'end',
+  ].join('\n'))
+
+  const unknownGraph = extractEventGraph(astUnknown)
+  assert.equal(unknownGraph.controlEdges.length, 2)
+  for (const edge of unknownGraph.controlEdges) {
+    assert.equal(edge.provenance, 'unknown')
+    assert.equal(edge.boundedControl, false)
+  }
+})
+
+test('extractEventGraph fixture covers bounded, unbounded, mixed, and unknown control provenance end-to-end', () => {
+  const ast = parseNextVScript([
+    'on "bounded"',
+    '  decision = agent("router", event.value, returns={ intent: "" })',
+    '  if decision.intent == "chat"',
+    '    emit("chat", event.value)',
+    '  end',
+    'end',
+    '',
+    'on "unbounded"',
+    '  raw = agent("router", event.value)',
+    '  if raw.intent == "chat"',
+    '    emit("chat", event.value)',
+    '  end',
+    'end',
+    '',
+    'on "mixed"',
+    '  boundedDecision = agent("router", event.value, returns={ intent: "" })',
+    '  unboundedDecision = agent("router", event.value)',
+    '  if boundedDecision.intent == unboundedDecision.intent',
+    '    emit("chat", event.value)',
+    '  end',
+    'end',
+    '',
+    'on "unknown"',
+    '  if state.mode == "debug"',
+    '    emit("chat", event.value)',
+    '  end',
+    'end',
+  ].join('\n'))
+
+  const graph = extractEventGraph(ast)
+  assert.equal(graph.controlEdges.length, 8)
+
+  const expectedByEvent = {
+    bounded: { provenance: 'bounded', boundedControl: true },
+    unbounded: { provenance: 'unbounded', boundedControl: false },
+    mixed: { provenance: 'mixed', boundedControl: false },
+    unknown: { provenance: 'unknown', boundedControl: false },
+  }
+
+  for (const [eventType, expected] of Object.entries(expectedByEvent)) {
+    const edges = graph.controlEdges.filter((edge) => edge.eventType === eventType)
+    assert.equal(edges.length, 2, `expected two control edges for ${eventType}`)
+
+    for (const edge of edges) {
+      assert.equal(edge.type, 'control')
+      assert.equal(edge.provenance, expected.provenance)
+      assert.equal(edge.boundedControl, expected.boundedControl)
+    }
   }
 })

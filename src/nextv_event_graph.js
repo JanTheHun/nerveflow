@@ -1,6 +1,148 @@
 import { compileAST } from './nextv_compiler.js'
 import { getToolMetadata } from './tool_metadata.js'
 
+// Built-in platform output channels — declaring output on these is structural, not a host side effect.
+// Custom channels (e.g. play_music) are host-specific effects and classify as side_effect.
+const BUILTIN_OUTPUT_CHANNELS = new Set(['text', 'json', 'voice', 'console', 'visual', 'interaction'])
+
+const PROVENANCE_BOUNDED = 'bounded'
+const PROVENANCE_UNBOUNDED = 'unbounded'
+const PROVENANCE_MIXED = 'mixed'
+const PROVENANCE_UNKNOWN = 'unknown'
+
+function pathToKey(path) {
+  if (!Array.isArray(path) || path.length === 0) return ''
+  return path.map((segment) => String(segment ?? '').trim()).filter(Boolean).join('.')
+}
+
+function hasContractLikeNamedArg(args) {
+  for (const arg of args ?? []) {
+    if (arg?.kind !== 'named') continue
+    const name = String(arg.name ?? '').trim()
+    if (name === 'returns' || name === 'contract') return true
+  }
+  return false
+}
+
+function mergeProvenanceLabels(left, right) {
+  if (!left) return right || null
+  if (!right) return left
+  if (left === right) return left
+  if (left === PROVENANCE_UNKNOWN || right === PROVENANCE_UNKNOWN) return PROVENANCE_UNKNOWN
+  if (left === PROVENANCE_MIXED || right === PROVENANCE_MIXED) return PROVENANCE_MIXED
+  return PROVENANCE_MIXED
+}
+
+function resolvePathProvenance(path, labelsByPath) {
+  const pathKey = pathToKey(path)
+  if (!pathKey) return PROVENANCE_UNKNOWN
+  if (labelsByPath.has(pathKey)) return labelsByPath.get(pathKey)
+
+  const parts = pathKey.split('.')
+  for (let i = parts.length - 1; i > 0; i--) {
+    const parent = parts.slice(0, i).join('.')
+    if (labelsByPath.has(parent)) return labelsByPath.get(parent)
+  }
+  return PROVENANCE_UNKNOWN
+}
+
+function inferExprProvenance(expr, labelsByPath) {
+  if (!expr || typeof expr !== 'object') return null
+
+  if (expr.type === 'path') {
+    return resolvePathProvenance(expr.path, labelsByPath)
+  }
+
+  if (expr.type === 'call') {
+    if (expr.name === 'agent') {
+      return hasContractLikeNamedArg(expr.args) ? PROVENANCE_BOUNDED : PROVENANCE_UNBOUNDED
+    }
+
+    let merged = null
+    for (const arg of expr.args ?? []) {
+      merged = mergeProvenanceLabels(merged, inferExprProvenance(arg?.expr, labelsByPath))
+    }
+    return merged || PROVENANCE_UNKNOWN
+  }
+
+  let merged = null
+  walkExpr(expr, (node) => {
+    if (!node || node === expr) return
+    if (node.type !== 'path') return
+    merged = mergeProvenanceLabels(merged, resolvePathProvenance(node.path, labelsByPath))
+  })
+
+  return merged || null
+}
+
+function collectHandlerControlEdges(ir, bodyStart, bodyEnd, eventType) {
+  const labelsByPath = new Map()
+  const controlEdges = []
+
+  const setPathLabel = (path, label) => {
+    if (!label) return
+    const key = pathToKey(path)
+    if (!key) return
+    labelsByPath.set(key, label)
+  }
+
+  for (let index = bodyStart; index < bodyEnd; index++) {
+    const instr = ir[index]
+    if (!instr || typeof instr !== 'object') continue
+
+    if (instr.op === 'agent_call') {
+      const provenance = hasContractLikeNamedArg(instr.args)
+        ? PROVENANCE_BOUNDED
+        : PROVENANCE_UNBOUNDED
+      setPathLabel(instr.dst, provenance)
+      continue
+    }
+
+    if (instr.op === 'assign') {
+      const provenance = inferExprProvenance(instr.src, labelsByPath) || PROVENANCE_UNKNOWN
+      setPathLabel(instr.dst, provenance)
+      continue
+    }
+
+    if (instr.op === 'branch') {
+      const provenance = inferExprProvenance(instr.cond, labelsByPath) || PROVENANCE_UNKNOWN
+      const sourcePath = String(instr.sourcePath ?? '').trim()
+      const sourceLineRaw = Number(instr.sourceLine)
+      const sourceLine = Number.isFinite(sourceLineRaw) ? sourceLineRaw : null
+
+      controlEdges.push({
+        eventType,
+        from: `handler:${eventType}`,
+        to: `branch:${eventType}:${index}:if_true`,
+        type: 'control',
+        branch: 'if_true',
+        provenance,
+        boundedControl: provenance === PROVENANCE_BOUNDED,
+        line: Number.isFinite(Number(instr.line)) ? Number(instr.line) : null,
+        statement: String(instr.statement ?? ''),
+        ...(sourcePath ? { sourcePath } : {}),
+        ...(sourceLine !== null ? { sourceLine } : {}),
+      })
+
+      controlEdges.push({
+        eventType,
+        from: `handler:${eventType}`,
+        to: `branch:${eventType}:${index}:if_false`,
+        type: 'control',
+        branch: 'if_false',
+        provenance,
+        boundedControl: provenance === PROVENANCE_BOUNDED,
+        line: Number.isFinite(Number(instr.line)) ? Number(instr.line) : null,
+        statement: String(instr.statement ?? ''),
+        ...(sourcePath ? { sourcePath } : {}),
+        ...(sourceLine !== null ? { sourceLine } : {}),
+      })
+    }
+  }
+
+  return controlEdges
+}
+
 function walkExpr(expr, visitor) {
   if (!expr || typeof expr !== 'object') return
   visitor(expr)
@@ -136,13 +278,33 @@ function getLiteralToolName(args) {
   return ''
 }
 
+function getLiteralAgentName(args) {
+  for (const arg of args ?? []) {
+    if (arg?.kind !== 'positional') continue
+    if (arg?.expr?.type !== 'string') return ''
+
+    const value = String(arg.expr.value ?? '').trim()
+    return value || ''
+  }
+  return ''
+}
+
 function collectTransitionSignals(instr, state) {
+  const pushAgentName = (nameRaw) => {
+    const name = String(nameRaw ?? '').trim()
+    if (!name) return
+    if (!state.agents.includes(name)) {
+      state.agents.push(name)
+    }
+  }
+
   const visitExpr = (expr) => {
     walkExpr(expr, (node) => {
       if (node?.type !== 'call') return
 
       if (node.name === 'agent') {
         state.hasAgent = true
+        pushAgentName(getLiteralAgentName(node.args))
         return
       }
 
@@ -164,6 +326,7 @@ function collectTransitionSignals(instr, state) {
 
   if (instr?.op === 'agent_call') {
     state.hasAgent = true
+    pushAgentName(getLiteralAgentName(instr.args))
   }
 
   if (instr?.op === 'tool_call') {
@@ -180,8 +343,13 @@ function collectTransitionSignals(instr, state) {
   }
 
   if (instr?.op === 'emit') {
-    state.hasEffect = true
-    state.outputs.push(String(instr.format ?? 'text'))
+    const format = String(instr.format ?? 'text').trim()
+    if (BUILTIN_OUTPUT_CHANNELS.has(format)) {
+      state.hasDeclaredOutput = true
+    } else {
+      state.hasEffect = true
+    }
+    state.outputs.push(format)
     visitExpr(instr.src)
   }
 
@@ -202,6 +370,7 @@ function classifyTransitionState(state) {
   if (state.hasAgent && state.hasEffect) return 'mixed'
   if (state.hasAgent) return 'llm'
   if (state.hasEffect) return 'side_effect'
+  if (state.hasDeclaredOutput) return 'declared_output'
   return 'pure'
 }
 
@@ -214,6 +383,7 @@ export function extractEventGraph(astOrIR, options = {}) {
   const ir = normalizeToIR(astOrIR)
   const nodes = []
   const edges = []
+  const controlEdges = []
   const ignoredDynamicEmits = []
   const transitions = []
   const seenNodeIds = new Set()
@@ -306,10 +476,16 @@ export function extractEventGraph(astOrIR, options = {}) {
     const transitionState = {
       hasAgent: false,
       hasEffect: false,
+      hasDeclaredOutput: false,
+      agents: [],
       tools: [],
       outputs: [],
     }
     let hasExternalComplexity = false
+
+    for (const edge of collectHandlerControlEdges(ir, bodyStart, bodyEnd, sourceEvent)) {
+      controlEdges.push(edge)
+    }
 
     for (let index = bodyStart; index < bodyEnd; index++) {
       const nestedInstr = ir[index]
@@ -352,6 +528,7 @@ export function extractEventGraph(astOrIR, options = {}) {
       eventType: sourceEvent,
       subscriptionKind,
       classification,
+      ...(transitionState.agents.length > 0 ? { agents: transitionState.agents } : {}),
       tools: transitionState.tools,
       outputs: transitionState.outputs,
       warnings,
@@ -423,6 +600,7 @@ export function extractEventGraph(astOrIR, options = {}) {
   return {
     nodes,
     edges,
+    controlEdges,
     transitions,
     ignoredDynamicEmits,
     contractWarnings,

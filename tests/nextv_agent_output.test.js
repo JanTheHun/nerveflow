@@ -77,6 +77,33 @@ test('validateAgentReturnContract enforces strict shape recursively', () => {
   )
 })
 
+test('validateAgentReturnContract rejects additional object fields in strict mode', () => {
+  assert.throws(
+    () => validateAgentReturnContract(
+      { intent: 'search', extra: true },
+      { intent: '' },
+      'strict',
+    ),
+    (err) => {
+      assert.equal(err.code, 'AGENT_RETURN_CONTRACT_VIOLATION')
+      assert.equal(err.path, 'extra')
+      assert.equal(err.expected, 'no additional fields')
+      assert.equal(err.actual, 'boolean')
+      return true
+    },
+  )
+})
+
+test('validateAgentReturnContract preserves additional object fields in coerce mode', () => {
+  const result = validateAgentReturnContract(
+    { intent: 'search', extra: true },
+    { intent: '' },
+    'coerce',
+  )
+
+  assert.deepEqual(result, { intent: 'search', extra: true })
+})
+
 test('validateAgentReturnContract repairs missing structure in coerce mode', () => {
   const result = validateAgentReturnContract(
     { intent: 'search', meta: null, entities: null },

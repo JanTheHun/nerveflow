@@ -375,6 +375,15 @@ function validateContractValue(value, schema, mode, path) {
         result[key] = validateContractValue(result[key], fieldSchema, mode, fieldPath)
       }
     }
+
+    if (mode === 'strict') {
+      for (const key of Object.keys(result)) {
+        if (Object.prototype.hasOwnProperty.call(schema, key)) continue
+        const fieldPath = path ? `${path}.${key}` : key
+        throw makeContractViolation(fieldPath, 'no additional fields', actualContractTypeName(result[key]))
+      }
+    }
+
     return result
   }
 

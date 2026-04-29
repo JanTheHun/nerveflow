@@ -266,6 +266,7 @@ Rules:
 
 * output must be valid JSON
 * all declared fields must be present
+* additional undeclared object fields are violations
 * recursive nested validation applies
 * array items validated recursively
 * type mismatches are violations
@@ -285,6 +286,7 @@ Rules:
 * null object fields may be treated as missing and repaired from contract
 * missing arrays may repair to exemplar array
 * null arrays may be treated as missing
+* additional undeclared object fields are preserved
 * type mismatches still fail
 
 Coerce repairs omissions, not invalid values.

@@ -9,6 +9,7 @@ This documentation is for **users building workflows with Nerveflow**.
 - [03-language-reference.md](03-language-reference.md)
 - [04-host-integration.md](04-host-integration.md)
 - [05-platform-vision.md](05-platform-vision.md)
+- [10-host-db-connectors.md](10-host-db-connectors.md)
 
 ## Agent docs
 
@@ -16,6 +17,11 @@ This documentation is for **users building workflows with Nerveflow**.
 - [07-agent-language-reference.md](07-agent-language-reference.md)
 - [08-agent-checklists.md](08-agent-checklists.md)
 - [09-agent-canonical-snippets.md](09-agent-canonical-snippets.md)
+
+## Specifications
+
+- [spec-structured-return-contracts.md](spec-structured-return-contracts.md)
+- [spec-bounded-control-flow-provenance.md](spec-bounded-control-flow-provenance.md)
 
 ## Example scripts
 

@@ -81,6 +81,8 @@ Compatibility timeline:
 
 The `host-modules` layer provides tool capability composition separate from the runtime authority, keeping host-core substrate-clean while enabling domain-specific tool providers.
 
+For a concrete example of building a real PostgreSQL + pgvector capability with this split, see [10-host-db-connectors.md](10-host-db-connectors.md).
+
 ```js
 import {
   loadHostModules,
@@ -325,6 +327,82 @@ Example output event payload:
   "effectChannelId": "heartbeat"
 }
 ```
+
+## Agent call metadata contract (additive)
+
+Agent transports can now return either a legacy string or an envelope:
+
+- legacy: string response text
+- envelope: `{ text, metadata }`
+
+Host adapter behavior:
+
+- host adapter normalizes both shapes
+- workflow-visible `agent()` return value is unchanged (it still returns the parsed/formatted value)
+- metadata is captured separately for observability and accounting
+
+Runtime execution payload behavior:
+
+- `nextv_execution.result.agentCalls` is additive and defaults to an empty array
+- each entry corresponds to one successful `agent()` call during that execution
+
+`agentCalls[]` entry shape:
+
+- `agent` agent profile name used by `agent()`
+- `line` source line where the `agent()` call occurred
+- `statement` statement text for traceability
+- `metadata` provider metadata object (transport-defined)
+
+Recommended metadata fields (Ollama transport):
+
+- `provider` provider id (for example `ollama`)
+- `model` resolved model id
+- `usage.promptTokens`
+- `usage.completionTokens`
+- `usage.totalTokens`
+- `timings.totalDurationNs`
+- `timings.loadDurationNs`
+- `timings.promptEvalDurationNs`
+- `timings.evalDurationNs`
+
+Example `nextv_execution` result snippet:
+
+```json
+{
+  "result": {
+    "stopped": false,
+    "steps": 4,
+    "agentCalls": [
+      {
+        "agent": "router",
+        "line": 22,
+        "statement": "let decision = agent(\"router\", prompt)",
+        "metadata": {
+          "provider": "ollama",
+          "model": "qwen2.5",
+          "usage": {
+            "promptTokens": 180,
+            "completionTokens": 34,
+            "totalTokens": 214
+          },
+          "timings": {
+            "totalDurationNs": 2198345500,
+            "loadDurationNs": 0,
+            "promptEvalDurationNs": 321000000,
+            "evalDurationNs": 842000000
+          }
+        }
+      }
+    ]
+  }
+}
+```
+
+Compatibility notes:
+
+- hosts that ignore `agentCalls` continue to work unchanged
+- hosts can accumulate cost/latency metrics by summing metadata across `nextv_execution` events
+- transports that do not provide metadata still work; entries are omitted unless metadata exists
 
 ## Declared effect startup policy
 

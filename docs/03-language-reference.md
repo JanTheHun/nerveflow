@@ -132,7 +132,7 @@ returns=from_json(file("contracts/triage.json"))
 `validate` controls validation behavior when `returns` is present:
 
 - `validate="coerce"` (default): fills missing declared structure from the contract recursively
-- `validate="strict"`: requires all declared fields and exact structural types with no repair
+- `validate="strict"`: requires all declared fields and exact structural types with no repair; additional undeclared object fields are violations
 
 `retry_on_contract_violation` controls retry behavior when `returns` is present and validation fails:
 
@@ -359,6 +359,11 @@ Host-owned responsibilities include:
 - nested script execution (`callScript`)
 - operator path resolution (`resolveOperatorPath`)
 - input/event transport and persistence strategy
+
+Agent metadata note:
+
+- `agent()` still returns workflow values only; per-call provider metadata is a host observability payload surfaced in `nextv_execution.result.agentCalls`
+- see [04-host-integration.md](04-host-integration.md#agent-call-metadata-contract-additive) for the additive metadata contract and example payloads
 
 ## 10. Contract Notes
 

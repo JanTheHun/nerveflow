@@ -1,0 +1,77 @@
+state.storeCount = 0
+state.lastStored = {}
+state.lastQuery = ""
+state.lastResults = []
+state.lastCategory = ""
+
+on external "remember_fact"
+  stored = tool("memory_store", {
+    text: event.value,
+    metadata: {
+      category: "fact"
+    }
+  })
+  state.storeCount = state.storeCount + 1
+  state.lastStored = stored
+  state.lastCategory = "fact"
+  output json {
+    status: "stored",
+    category: state.lastCategory,
+    totalStored: state.storeCount,
+    stored: stored,
+  }
+end
+
+on external "remember_pattern"
+  stored = tool("memory_store", {
+    text: event.value,
+    metadata: {
+      category: "pattern"
+    }
+  })
+  state.storeCount = state.storeCount + 1
+  state.lastStored = stored
+  state.lastCategory = "pattern"
+  output json {
+    status: "stored",
+    category: state.lastCategory,
+    totalStored: state.storeCount,
+    stored: stored,
+  }
+end
+
+on external "recall_memory"
+  results = tool("memory_retrieve", {
+    query_text: event.value,
+    limit: 5,
+  })
+  state.lastQuery = event.value
+  state.lastResults = results.items
+  state.lastCategory = ""
+  output json {
+    status: "results",
+    query: state.lastQuery,
+    count: results.count,
+    items: results.items,
+  }
+end
+
+on external "recall_patterns"
+  results = tool("memory_retrieve", {
+    query_text: event.value,
+    limit: 5,
+    filter_metadata: {
+      category: "pattern"
+    }
+  })
+  state.lastQuery = event.value
+  state.lastResults = results.items
+  state.lastCategory = "pattern"
+  output json {
+    status: "results",
+    query: state.lastQuery,
+    category: state.lastCategory,
+    count: results.count,
+    items: results.items,
+  }
+end

@@ -1,5 +1,6 @@
 import { createPublicFileStoreProvider } from './file_store.js'
 export { createPollingIngressConnector } from './polling_ingress_connector.js'
+export { createMemoryProvider } from './memory_provider.js'
 export {
   buildSyntheticRssItem,
   fetchRssCandidatesByFeed,

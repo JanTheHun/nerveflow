@@ -1,0 +1,9 @@
+{
+  "entrypointPath": "entry.nrv",
+  "externals": [
+    "remember_fact",
+    "remember_pattern",
+    "recall_memory",
+    "recall_patterns"
+  ]
+}

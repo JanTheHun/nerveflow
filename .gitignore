@@ -3,3 +3,5 @@ logs/
 bin/print-ollama-debug-log.js
 examples/news-agent/voice-spa/.env
 examples/news-agent/voice-spa/.tmp/
+examples/news-agent/.data/
+examples/memory-agent/.env

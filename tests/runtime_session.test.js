@@ -214,7 +214,7 @@ test('callAgent includes images when event payload provides images', async () =>
     },
   })
 
-  assert.equal(response, 'ok')
+  assert.deepEqual(response, { value: 'ok', metadata: null })
   assert.equal(calls.length, 1)
   assert.equal(calls[0].model, 'qwen2.5vl')
   assert.equal(calls[0].messages.length, 1)
@@ -503,7 +503,10 @@ test('callAgent validates returns contract in coerce mode', async () => {
     event: {},
   })
 
-  assert.deepEqual(result, { intent: 'search', confidence: 0 })
+  assert.deepEqual(result, {
+    value: { intent: 'search', confidence: 0 },
+    metadata: null,
+  })
 })
 
 test('callAgent retries on JSON parse failure when retry_on_contract_violation is set', async () => {
@@ -548,7 +551,10 @@ test('callAgent retries on JSON parse failure when retry_on_contract_violation i
   })
 
   assert.equal(callCount, 2)
-  assert.deepEqual(result, { intent: 'search' })
+  assert.deepEqual(result, {
+    value: { intent: 'search' },
+    metadata: null,
+  })
 })
 
 test('callAgent throws JSON parse error when retries exhausted', async () => {

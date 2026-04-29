@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
-import { loadWorkspaceNextVConfig } from '../src/host_core/workspace_config.js'
+import { getConfiguredExternals, loadWorkspaceNextVConfig } from '../src/host_core/workspace_config.js'
 
 function toWorkspaceDisplayPathFactory(workspaceDir) {
   return (targetPath) => relative(workspaceDir.absolutePath, targetPath).replace(/\\/g, '/')
@@ -384,4 +384,24 @@ test('rejects invalid module mode in nextv.json', () => {
   } finally {
     rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
   }
+})
+
+test('getConfiguredExternals returns normalized nextv.json externals only', () => {
+  const workspaceConfig = {
+    nextv: {
+      config: {
+        externals: [' user_message ', 'reset_chat', '', 'user_message', null],
+      },
+      timers: [
+        { event: 'timer_tick', interval: 1000 },
+      ],
+    },
+  }
+
+  assert.deepEqual(getConfiguredExternals(workspaceConfig), ['user_message', 'reset_chat'])
+})
+
+test('getConfiguredExternals returns empty list when externals are missing', () => {
+  assert.deepEqual(getConfiguredExternals({ nextv: { config: {} } }), [])
+  assert.deepEqual(getConfiguredExternals(null), [])
 })

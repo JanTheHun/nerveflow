@@ -12,13 +12,25 @@ function extractEventImages(event) {
     .filter(Boolean)
 }
 
-function enrichAgentContractError(err, { agentName, line, statement }) {
+function enrichAgentContractError(err, { agentName, line, statement, sourcePath, sourceLine }) {
   if (!err || typeof err !== 'object') return err
   if (err.code !== 'AGENT_RETURN_CONTRACT_VIOLATION') return err
 
   const normalizedLine = Number(line)
-  if (Number.isFinite(normalizedLine) && !Number.isFinite(Number(err.line))) {
-    err.line = normalizedLine
+  const normalizedSourceLine = Number(sourceLine)
+  const hasSourceLine = Number.isFinite(normalizedSourceLine) && normalizedSourceLine > 0
+  if (hasSourceLine) {
+    err.sourceLine = normalizedSourceLine
+  }
+
+  const normalizedSourcePath = String(sourcePath ?? '').trim()
+  if (normalizedSourcePath && !err.sourcePath) {
+    err.sourcePath = normalizedSourcePath
+  }
+
+  const preferredLine = hasSourceLine ? normalizedSourceLine : normalizedLine
+  if (Number.isFinite(preferredLine) && !Number.isFinite(Number(err.line))) {
+    err.line = preferredLine
   }
   if (statement && !err.statement) {
     err.statement = statement
@@ -30,11 +42,34 @@ function enrichAgentContractError(err, { agentName, line, statement }) {
   const baseMessage = String(err.message ?? 'Agent return contract violation.')
   const hasAgentName = baseMessage.includes(`agent("${agentName}")`)
   const withAgent = hasAgentName ? baseMessage : `agent("${agentName}"): ${baseMessage}`
-  const withLine = Number.isFinite(normalizedLine) && !withAgent.includes(`line ${normalizedLine}`)
-    ? `${withAgent} (line ${normalizedLine})`
+  const displayLine = hasSourceLine ? normalizedSourceLine : normalizedLine
+  const withLine = Number.isFinite(displayLine) && !withAgent.includes(`line ${displayLine}`)
+    ? `${withAgent} (line ${displayLine})`
     : withAgent
 
   err.message = withLine
+  return err
+}
+
+function annotateRetryExhaustion(err, retryLimit, attemptNum) {
+  if (!err || typeof err !== 'object') return err
+
+  const retriesUsed = Number.isInteger(attemptNum) ? Math.max(0, attemptNum) : 0
+  const configuredRetries = Number.isInteger(retryLimit) ? Math.max(0, retryLimit) : 0
+  const attempts = retriesUsed + 1
+
+  err.retryCount = retriesUsed
+  err.retryLimit = configuredRetries
+  err.attempts = attempts
+
+  if (retriesUsed > 0) {
+    const baseMessage = String(err.message ?? 'runtime error')
+    if (!/after\s+\d+\s+retr(?:y|ies)/i.test(baseMessage)) {
+      const label = retriesUsed === 1 ? 'retry' : 'retries'
+      err.message = `${baseMessage} (after ${retriesUsed} ${label})`
+    }
+  }
+
   return err
 }
 
@@ -61,13 +96,40 @@ function cloneEventForViolation(event) {
   }
 }
 
+function normalizeAgentTransportResult(result) {
+  if (typeof result === 'string') {
+    return { text: result, metadata: null }
+  }
+
+  if (result && typeof result === 'object' && !Array.isArray(result)) {
+    const hasText = Object.prototype.hasOwnProperty.call(result, 'text')
+      || Object.prototype.hasOwnProperty.call(result, 'content')
+      || Object.prototype.hasOwnProperty.call(result, 'response')
+
+    const text = hasText
+      ? String(result.text ?? result.content ?? result.response ?? '').trim()
+      : String(result.value ?? '').trim()
+
+    const metadata = (result.metadata && typeof result.metadata === 'object' && !Array.isArray(result.metadata))
+      ? result.metadata
+      : null
+
+    return { text, metadata }
+  }
+
+  return {
+    text: String(result ?? '').trim(),
+    metadata: null,
+  }
+}
+
 /**
  * Creates a standard nextV host adapter for a given workspace session.
  *
  * @param {object} opts
  * @param {object} opts.workspaceDir       - resolved workspace dir { absolutePath, relativePath }
  * @param {object} opts.workspaceConfig    - loaded workspace config (from workspace_config.js)
- * @param {function} opts.callAgent        - transport fn: ({ model, messages }) => Promise<string>
+ * @param {function} opts.callAgent        - transport fn: ({ model, messages }) => Promise<string|{text:string,metadata?:object}>
  * @param {string}  [opts.defaultModel]    - fallback model name if agent profile has none
  * @param {function} opts.resolvePathFromBaseDirectory - workspace-safe path resolver
  * @param {function} opts.existsSync       - fs.existsSync
@@ -140,7 +202,7 @@ export function createHostAdapter({
       throw new Error(`Tool "${toolName}" is not available in this host yet.`)
     },
 
-    callAgent: async ({ agent, prompt, instructions, messages, format, returns, validate, retry_on_contract_violation, on_contract_violation, event, line, statement }) => {
+    callAgent: async ({ agent, prompt, instructions, messages, format, returns, validate, retry_on_contract_violation, on_contract_violation, event, line, statement, sourcePath, sourceLine }) => {
       const agentName = String(agent ?? '').trim()
       const profile = resolveAgentProfile(agentName)
       if (!profile) {
@@ -202,7 +264,8 @@ export function createHostAdapter({
           throw new Error(`agent("${agentName}") has no prompt/messages to send.`)
         }
 
-        const raw = await callAgent({ model, messages: chatMessages })
+        const transportResult = await callAgent({ model, messages: chatMessages })
+        const { text: raw, metadata } = normalizeAgentTransportResult(transportResult)
         if (returns != null) {
           let parsed
           try {
@@ -227,12 +290,16 @@ export function createHostAdapter({
                 },
               }
             }
+            annotateRetryExhaustion(parseErr, retryLimit, attemptNum)
             throw parseErr
           }
           if (typeof validateAgentReturnContract === 'function') {
             const mode = String(validate ?? '').trim() || 'coerce'
             try {
-              return validateAgentReturnContract(parsed, returns, mode)
+              return {
+                value: validateAgentReturnContract(parsed, returns, mode),
+                metadata,
+              }
             } catch (err) {
               lastViolation = err
               const violationKey = `${err?.path}:${err?.expected}:${err?.actual}`
@@ -257,14 +324,18 @@ export function createHostAdapter({
                   },
                 }
               }
-              enrichAgentContractError(err, { agentName, line, statement })
+              enrichAgentContractError(err, { agentName, line, statement, sourcePath, sourceLine })
+              annotateRetryExhaustion(err, retryLimit, attemptNum)
               throw err
             }
           }
-          return parsed
+          return { value: parsed, metadata }
         }
-        if (!format) return raw
-        return normalizeAgentFormattedOutput(raw, format)
+        if (!format) return { value: raw, metadata }
+        return {
+          value: normalizeAgentFormattedOutput(raw, format),
+          metadata,
+        }
       }
     },
 

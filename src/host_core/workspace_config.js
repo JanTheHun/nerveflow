@@ -480,6 +480,13 @@ export function getDeclaredExternals(workspaceConfig) {
   return [...new Set([...declared, ...timerEvents])]
 }
 
+export function getConfiguredExternals(workspaceConfig) {
+  const declared = Array.isArray(workspaceConfig?.nextv?.config?.externals)
+    ? workspaceConfig.nextv.config.externals
+    : []
+  return [...new Set(declared.map((value) => String(value ?? '').trim()).filter(Boolean))]
+}
+
 export function getDeclaredEffectChannels(workspaceConfig) {
   const declared = workspaceConfig?.effects?.map
   if (!declared || typeof declared !== 'object' || Array.isArray(declared)) return {}

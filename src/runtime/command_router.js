@@ -82,9 +82,14 @@ export function createRuntimeCommandRouter({
         data = await runtimeCore.dispatchIngress(payload)
       } else if (command.type === 'snapshot') {
         const snapshot = runtimeCore.getSnapshot()
+        const status = typeof runtimeCore.getStatus === 'function'
+          ? (runtimeCore.getStatus() ?? {})
+          : {}
         data = {
           running: snapshot?.running === true,
           snapshot,
+          workspaceDir: String(status?.workspaceDir ?? ''),
+          entrypointPath: String(status?.entrypointPath ?? ''),
         }
       } else if (command.type === 'subscribe') {
         if (typeof onSubscribe === 'function') onSubscribe(command)

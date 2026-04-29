@@ -301,6 +301,7 @@ export function createNextVRuntimeController({
           result: {
             stopped: result?.stopped === true,
             steps: Number(result?.steps ?? 0),
+            agentCalls: Array.isArray(result?.agentCallMetadata) ? result.agentCallMetadata : [],
           },
           events: Array.isArray(events) ? events : [],
           snapshot,

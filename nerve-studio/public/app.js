@@ -27,8 +27,11 @@ let nextVStateFilterQuery = ''
 let deleteConfirmTimeoutId = null
 let deleteConfirmTickerId = null
 let pendingDeleteConfirmResolver = null
+let pendingFloatingPanelChoiceResolver = null
 const nextVStateSectionOpenByKey = new Map()
 const SCRIPT_FILE_REF_REGEX = /([!?])?file:([^\s"']+)/g
+const SCRIPT_FILE_CALL_REGEX = /\bfile\(["']([^"'\n]+)["']\)/g
+const FLOATING_PANEL_IDS = ['FLOAT1', 'FLOAT2']
 
 const scriptCache = new Map()
 const dirtyEditsCache = new Map() // stashed unsaved edits per file when autosave is off
@@ -62,11 +65,47 @@ const storageKeys = {
 
 const MIN_LEFT_PANEL_SECTION_HEIGHT = 90
 
-const scriptEditorState = {
-  path: '',
-  loadedText: '',
-  dirty: false,
+function createEditorPaneState(id) {
+  return {
+    id,
+    path: '',
+    loadedText: '',
+    dirty: false,
+  }
 }
+
+function createFloatingGraphPanelState(id) {
+  return {
+    id,
+    open: false,
+    filePath: '',
+    line: null,
+    loadedText: '',
+    dirty: false,
+    anchorNodeId: '',
+    lastFocusedAt: 0,
+  }
+}
+
+const editorLayoutState = {
+  layoutMode: 'split-2',
+  activePaneId: 'A',
+  paneOrder: ['A', 'B'],
+  allPanes: ['A', 'B', 'C', 'D'],
+}
+
+const scriptEditorState = createEditorPaneState('A')
+const editorPaneBState = createEditorPaneState('B')
+const editorPaneCState = createEditorPaneState('C')
+const editorPaneDState = createEditorPaneState('D')
+let activePaneId = editorLayoutState.activePaneId
+const editorPaneStateById = new Map([
+  ['A', scriptEditorState],
+  ['B', editorPaneBState],
+  ['C', editorPaneCState],
+  ['D', editorPaneDState],
+])
+const paneAssignments = new Map() // filePath → 'A' | 'B' | 'C' | 'D'
 
 const nextVFileState = {
   tree: null,
@@ -134,6 +173,11 @@ const nextVGraphState = {
   graphRefreshInProgress: false,
   detailPopoverEl: null,
   canvasEl: null,
+  floatingPanels: new Map([
+    ['FLOAT1', createFloatingGraphPanelState('FLOAT1')],
+    ['FLOAT2', createFloatingGraphPanelState('FLOAT2')],
+  ]),
+  activeFloatingPanelId: 'FLOAT1',
 }
 
 const inputPanelState = {
@@ -182,6 +226,92 @@ const scriptInputs = document.getElementById('script-inputs')
 const scriptLineGutter = document.getElementById('script-line-gutter')
 const scriptView = document.getElementById('script-view')
 const scriptViewMirror = document.getElementById('script-view-mirror')
+const scriptViewB = document.getElementById('script-view-b')
+const scriptLineGutterB = document.getElementById('script-line-gutter-b')
+const scriptViewMirrorB = document.getElementById('script-view-mirror-b')
+const scriptViewC = document.getElementById('script-view-c')
+const scriptLineGutterC = document.getElementById('script-line-gutter-c')
+const scriptViewMirrorC = document.getElementById('script-view-mirror-c')
+const scriptViewD = document.getElementById('script-view-d')
+const scriptLineGutterD = document.getElementById('script-line-gutter-d')
+const scriptViewMirrorD = document.getElementById('script-view-mirror-d')
+const nextVFloatingCodePanel = document.getElementById('nextv-floating-code-panel')
+const nextVFloatingCodePanel2 = document.getElementById('nextv-floating-code-panel-2')
+const nextVFloatingCodeTitle = document.getElementById('nextv-floating-code-title')
+const nextVFloatingCodeTitle2 = document.getElementById('nextv-floating-code-title-2')
+const nextVFloatingCodePath = document.getElementById('nextv-floating-code-path')
+const nextVFloatingCodePath2 = document.getElementById('nextv-floating-code-path-2')
+const nextVFloatingCodeLine = document.getElementById('nextv-floating-code-line')
+const nextVFloatingCodeLine2 = document.getElementById('nextv-floating-code-line-2')
+const nextVFloatingCodeDirty = document.getElementById('nextv-floating-code-dirty')
+const nextVFloatingCodeDirty2 = document.getElementById('nextv-floating-code-dirty-2')
+const nextVFloatingCodeTextarea = document.getElementById('nextv-floating-code-textarea')
+const nextVFloatingCodeTextarea2 = document.getElementById('nextv-floating-code-textarea-2')
+const nextVFloatingCodeMirror = document.getElementById('nextv-floating-code-mirror')
+const nextVFloatingCodeMirror2 = document.getElementById('nextv-floating-code-mirror-2')
+const nextVFloatingCodeGutter = document.getElementById('nextv-floating-code-gutter')
+const nextVFloatingCodeGutter2 = document.getElementById('nextv-floating-code-gutter-2')
+const nextVFloatingPanelChooser = document.getElementById('nextv-floating-panel-chooser')
+const nextVFloatingPanelChooserTitle = document.getElementById('nextv-floating-panel-chooser-title')
+const nextVFloatingPanelChooserDetails = document.getElementById('nextv-floating-panel-chooser-details')
+const nextVFloatingPanelChooserPanel1Btn = document.getElementById('nextv-floating-panel-chooser-panel1')
+const nextVFloatingPanelChooserPanel2Btn = document.getElementById('nextv-floating-panel-chooser-panel2')
+const nextVFloatingPanelChooserCancelBtn = document.getElementById('nextv-floating-panel-chooser-cancel')
+const editorPanesGrid = document.getElementById('editor-panes-grid')
+const editorPaneA = document.getElementById('editor-pane-a')
+const editorPaneB = document.getElementById('editor-pane-b')
+const editorPaneC = document.getElementById('editor-pane-c')
+const editorPaneD = document.getElementById('editor-pane-d')
+const paneTitleA = document.getElementById('pane-a-title')
+const paneTitleB = document.getElementById('pane-b-title')
+const paneTitleC = document.getElementById('pane-c-title')
+const paneTitleD = document.getElementById('pane-d-title')
+const editorLayoutSplitBtn = document.getElementById('editor-layout-split-btn')
+const editorLayoutGridBtn = document.getElementById('editor-layout-grid-btn')
+const editorPaneDescriptors = new Map([
+  ['A', {
+    pane: editorPaneA,
+    title: paneTitleA,
+    textarea: scriptView,
+    mirror: scriptViewMirror,
+    gutter: scriptLineGutter,
+  }],
+  ['B', {
+    pane: editorPaneB,
+    title: paneTitleB,
+    textarea: scriptViewB,
+    mirror: scriptViewMirrorB,
+    gutter: scriptLineGutterB,
+  }],
+  ['C', {
+    pane: editorPaneC,
+    title: paneTitleC,
+    textarea: scriptViewC,
+    mirror: scriptViewMirrorC,
+    gutter: scriptLineGutterC,
+  }],
+  ['D', {
+    pane: editorPaneD,
+    title: paneTitleD,
+    textarea: scriptViewD,
+    mirror: scriptViewMirrorD,
+    gutter: scriptLineGutterD,
+  }],
+  ['FLOAT1', {
+    pane: nextVFloatingCodePanel,
+    title: nextVFloatingCodeTitle,
+    textarea: nextVFloatingCodeTextarea,
+    mirror: nextVFloatingCodeMirror,
+    gutter: nextVFloatingCodeGutter,
+  }],
+  ['FLOAT2', {
+    pane: nextVFloatingCodePanel2,
+    title: nextVFloatingCodeTitle2,
+    textarea: nextVFloatingCodeTextarea2,
+    mirror: nextVFloatingCodeMirror2,
+    gutter: nextVFloatingCodeGutter2,
+  }],
+])
 const scriptLogs = document.getElementById('script-logs')
 const scriptOutput = document.getElementById('script-output')
 const scriptHeaderTitle = document.getElementById('script-header-title')
@@ -1230,6 +1360,401 @@ function clearNextVGraphOutput() {
   nextVGraphState.canvasEl = null
   nextVGraphState.layoutPositions = new Map()
   nextVGraphState.setSelectedGraphNodeFn = null
+}
+
+function normalizeFloatingPanelId(panelId) {
+  const candidate = String(panelId ?? '').trim().toUpperCase()
+  if (FLOATING_PANEL_IDS.includes(candidate)) return candidate
+  return nextVGraphState.activeFloatingPanelId || 'FLOAT1'
+}
+
+function getFloatingPanelState(panelId) {
+  const id = normalizeFloatingPanelId(panelId)
+  return nextVGraphState.floatingPanels.get(id)
+}
+
+function getFloatingPanelDescriptor(panelId) {
+  const id = normalizeFloatingPanelId(panelId)
+  return {
+    id,
+    panel: editorPaneDescriptors.get(id)?.pane,
+    title: editorPaneDescriptors.get(id)?.title,
+    path: id === 'FLOAT1' ? nextVFloatingCodePath : nextVFloatingCodePath2,
+    line: id === 'FLOAT1' ? nextVFloatingCodeLine : nextVFloatingCodeLine2,
+    dirty: id === 'FLOAT1' ? nextVFloatingCodeDirty : nextVFloatingCodeDirty2,
+    textarea: editorPaneDescriptors.get(id)?.textarea,
+  }
+}
+
+function setFloatingPanelActive(panelId) {
+  const id = normalizeFloatingPanelId(panelId)
+  nextVGraphState.activeFloatingPanelId = id
+  const now = Date.now()
+
+  for (const panelKey of FLOATING_PANEL_IDS) {
+    const descriptor = getFloatingPanelDescriptor(panelKey)
+    const state = getFloatingPanelState(panelKey)
+    if (!descriptor.panel || !state) continue
+
+    if (panelKey === id && state.open) {
+      state.lastFocusedAt = now
+      descriptor.panel.style.zIndex = '8'
+      descriptor.panel.classList.add('is-active')
+    } else {
+      descriptor.panel.style.zIndex = '6'
+      descriptor.panel.classList.remove('is-active')
+    }
+  }
+}
+
+function updateFloatingGraphCodePanelMeta(panelId) {
+  if (!panelId) {
+    for (const currentId of FLOATING_PANEL_IDS) updateFloatingGraphCodePanelMeta(currentId)
+    return
+  }
+
+  const id = normalizeFloatingPanelId(panelId)
+  const state = getFloatingPanelState(id)
+  const descriptor = getFloatingPanelDescriptor(id)
+  if (!state || !descriptor.panel) return
+
+  if (descriptor.path) {
+    descriptor.path.textContent = state.filePath || '—'
+    descriptor.path.title = state.filePath || ''
+  }
+  if (descriptor.title) {
+    descriptor.title.textContent = state.filePath ? `graph code • ${pathBasename(state.filePath)}` : 'graph code'
+  }
+  if (descriptor.line) {
+    descriptor.line.textContent = Number.isFinite(Number(state.line)) ? `line ${Number(state.line)}` : 'line —'
+  }
+  if (descriptor.dirty) {
+    descriptor.dirty.hidden = !state.dirty
+  }
+}
+
+function isFloatingGraphCodePanelDirty(panelId) {
+  const state = getFloatingPanelState(panelId)
+  if (!state || !state.open || !state.filePath) return false
+  return state.dirty
+}
+
+function getFloatingPanelByFilePath(filePath) {
+  const normalized = normalizeRelativePath(filePath)
+  if (!normalized) return ''
+  for (const panelId of FLOATING_PANEL_IDS) {
+    const state = getFloatingPanelState(panelId)
+    if (state?.open && normalizeRelativePath(state.filePath) === normalized) return panelId
+  }
+  return ''
+}
+
+function getFirstAvailableFloatingPanelId() {
+  for (const panelId of FLOATING_PANEL_IDS) {
+    const state = getFloatingPanelState(panelId)
+    if (!state?.open) return panelId
+  }
+  return ''
+}
+
+function closeFloatingPanelChooser(selection = null) {
+  if (nextVFloatingPanelChooser) nextVFloatingPanelChooser.hidden = true
+  if (pendingFloatingPanelChoiceResolver) {
+    pendingFloatingPanelChoiceResolver(selection)
+    pendingFloatingPanelChoiceResolver = null
+  }
+}
+
+function showFloatingPanelChooser(options = {}) {
+  if (!nextVFloatingPanelChooser) return Promise.resolve(null)
+
+  const targetPath = normalizeRelativePath(options.filePath)
+  if (nextVFloatingPanelChooserTitle) {
+    const basename = targetPath ? pathBasename(targetPath) : 'requested file'
+    nextVFloatingPanelChooserTitle.textContent = `Open ${basename} in which panel?`
+  }
+
+  if (nextVFloatingPanelChooserDetails) {
+    const details = FLOATING_PANEL_IDS.map((panelId) => {
+      const state = getFloatingPanelState(panelId)
+      const label = state?.filePath ? pathBasename(state.filePath) : 'empty'
+      const dirty = state?.dirty ? ' • unsaved' : ''
+      return `${panelId === 'FLOAT1' ? 'Panel 1' : 'Panel 2'}: ${label}${dirty}`
+    })
+    nextVFloatingPanelChooserDetails.textContent = details.join(' | ')
+  }
+
+  nextVFloatingPanelChooser.hidden = false
+  return new Promise((resolve) => {
+    pendingFloatingPanelChoiceResolver = resolve
+  })
+}
+
+async function chooseFloatingPanelForOpen(options = {}) {
+  const requestedPath = normalizeRelativePath(options.filePath)
+  const existingPanelId = getFloatingPanelByFilePath(requestedPath)
+  if (existingPanelId) {
+    setFloatingPanelActive(existingPanelId)
+    return existingPanelId
+  }
+
+  const availablePanelId = getFirstAvailableFloatingPanelId()
+  if (availablePanelId) return availablePanelId
+
+  const selectedPanelId = await showFloatingPanelChooser({ filePath: requestedPath })
+  if (!selectedPanelId) return ''
+
+  const selectedState = getFloatingPanelState(selectedPanelId)
+  if (selectedState?.dirty) {
+    const discard = window.confirm(`Discard unsaved edits in ${selectedPanelId === 'FLOAT1' ? 'Panel 1' : 'Panel 2'}?`)
+    if (!discard) return ''
+  }
+
+  return selectedPanelId
+}
+
+async function saveFloatingGraphCodePanel(arg = {}) {
+  const panelId = typeof arg === 'string' ? arg : arg.panelId
+  const options = (arg && typeof arg === 'object' && !Array.isArray(arg)) ? arg : {}
+  const id = normalizeFloatingPanelId(panelId)
+  const state = getFloatingPanelState(id)
+  const descriptor = getFloatingPanelDescriptor(id)
+  if (!state || !state.open || !state.filePath || !descriptor.textarea) return false
+
+  const silent = options.silent === true
+  const content = normalizeNewlines(descriptor.textarea.value ?? '')
+  const { savedPath, bytes } = await saveEditorFileContent(state.filePath, content)
+  state.filePath = savedPath
+  state.loadedText = content
+  state.dirty = false
+  updateFloatingGraphCodePanelMeta(id)
+
+  if (!silent) {
+    appendScriptLogRow(`[file:save] path=${savedPath} bytes=${bytes}`, 'result')
+    setStatus('floating panel saved')
+  }
+  return true
+}
+
+function closeFloatingGraphCodePanel(arg = {}) {
+  const panelId = typeof arg === 'string' ? arg : arg.panelId
+  const options = (arg && typeof arg === 'object' && !Array.isArray(arg)) ? arg : {}
+  const id = normalizeFloatingPanelId(panelId)
+  const state = getFloatingPanelState(id)
+  const descriptor = getFloatingPanelDescriptor(id)
+  if (!state || !descriptor.panel) return false
+
+  const force = options.force === true
+  if (!force && isFloatingGraphCodePanelDirty(id)) {
+    const discard = window.confirm('Discard unsaved floating panel edits?')
+    if (!discard) return false
+  }
+
+  state.open = false
+  state.filePath = ''
+  state.line = null
+  state.loadedText = ''
+  state.dirty = false
+  state.anchorNodeId = ''
+
+  descriptor.panel.hidden = true
+  descriptor.panel.style.left = ''
+  descriptor.panel.style.top = ''
+  descriptor.panel.style.right = ''
+  if (descriptor.textarea) descriptor.textarea.value = ''
+  renderScriptMirrorForPane(id, '')
+  updateFloatingGraphCodePanelMeta(id)
+
+  const fallbackPanelId = FLOATING_PANEL_IDS.find((currentId) => getFloatingPanelState(currentId)?.open)
+  if (fallbackPanelId) setFloatingPanelActive(fallbackPanelId)
+  return true
+}
+
+async function openFloatingGraphCodePanel(options = {}) {
+  const requestedPath = resolveNextVPath(normalizeGraphSourcePathForEditor(options.filePath))
+  if (!requestedPath) return
+
+  const requestedPanelId = options.panelId ? normalizeFloatingPanelId(options.panelId) : ''
+  const panelId = requestedPanelId || await chooseFloatingPanelForOpen({ filePath: requestedPath })
+  if (!panelId) return
+
+  const state = getFloatingPanelState(panelId)
+  const descriptor = getFloatingPanelDescriptor(panelId)
+  if (!state || !descriptor.panel || !descriptor.textarea) return
+
+  const normalizedRequestedPath = normalizeRelativePath(requestedPath)
+  if (state.open && state.filePath && normalizeRelativePath(state.filePath) === normalizedRequestedPath) {
+    state.line = Number.isFinite(Number(options.line)) ? Number(options.line) : state.line
+    setFloatingPanelActive(panelId)
+    if (state.line && state.line > 1) {
+      const text = normalizeNewlines(descriptor.textarea.value)
+      const lines = text.split('\n')
+      const target = Math.max(1, Math.min(lines.length, state.line))
+      let offset = 0
+      for (let i = 0; i < target - 1; i++) offset += lines[i].length + 1
+      descriptor.textarea.setSelectionRange(offset, offset)
+    }
+    descriptor.textarea.focus()
+    updateFloatingGraphCodePanelMeta(panelId)
+    return
+  }
+
+  if (state.open && state.filePath && normalizeRelativePath(state.filePath) !== normalizedRequestedPath && isFloatingGraphCodePanelDirty(panelId)) {
+    const discard = window.confirm('Discard unsaved floating panel edits?')
+    if (!discard) return
+  }
+
+  const data = await loadEditorFileContent(requestedPath, { kind: 'editor' })
+  const normalizedPath = normalizeRelativePath(data.filePath ?? requestedPath)
+  const text = normalizeNewlines(String(data.content ?? ''))
+
+  state.open = true
+  state.filePath = normalizedPath
+  state.line = Number.isFinite(Number(options.line)) ? Number(options.line) : null
+  state.loadedText = text
+  state.dirty = false
+  state.anchorNodeId = String(options.nodeId ?? '')
+
+  descriptor.panel.hidden = false
+  descriptor.textarea.value = text
+
+  renderScriptMirrorForPane(panelId, text)
+  syncScriptMirrorScrollForPane(panelId)
+  updateFloatingGraphCodePanelMeta(panelId)
+  setFloatingPanelActive(panelId)
+
+  if (state.line && state.line > 1) {
+    const lines = text.split('\n')
+    const target = Math.max(1, Math.min(lines.length, state.line))
+    let offset = 0
+    for (let i = 0; i < target - 1; i++) offset += lines[i].length + 1
+    descriptor.textarea.setSelectionRange(offset, offset)
+  }
+  descriptor.textarea.focus()
+}
+
+function bindFloatingGraphCodePanelEvents() {
+  const bindDragForPanel = (panelId) => {
+    const descriptor = getFloatingPanelDescriptor(panelId)
+    if (!descriptor.panel) return
+
+    const header = descriptor.panel.querySelector('.nextv-floating-code-header')
+    if (!header || header.dataset.dragBound === '1') return
+    header.dataset.dragBound = '1'
+
+    header.addEventListener('mousedown', (e) => {
+      if (e.target.closest('button')) return
+      const shell = descriptor.panel.parentElement
+      setFloatingPanelActive(panelId)
+      const startX = e.clientX - descriptor.panel.offsetLeft
+      const startY = e.clientY - descriptor.panel.offsetTop
+      descriptor.panel.classList.add('is-dragging')
+
+      const onMove = (ev) => {
+        const maxL = shell.offsetWidth - descriptor.panel.offsetWidth
+        const maxT = shell.offsetHeight - descriptor.panel.offsetHeight
+        descriptor.panel.style.left = Math.max(0, Math.min(ev.clientX - startX, maxL)) + 'px'
+        descriptor.panel.style.top = Math.max(0, Math.min(ev.clientY - startY, maxT)) + 'px'
+        descriptor.panel.style.right = 'auto'
+      }
+      const onUp = () => {
+        descriptor.panel.classList.remove('is-dragging')
+        document.removeEventListener('mousemove', onMove)
+        document.removeEventListener('mouseup', onUp)
+      }
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onUp)
+    })
+  }
+
+  for (const panelId of FLOATING_PANEL_IDS) {
+    const descriptor = getFloatingPanelDescriptor(panelId)
+    const textarea = descriptor.textarea
+    if (!textarea || textarea.dataset.paneBound === '1') continue
+    textarea.dataset.paneBound = '1'
+
+    bindDragForPanel(panelId)
+
+    descriptor.panel?.addEventListener('mousedown', () => {
+      setFloatingPanelActive(panelId)
+    })
+
+    bindTextareaFileRefCursor(textarea, () => textarea.value)
+
+    textarea.addEventListener('input', () => {
+      const state = getFloatingPanelState(panelId)
+      const text = normalizeNewlines(textarea.value)
+      state.dirty = state.open && text !== state.loadedText
+      renderScriptMirrorForPane(panelId, text)
+      updateFloatingGraphCodePanelMeta(panelId)
+    })
+
+    textarea.addEventListener('scroll', () => {
+      syncScriptMirrorScrollForPane(panelId)
+    })
+
+    textarea.addEventListener('keydown', async (event) => {
+      const isSave = (event.ctrlKey || event.metaKey) && !event.altKey && String(event.key ?? '').toLowerCase() === 's'
+      if (isSave) {
+        event.preventDefault()
+        try {
+          await saveFloatingGraphCodePanel({ panelId })
+        } catch (err) {
+          appendScriptLogRow(`[file:error] ${err.message}`, 'error')
+          setStatus('floating panel save failed', 'responding')
+        }
+        return
+      }
+
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeFloatingGraphCodePanel({ panelId })
+      }
+    })
+
+    textarea.addEventListener('click', async () => {
+      if (textarea.selectionStart !== textarea.selectionEnd) return
+
+      const text = normalizeNewlines(textarea.value)
+      const primaryOffset = Number(textarea.selectionStart)
+      const candidateOffsets = [primaryOffset, Math.max(0, primaryOffset - 1)]
+
+      for (const offset of candidateOffsets) {
+        const ref = findScriptReferenceAtOffset(text, offset)
+        if (!ref) continue
+
+        const state = getFloatingPanelState(panelId)
+        const currentDir = pathDirname(state.filePath)
+        const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
+        const targetPath = String(ref.filePath ?? '').trim()
+        const resolvedPath = (
+          targetPath.startsWith('workspaces/')
+          || (workspaceDir && (targetPath === workspaceDir || targetPath.startsWith(`${workspaceDir}/`)))
+        )
+          ? normalizePathSegments(targetPath)
+          : joinRelativePath(currentDir || workspaceDir, targetPath)
+
+        try {
+          await openFloatingGraphCodePanel({ filePath: resolvedPath })
+        } catch (err) {
+          appendScriptLogRow(`[file:error] ${err.message}`, 'error')
+          setStatus('file open error', 'responding')
+        }
+        return
+      }
+    })
+  }
+
+  if (nextVFloatingPanelChooser && nextVFloatingPanelChooser.dataset.bound !== '1') {
+    nextVFloatingPanelChooser.dataset.bound = '1'
+
+    nextVFloatingPanelChooserPanel1Btn?.addEventListener('click', () => closeFloatingPanelChooser('FLOAT1'))
+    nextVFloatingPanelChooserPanel2Btn?.addEventListener('click', () => closeFloatingPanelChooser('FLOAT2'))
+    nextVFloatingPanelChooserCancelBtn?.addEventListener('click', () => closeFloatingPanelChooser(null))
+    nextVFloatingPanelChooser.addEventListener('click', (event) => {
+      if (event.target === nextVFloatingPanelChooser) closeFloatingPanelChooser(null)
+    })
+  }
 }
 
 function getNextVGraphViewport() {
@@ -3068,6 +3593,34 @@ function renderNextVGraph(data = {}, options = {}) {
       addLine('No additional transition metadata.')
     }
 
+    const sourcePath = normalizeGraphSourcePathForEditor(nodeObj?.sourcePath)
+    if (sourcePath) {
+      const actions = document.createElement('div')
+      actions.className = 'nextv-graph-transition-actions'
+
+      const openCodeBtn = document.createElement('button')
+      openCodeBtn.type = 'button'
+      openCodeBtn.className = 'panel-action'
+      openCodeBtn.textContent = 'open code'
+      openCodeBtn.title = 'open source in floating panel'
+      openCodeBtn.addEventListener('click', async (event) => {
+        event.stopPropagation()
+        try {
+          await openFloatingGraphCodePanel({
+            filePath: sourcePath,
+            line: Number.isFinite(Number(nodeObj?.sourceLine)) ? Number(nodeObj.sourceLine) : null,
+            nodeId: normalizedNodeId,
+          })
+        } catch (err) {
+          appendScriptLogRow(`[file:error] ${err.message}`, 'error')
+          setStatus('unable to open graph source', 'responding')
+        }
+      })
+
+      actions.appendChild(openCodeBtn)
+      detailRow.appendChild(actions)
+    }
+
     card.appendChild(detailRow)
     return card
   }
@@ -4108,6 +4661,31 @@ function toNextVRelativePath(workspacePath) {
   return normalizedPath.slice(workspaceDir.length + 1)
 }
 
+function normalizeGraphSourcePathForEditor(pathValue) {
+  const normalized = normalizeRelativePath(pathValue)
+  if (!normalized) return ''
+
+  // Graph metadata can include absolute host paths; convert back to workspace-relative.
+  if (/^[a-zA-Z]:\//.test(normalized)) {
+    const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
+    if (workspaceDir) {
+      const marker = `/${workspaceDir}/`
+      const markerIdx = normalized.lastIndexOf(marker)
+      if (markerIdx >= 0) return normalized.slice(markerIdx + 1)
+      if (normalized.endsWith(`/${workspaceDir}`)) return workspaceDir
+    }
+
+    const localWorkspaceIdx = normalized.lastIndexOf('/workspaces-local/')
+    if (localWorkspaceIdx >= 0) {
+      return normalized.slice(localWorkspaceIdx + 1)
+    }
+
+    return ''
+  }
+
+  return normalized
+}
+
 function updateOpenFileLabel(filePath = '') {
   if (!scriptOpenFileLabel) return
   const normalized = normalizeRelativePath(filePath)
@@ -4133,9 +4711,18 @@ async function closeOpenFileTab(filePath) {
   const normalized = normalizeRelativePath(filePath)
   if (!normalized) return
 
-  if (scriptEditorState.dirty && normalizeRelativePath(scriptEditorState.path) === normalized) {
-    await saveCurrentEditorFile({ silent: true })
+  for (const paneId of getPaneIds()) {
+    const paneState = getPaneState(paneId)
+    if (paneState.dirty && normalizeRelativePath(paneState.path) === normalized) {
+      await saveCurrentEditorFile({ silent: true, paneId })
+    }
   }
+
+  const assignedPaneId = paneAssignments.get(normalized)
+  if (assignedPaneId) {
+    clearEditorPane(assignedPaneId)
+  }
+  paneAssignments.delete(normalized)
 
   const currentTabs = [...nextVFileState.openTabs]
   const index = currentTabs.indexOf(normalized)
@@ -4149,6 +4736,8 @@ async function closeOpenFileTab(filePath) {
     const nextPath = currentTabs[index + 1] || currentTabs[index - 1] || ''
     if (nextPath) {
       await openWorkspaceEditorFile(nextPath)
+      persistPaneAssignments()
+      renderPaneTitles()
       return
     }
 
@@ -4157,6 +4746,8 @@ async function closeOpenFileTab(filePath) {
     renderWorkspaceTree()
   }
 
+  persistPaneAssignments()
+  renderPaneTitles()
   renderOpenFileTabs()
 }
 
@@ -4173,21 +4764,42 @@ function renderOpenFileTabs() {
   }
 
   const activePath = normalizeRelativePath(nextVFileState.openFilePath)
+  const panePathById = new Map(getPaneIds().map((paneId) => [paneId, getPanePath(paneId)]))
+  const focusedPath = getPanePath(activePaneId)
   const fragment = document.createDocumentFragment()
 
   for (const tabPath of nextVFileState.openTabs) {
     const tab = document.createElement('button')
     tab.type = 'button'
-    tab.className = `open-file-tab${tabPath === activePath ? ' active' : ''}`
+    tab.className = `open-file-tab${tabPath === focusedPath ? ' active' : ''}`
     tab.title = tabPath
+    tab.draggable = true
+    tab.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', tabPath)
+      e.dataTransfer.effectAllowed = 'link'
+    })
 
     const tabName = document.createElement('span')
     tabName.className = 'open-file-tab-name'
     const basename = pathBasename(tabPath)
-    const isCurrentDirty = tabPath === activePath && scriptEditorState.dirty
-    const isStashedDirty = tabPath !== activePath && dirtyEditsCache.has(tabPath)
-    tabName.textContent = (isCurrentDirty || isStashedDirty) ? `${basename} *` : basename
+    const isPaneDirty = getPaneIds().some((paneId) => {
+      const paneState = getPaneState(paneId)
+      return tabPath === panePathById.get(paneId) && paneState.dirty
+    })
+    const isAssignedToPane = getPaneIds().some((paneId) => tabPath === panePathById.get(paneId))
+    const isStashedDirty = !isAssignedToPane && dirtyEditsCache.has(tabPath)
+    tabName.textContent = (isPaneDirty || isStashedDirty) ? `${basename} *` : basename
     tab.appendChild(tabName)
+
+    // Pane assignment badge
+    const assignedPane = paneAssignments.get(tabPath)
+    if (assignedPane) {
+      const badge = document.createElement('span')
+      badge.className = 'pane-badge'
+      badge.dataset.pane = assignedPane
+      badge.textContent = assignedPane
+      tab.appendChild(badge)
+    }
 
     const close = document.createElement('span')
     close.className = 'open-file-tab-close'
@@ -4206,7 +4818,7 @@ function renderOpenFileTabs() {
     tab.appendChild(close)
 
     tab.addEventListener('click', async () => {
-      if (normalizeRelativePath(scriptEditorState.path) === tabPath) return
+      if (normalizeRelativePath(getPaneState(activePaneId).path) === tabPath) return
       try {
         await openWorkspaceEditorFile(tabPath)
       } catch (err) {
@@ -4664,7 +5276,10 @@ function remapEditorStatePaths(oldPath, newPath) {
 
   nextVFileState.openTabs = nextVFileState.openTabs.map((path) => remapPathPrefix(path, oldNormalized, newNormalized))
   nextVFileState.openFilePath = remapPathPrefix(nextVFileState.openFilePath, oldNormalized, newNormalized)
-  scriptEditorState.path = remapPathPrefix(scriptEditorState.path, oldNormalized, newNormalized)
+  for (const paneId of getPaneIds()) {
+    const paneState = getPaneState(paneId)
+    paneState.path = remapPathPrefix(paneState.path, oldNormalized, newNormalized)
+  }
 
   const remappedExpanded = new Set()
   for (const path of nextVFileState.expandedDirs) {
@@ -4792,7 +5407,8 @@ function renderFileTreeNode(node) {
       return
     }
     try {
-      await openWorkspaceEditorFile(node.path)
+      ensureOpenFileTab(node.path)
+      renderOpenFileTabs()
       setStatus(`opened ${node.path}`)
     } catch (err) {
       appendScriptLogRow(`[file:error] ${err.message}`, 'error')
@@ -4884,24 +5500,29 @@ async function loadWorkspaceTree(workspaceDir) {
 }
 
 async function saveCurrentEditorFile(options = {}) {
+  const paneId = options.paneId ?? activePaneId
+  const state = getPaneState(paneId)
   const silent = options.silent === true
   const explicitPath = normalizeRelativePath(options.explicitPath)
   const fallbackEntrypoint = resolveNextVPath(nextVEntrypointInput?.value)
-  const filePath = explicitPath || normalizeRelativePath(scriptEditorState.path) || fallbackEntrypoint
+  const filePath = explicitPath || normalizeRelativePath(state.path) || fallbackEntrypoint
 
   if (!filePath) {
     if (!silent) setStatus('file path required to save', 'responding')
     return false
   }
 
-  const content = getScriptEditorText()
+  const content = normalizeNewlines(getPaneTextarea(paneId)?.value ?? '')
   const { savedPath, bytes } = await saveEditorFileContent(filePath, content)
-  scriptEditorState.path = savedPath
-  scriptEditorState.loadedText = content
-  scriptEditorState.dirty = false
+  state.path = savedPath
+  state.loadedText = content
+  state.dirty = false
   dirtyEditsCache.delete(savedPath)
   persistNextVOpenFile(savedPath)
+  persistPaneAssignments()
   syncScriptBadgeState()
+  renderOpenFileTabs()
+  renderPaneTitles()
   renderWorkspaceTree()
 
   if (!silent) {
@@ -4937,7 +5558,6 @@ async function saveEditorFileContent(filePath, content) {
 
 async function saveAllNextVFiles(options = {}) {
   const silent = options.silent === true
-  const activePath = normalizeRelativePath(scriptEditorState.path)
   const failed = []
   let savedCount = 0
 
@@ -4946,9 +5566,14 @@ async function saveAllNextVFiles(options = {}) {
     if (!normalizedTabPath) continue
 
     let content = null
-    if (normalizedTabPath === activePath && scriptEditorState.dirty) {
-      content = getScriptEditorText()
-    } else {
+    const paneIdForTab = findPaneIdByFilePath(normalizedTabPath)
+    if (paneIdForTab) {
+      const paneState = getPaneState(paneIdForTab)
+      if (paneState.dirty) {
+        content = normalizeNewlines(getPaneTextarea(paneIdForTab)?.value ?? '')
+      }
+    }
+    if (content == null) {
       const stashed = dirtyEditsCache.get(normalizedTabPath)
       if (stashed) content = normalizeNewlines(String(stashed.content ?? ''))
     }
@@ -4969,11 +5594,12 @@ async function saveAllNextVFiles(options = {}) {
         }
       }
 
-      if (normalizedTabPath === activePath) {
-        scriptEditorState.path = savedPath
-        scriptEditorState.loadedText = content
-        scriptEditorState.dirty = false
-        persistNextVOpenFile(savedPath)
+      if (paneIdForTab) {
+        const paneState = getPaneState(paneIdForTab)
+        paneState.path = savedPath
+        paneState.loadedText = content
+        paneState.dirty = false
+        if (activePaneId === paneIdForTab) persistNextVOpenFile(savedPath)
       }
 
       if (!silent) {
@@ -5005,13 +5631,247 @@ async function saveAllNextVFiles(options = {}) {
   return { savedCount, failedCount: failed.length }
 }
 
+// --- Multi-pane editor helpers ---
+
+function getPaneIds() {
+  return Array.from(editorLayoutState.paneOrder)
+}
+
+function getPaneState(paneId) {
+  const normalizedPaneId = String(paneId ?? editorLayoutState.activePaneId).trim() || editorLayoutState.activePaneId
+  return editorPaneStateById.get(normalizedPaneId) ?? editorPaneStateById.get('A')
+}
+
+function getPaneDescriptor(paneId) {
+  const normalizedPaneId = String(paneId ?? editorLayoutState.activePaneId).trim() || editorLayoutState.activePaneId
+  return editorPaneDescriptors.get(normalizedPaneId) ?? editorPaneDescriptors.get('A')
+}
+
+function getPaneElements(paneId) {
+  const descriptor = getPaneDescriptor(paneId)
+  const normalizedPaneId = String(paneId ?? editorLayoutState.activePaneId).trim() || editorLayoutState.activePaneId
+  return {
+    pane: descriptor?.pane || document.getElementById(`editor-pane-${normalizedPaneId.toLowerCase()}`),
+    title: descriptor?.title || document.getElementById(`pane-${normalizedPaneId.toLowerCase()}-title`),
+    textarea: descriptor?.textarea || document.getElementById(normalizedPaneId === 'A' ? 'script-view' : `script-view-${normalizedPaneId.toLowerCase()}`),
+    mirror: descriptor?.mirror || document.getElementById(normalizedPaneId === 'A' ? 'script-view-mirror' : `script-view-mirror-${normalizedPaneId.toLowerCase()}`),
+    gutter: descriptor?.gutter || document.getElementById(normalizedPaneId === 'A' ? 'script-line-gutter' : `script-line-gutter-${normalizedPaneId.toLowerCase()}`),
+  }
+}
+
+function getPaneEditorShell(paneId) {
+  const { textarea, mirror, gutter, pane } = getPaneElements(paneId)
+  return textarea?.closest('.panel-editor-shell')
+    || mirror?.closest('.panel-editor-shell')
+    || gutter?.closest('.panel-editor-shell')
+    || pane?.querySelector('.panel-editor-shell')
+    || null
+}
+
+function updatePaneGutterMetrics(paneId, lineCount) {
+  const shell = getPaneEditorShell(paneId)
+  if (!shell) return
+  const digits = Math.max(4, String(Math.max(1, Number(lineCount) || 1)).length)
+  shell.style.setProperty('--editor-gutter-width', `${digits}ch`)
+}
+
+function getPaneTextarea(paneId) {
+  return getPaneElements(paneId).textarea
+}
+
+function getPaneMirror(paneId) {
+  return getPaneElements(paneId).mirror
+}
+
+function getPaneGutter(paneId) {
+  return getPaneElements(paneId).gutter
+}
+
+function getPaneEl(paneId) {
+  return getPaneElements(paneId).pane
+}
+
+function getPaneTitleEl(paneId) {
+  return getPaneElements(paneId).title
+}
+
+function getPanePath(paneId) {
+  return normalizeRelativePath(getPaneState(paneId)?.path)
+}
+
+function findPaneIdByFilePath(filePath) {
+  const normalizedFilePath = normalizeRelativePath(filePath)
+  if (!normalizedFilePath) return ''
+  for (const paneId of getPaneIds()) {
+    if (getPanePath(paneId) === normalizedFilePath) return paneId
+  }
+  return ''
+}
+
+function clearEditorPane(paneId) {
+  const paneState = getPaneState(paneId)
+  const textarea = getPaneTextarea(paneId)
+  const previousPath = normalizeRelativePath(paneState.path)
+  paneState.path = ''
+  paneState.loadedText = ''
+  paneState.dirty = false
+  if (textarea) textarea.value = ''
+  if (previousPath && paneAssignments.get(previousPath) === paneId) {
+    paneAssignments.delete(previousPath)
+  }
+  renderScriptMirrorForPane(paneId, '')
+}
+
+function focusEditorPane(paneId) {
+  const normalizedPaneId = editorPaneStateById.has(paneId) ? paneId : 'A'
+  activePaneId = normalizedPaneId
+  editorLayoutState.activePaneId = normalizedPaneId
+  for (const currentPaneId of getPaneIds()) {
+    const paneEl = getPaneEl(currentPaneId)
+    if (paneEl) paneEl.classList.toggle('pane-focused', currentPaneId === normalizedPaneId)
+  }
+}
+
+function setEditorLayout(mode) {
+  const panesByLayout = {
+    'split-2': ['A', 'B'],
+    'grid-2x2': ['A', 'B', 'C', 'D'],
+  }
+  const normalizedMode = panesByLayout[mode] ? mode : 'split-2'
+  editorLayoutState.layoutMode = normalizedMode
+  editorLayoutState.paneOrder = panesByLayout[normalizedMode]
+  if (editorPanesGrid) editorPanesGrid.dataset.layout = normalizedMode
+  for (const paneId of editorLayoutState.allPanes) {
+    const els = editorPaneDescriptors.get(paneId)
+    if (!els?.pane) continue
+    const visible = editorLayoutState.paneOrder.includes(paneId)
+    els.pane.classList.toggle('pane-hidden', !visible)
+  }
+  if (editorLayoutSplitBtn) {
+    const isActive = normalizedMode === 'split-2'
+    editorLayoutSplitBtn.classList.toggle('active', isActive)
+    editorLayoutSplitBtn.setAttribute('aria-pressed', String(isActive))
+  }
+  if (editorLayoutGridBtn) {
+    const isActive = normalizedMode === 'grid-2x2'
+    editorLayoutGridBtn.classList.toggle('active', isActive)
+    editorLayoutGridBtn.setAttribute('aria-pressed', String(isActive))
+  }
+  // If active pane is no longer visible, reset to first pane
+  if (!editorLayoutState.paneOrder.includes(editorLayoutState.activePaneId)) {
+    focusEditorPane(editorLayoutState.paneOrder[0])
+  }
+}
+
+function renderPaneTitles() {
+  for (const paneId of getPaneIds()) {
+    const panePath = getPanePath(paneId)
+    const paneTitle = getPaneTitleEl(paneId)
+    const paneEl = getPaneEl(paneId)
+    if (paneTitle) paneTitle.textContent = panePath ? pathBasename(panePath) : '—'
+    if (paneEl) paneEl.classList.toggle('pane-empty', !panePath)
+  }
+}
+
+function renderScriptMirrorForPane(paneId, textValue) {
+  const mirror = getPaneMirror(paneId)
+  const gutter = getPaneGutter(paneId)
+  const textarea = getPaneTextarea(paneId)
+  if (!mirror && !gutter) return
+
+  if (mirror) mirror.innerHTML = ''
+  if (gutter) gutter.innerHTML = ''
+
+  const text = normalizeNewlines(textValue ?? '')
+  if (!text) {
+    updatePaneGutterMetrics(paneId, 1)
+    if (mirror && textarea) {
+      mirror.scrollTop = textarea.scrollTop
+      mirror.scrollLeft = textarea.scrollLeft
+    }
+    if (gutter && textarea) gutter.scrollTop = textarea.scrollTop
+    return
+  }
+
+  const lines = text.split('\n')
+  updatePaneGutterMetrics(paneId, lines.length)
+  const gutterFragment = document.createDocumentFragment()
+  for (let index = 0; index < lines.length; index++) {
+    if (gutter) {
+      const gutterLine = document.createElement('div')
+      gutterLine.className = 'script-editor-gutter-line'
+      if (activeScriptLine === index + 1) {
+        gutterLine.classList.add('is-active')
+      }
+      gutterLine.textContent = String(index + 1)
+      gutterFragment.appendChild(gutterLine)
+    }
+  }
+  if (gutter) gutter.appendChild(gutterFragment)
+
+  if (mirror && textarea) {
+    mirror.scrollTop = textarea.scrollTop
+    mirror.scrollLeft = textarea.scrollLeft
+  }
+  if (gutter && textarea) gutter.scrollTop = textarea.scrollTop
+}
+
+function onPaneDragOver(event, paneId) {
+  if (!event.dataTransfer.types.includes('text/plain')) return
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'link'
+  getPaneEl(paneId)?.classList.add('pane-dragover')
+}
+
+function onPaneDragLeave(event, paneId) {
+  if (event.relatedTarget && getPaneEl(paneId)?.contains(event.relatedTarget)) return
+  getPaneEl(paneId)?.classList.remove('pane-dragover')
+}
+
+async function onPaneDrop(event, paneId) {
+  event.preventDefault()
+  getPaneEl(paneId)?.classList.remove('pane-dragover')
+  const filePath = event.dataTransfer.getData('text/plain')
+  if (!filePath) return
+  try {
+    await openWorkspaceEditorFile(filePath, { paneId })
+    setStatus(`opened ${filePath}`)
+  } catch (err) {
+    appendScriptLogRow(`[file:error] ${err.message}`, 'error')
+    setStatus('file open error', 'responding')
+  }
+}
+
+function persistPaneAssignments() {
+  const obj = {}
+  for (const [file, pane] of paneAssignments) obj[file] = pane
+  try { localStorage.setItem('editor-pane-assignments', JSON.stringify(obj)) } catch {}
+}
+
+function restorePaneAssignments() {
+  try {
+    const raw = localStorage.getItem('editor-pane-assignments')
+    if (!raw) return
+    const obj = JSON.parse(raw)
+    const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
+    for (const [file, pane] of Object.entries(obj)) {
+      if (editorPaneStateById.has(pane) && (!workspaceDir || file.startsWith(`${workspaceDir}/`))) {
+        openWorkspaceEditorFile(file, { paneId: pane }).catch(() => {})
+      }
+    }
+  } catch {}
+}
+
 function scheduleNextVAutoSave() {
   if (!isNextVMode()) return
   if (nextVAutoSaveInput?.checked === false) {
     clearNextVAutoSaveTimer()
     return
   }
-  const hasActiveDirty = Boolean(scriptEditorState.path && scriptEditorState.dirty)
+  const hasActiveDirty = getPaneIds().some((paneId) => {
+    const paneState = getPaneState(paneId)
+    return Boolean(paneState.path && paneState.dirty)
+  })
   const hasStashedDirty = dirtyEditsCache.size > 0
   if (!hasActiveDirty && !hasStashedDirty) return
 
@@ -5035,15 +5895,19 @@ async function openWorkspaceEditorFile(filePath, options = {}) {
   let normalizedPath = normalizeRelativePath(filePath)
   if (!normalizedPath) return
 
-  const leavingPath = scriptEditorState.path ? normalizeRelativePath(scriptEditorState.path) : ''
-  if (scriptEditorState.dirty && leavingPath && leavingPath !== normalizedPath) {
+  const paneId = options.paneId ?? activePaneId
+  const state = getPaneState(paneId)
+  const textarea = getPaneTextarea(paneId)
+
+  const leavingPath = state.path ? normalizeRelativePath(state.path) : ''
+  if (state.dirty && leavingPath && leavingPath !== normalizedPath) {
     if (nextVAutoSaveInput?.checked === false) {
       dirtyEditsCache.set(leavingPath, {
-        content: getScriptEditorText(),
-        loadedText: scriptEditorState.loadedText,
+        content: normalizeNewlines(textarea?.value ?? ''),
+        loadedText: state.loadedText,
       })
     } else {
-      await saveCurrentEditorFile({ silent: true })
+      await saveCurrentEditorFile({ silent: true, paneId })
     }
   }
 
@@ -5063,15 +5927,32 @@ async function openWorkspaceEditorFile(filePath, options = {}) {
     normalizedPath = normalizeRelativePath(data.filePath ?? normalizedPath)
   }
 
-  scriptView.value = text
-  scriptEditorState.path = normalizedPath
-  scriptEditorState.loadedText = loadedText
-  scriptEditorState.dirty = isDirty
+  const existingPaneId = findPaneIdByFilePath(normalizedPath)
+  if (existingPaneId && existingPaneId !== paneId) {
+    clearEditorPane(existingPaneId)
+    paneAssignments.delete(normalizedPath)
+    renderPaneTitles()
+  }
+
+  if (leavingPath && leavingPath !== normalizedPath && paneAssignments.get(leavingPath) === paneId) {
+    paneAssignments.delete(leavingPath)
+  }
+
+  if (textarea) textarea.value = text
+  state.path = normalizedPath
+  state.loadedText = loadedText
+  state.dirty = isDirty
+  paneAssignments.set(normalizedPath, paneId)
   activeScriptLine = null
-  rememberExpandedPath(scriptEditorState.path)
-  persistNextVOpenFile(scriptEditorState.path)
-  renderScriptMirror(text)
+  rememberExpandedPath(state.path)
+  persistNextVOpenFile(state.path)
+  persistPaneAssignments()
+  renderPaneTitles()
+  renderScriptMirrorForPane(paneId, text)
+  focusEditorPane(paneId)
+  if (paneId === 'A') syncScriptMirrorScroll()
   syncScriptBadgeState()
+  renderOpenFileTabs()
   renderWorkspaceTree()
 }
 
@@ -5095,7 +5976,7 @@ function refreshNextVWorkspaceTree() {
 }
 
 function setOpenFileAsNextVEntrypoint() {
-  const openFilePath = normalizeRelativePath(scriptEditorState.path)
+  const openFilePath = getPanePath(activePaneId)
   if (!openFilePath) {
     setStatus('open a file first', 'responding')
     return
@@ -7156,12 +8037,13 @@ function setScriptBadgeState(text, cls = '') {
 }
 
 function syncScriptBadgeState() {
+  const state = getPaneState(activePaneId)
   const content = getScriptEditorText()
-  if (!content && !scriptEditorState.path) {
+  if (!content && !state.path) {
     setScriptBadgeState('empty')
     return
   }
-  if (scriptEditorState.dirty) {
+  if (state.dirty) {
     setScriptBadgeState('dirty', 'dirty')
     return
   }
@@ -7181,22 +8063,47 @@ function cancelScriptRun() {
 
 function clearScriptView() {
   clearNextVAutoSaveTimer()
-  scriptView.value = ''
-  scriptEditorState.path = ''
-  scriptEditorState.loadedText = ''
-  scriptEditorState.dirty = false
+  for (const paneId of getPaneIds()) {
+    clearEditorPane(paneId)
+  }
   activeScriptLine = null
   nextVFileState.openFilePath = ''
   nextVFileState.openTabs = []
   dirtyEditsCache.clear()
+  paneAssignments.clear()
   updateOpenFileLabel('')
   renderScriptMirror('')
   syncScriptBadgeState()
+  renderPaneTitles()
   renderOpenFileTabs()
 }
 
 function normalizeNewlines(textValue) {
   return String(textValue ?? '').replace(/\r\n/g, '\n')
+}
+
+function getTextareaOffsetAtPoint(textarea, clientX, clientY) {
+  if (typeof document.caretPositionFromPoint === 'function') {
+    const pos = document.caretPositionFromPoint(clientX, clientY)
+    return pos && pos.offsetNode === textarea ? pos.offset : null
+  }
+  if (typeof document.caretRangeFromPoint === 'function') {
+    const range = document.caretRangeFromPoint(clientX, clientY)
+    return range && range.startContainer === textarea ? range.startOffset : null
+  }
+  return null
+}
+
+function bindTextareaFileRefCursor(textarea, getTextFn) {
+  textarea.addEventListener('mousemove', (ev) => {
+    const offset = getTextareaOffsetAtPoint(textarea, ev.clientX, ev.clientY)
+    if (offset === null) { textarea.style.cursor = ''; return }
+    const text = normalizeNewlines(getTextFn())
+    const candidates = [offset, Math.max(0, offset - 1)]
+    const hit = candidates.some(o => findScriptReferenceAtOffset(text, o) !== null)
+    textarea.style.cursor = hit ? 'pointer' : ''
+  })
+  textarea.addEventListener('mouseleave', () => { textarea.style.cursor = '' })
 }
 
 function inferEditorKindFromContext(lineText, tokenStart, marker) {
@@ -7236,6 +8143,15 @@ function findScriptReferenceAtOffset(textValue, offset) {
     }
   }
 
+  SCRIPT_FILE_CALL_REGEX.lastIndex = 0
+  while ((match = SCRIPT_FILE_CALL_REGEX.exec(line)) !== null) {
+    const filePath = match[1]
+    const start = match.index
+    const end = start + match[0].length
+    if (lineOffset < start || lineOffset > end) continue
+    return { filePath, kind: 'file' }
+  }
+
   return null
 }
 
@@ -7247,27 +8163,33 @@ function buildScriptMirrorLine(textValue) {
   textWrap.className = 'script-editor-line-text'
 
   const line = String(textValue ?? '')
-  SCRIPT_FILE_REF_REGEX.lastIndex = 0
-  let lastIndex = 0
+  const tokens = []
   let match
 
+  SCRIPT_FILE_REF_REGEX.lastIndex = 0
   while ((match = SCRIPT_FILE_REF_REGEX.exec(line)) !== null) {
     const marker = match[1] || ''
-    const filePath = match[2]
-    const start = match.index
+    tokens.push({ start: match.index, end: match.index + match[0].length, text: match[0], filePath: match[2], kind: inferEditorKindFromContext(line, match.index, marker) })
+  }
 
-    if (start > lastIndex) {
-      textWrap.appendChild(document.createTextNode(line.slice(lastIndex, start)))
+  SCRIPT_FILE_CALL_REGEX.lastIndex = 0
+  while ((match = SCRIPT_FILE_CALL_REGEX.exec(line)) !== null) {
+    tokens.push({ start: match.index, end: match.index + match[0].length, text: match[0], filePath: match[1], kind: 'file' })
+  }
+
+  tokens.sort((a, b) => a.start - b.start)
+
+  let lastIndex = 0
+  for (const tok of tokens) {
+    if (tok.start > lastIndex) {
+      textWrap.appendChild(document.createTextNode(line.slice(lastIndex, tok.start)))
     }
-
     const token = document.createElement('span')
-    const kind = inferEditorKindFromContext(line, start, marker)
-    token.className = `script-ref-token ${kind}`
-    token.textContent = match[0]
-    token.title = `${kind}: ${filePath}`
+    token.className = `script-ref-token ${tok.kind}`
+    token.textContent = tok.text
+    token.title = `${tok.kind}: ${tok.filePath}`
     textWrap.appendChild(token)
-
-    lastIndex = start + match[0].length
+    lastIndex = tok.end
   }
 
   if (lastIndex < line.length) {
@@ -7283,45 +8205,27 @@ function buildScriptMirrorLine(textValue) {
   return row
 }
 
-function syncScriptMirrorScroll() {
-  if (!scriptView) return
-  if (!scriptViewMirror && !scriptLineGutter) return
-  if (scriptViewMirror) {
-    scriptViewMirror.scrollTop = scriptView.scrollTop
-    scriptViewMirror.scrollLeft = scriptView.scrollLeft
+function syncScriptMirrorScrollForPane(paneId) {
+  const textarea = getPaneTextarea(paneId)
+  const mirror = getPaneMirror(paneId)
+  const gutter = getPaneGutter(paneId)
+  if (!textarea) return
+  if (!mirror && !gutter) return
+  if (mirror) {
+    mirror.scrollTop = textarea.scrollTop
+    mirror.scrollLeft = textarea.scrollLeft
   }
-  if (scriptLineGutter) {
-    scriptLineGutter.scrollTop = scriptView.scrollTop
+  if (gutter) {
+    gutter.scrollTop = textarea.scrollTop
   }
 }
 
+function syncScriptMirrorScroll() {
+  syncScriptMirrorScrollForPane('A')
+}
+
 function renderScriptMirror(textValue = getScriptEditorText()) {
-  if (!scriptViewMirror && !scriptLineGutter) return
-
-  if (scriptViewMirror) scriptViewMirror.innerHTML = ''
-  if (scriptLineGutter) scriptLineGutter.innerHTML = ''
-  const text = normalizeNewlines(textValue)
-  if (!text) {
-    syncScriptMirrorScroll()
-    return
-  }
-
-  const gutterFragment = document.createDocumentFragment()
-  const lines = text.split('\n')
-  for (let index = 0; index < lines.length; index++) {
-    if (scriptLineGutter) {
-      const gutterLine = document.createElement('div')
-      gutterLine.className = 'script-editor-gutter-line'
-      if (activeScriptLine === index + 1) {
-        gutterLine.classList.add('is-active')
-      }
-      gutterLine.textContent = String(index + 1)
-      gutterFragment.appendChild(gutterLine)
-    }
-  }
-
-  if (scriptLineGutter) scriptLineGutter.appendChild(gutterFragment)
-  syncScriptMirrorScroll()
+  renderScriptMirrorForPane('A', textValue)
 }
 
 async function openEditorReference(filePath) {
@@ -7333,7 +8237,7 @@ async function openEditorReference(filePath) {
     return
   }
 
-  const currentDir = pathDirname(scriptEditorState.path)
+  const currentDir = pathDirname(getPaneState(activePaneId).path)
   const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
   const resolvedPath = (
     targetPath.startsWith('workspaces/')
@@ -7352,15 +8256,16 @@ async function openEditorReference(filePath) {
 }
 
 function getScriptEditorText() {
-  return normalizeNewlines(scriptView.value)
+  return normalizeNewlines(getPaneTextarea(activePaneId)?.value ?? '')
 }
 
 function renderScriptView(lines, filePath = '') {
   const text = normalizeNewlines(Array.isArray(lines) ? lines.join('\n') : '')
-  scriptView.value = text
-  scriptEditorState.path = filePath
-  scriptEditorState.loadedText = text
-  scriptEditorState.dirty = false
+  const paneState = getPaneState('A')
+  if (scriptView) scriptView.value = text
+  paneState.path = filePath
+  paneState.loadedText = text
+  paneState.dirty = false
   activeScriptLine = null
   updateOpenFileLabel(filePath)
   renderScriptMirror(text)
@@ -7432,8 +8337,9 @@ async function ensureNextVEntrypointVisible(options = {}) {
   const entrypointPath = resolveNextVPath(nextVEntrypointInput?.value)
   if (!entrypointPath) return
 
-  const editorPath = String(scriptEditorState.path ?? '').trim()
-  const hasUnsaved = scriptEditorState.dirty === true
+  const activePaneState = getPaneState(activePaneId)
+  const editorPath = String(activePaneState.path ?? '').trim()
+  const hasUnsaved = activePaneState.dirty === true
   if (warnOnDirty && hasUnsaved && editorPath && editorPath !== entrypointPath) {
     appendScriptLogRow(`[nextv:entrypoint] unsaved edits in ${editorPath}; keeping current editor buffer`, 'error')
     return
@@ -7532,7 +8438,7 @@ async function openNextVWorkspace() {
     if (nextVEntrypointInput) {
       nextVEntrypointInput.value = candidateEntrypoint
     }
-    appendNextVLogRow(`[nextv:workspace] loaded ${normalizeRelativePath(scriptEditorState.path)}`, 'step')
+    appendNextVLogRow(`[nextv:workspace] loaded ${getPanePath(activePaneId) || normalizeRelativePath(openedPath)}`, 'step')
     if (configEntrypoint) {
       appendNextVLogRow(`[nextv:workspace] entrypoint from nextv.json: ${configEntrypoint}`, 'result')
     }
@@ -7548,6 +8454,7 @@ async function openNextVWorkspace() {
   setDeclaredEffectChannels(configDeclaredEffects, { preserveSelection: true })
   setNextVRunControls()
   await refreshNextVGraph({ silent: true })
+  restorePaneAssignments()
   if (loadedEntrypoint) {
     setStatus('workspace opened')
   } else {
@@ -8039,7 +8946,7 @@ async function saveScriptBuffer() {
 
 async function saveNextVEntrypoint() {
   try {
-    const filePath = normalizeRelativePath(scriptEditorState.path)
+    const filePath = getPanePath(activePaneId)
     if (!filePath) {
       setStatus('open a file first to save', 'responding')
       return
@@ -8119,11 +9026,12 @@ async function runScript(runOptions = {}) {
       throw new Error('No script content to run')
     }
 
+    const activePaneState = getPaneState(activePaneId)
     const normalizedPath = normalizeNewlines(filePath)
     const runningEditedBuffer =
-      scriptEditorState.dirty ||
-      scriptEditorState.path !== normalizedPath ||
-      scriptText !== scriptEditorState.loadedText
+      activePaneState.dirty ||
+      activePaneState.path !== normalizedPath ||
+      scriptText !== activePaneState.loadedText
     if (runningEditedBuffer) {
       appendScriptLogRow('[script:info] Running editable script buffer (unsaved).', 'result')
     }
@@ -8227,53 +9135,77 @@ if (userInputText) {
   })
 }
 
-if (scriptView) {
-  const toggleScriptCommentBlock = () => {
-    const value = scriptView.value
-    const start = Number(scriptView.selectionStart)
-    const end = Number(scriptView.selectionEnd)
-    const hasSelection = start !== end
+function toggleScriptCommentBlockForPane(paneId) {
+  const textarea = getPaneTextarea(paneId)
+  if (!textarea) return
 
-    const lineStart = value.lastIndexOf('\n', Math.max(0, start - 1)) + 1
-    const endLineSearchIndex = hasSelection ? end : start
-    const lineEndMatch = value.indexOf('\n', endLineSearchIndex)
-    const lineEnd = lineEndMatch === -1 ? value.length : lineEndMatch
-    const block = value.slice(lineStart, lineEnd)
-    const lines = block.split('\n')
+  const value = textarea.value
+  const start = Number(textarea.selectionStart)
+  const end = Number(textarea.selectionEnd)
+  const hasSelection = start !== end
 
-    const nonEmptyLines = lines.filter((line) => line.trim() !== '')
-    const shouldUncomment = nonEmptyLines.length > 0
-      && nonEmptyLines.every((line) => /^\s*#/.test(line))
+  const lineStart = value.lastIndexOf('\n', Math.max(0, start - 1)) + 1
+  const endLineSearchIndex = hasSelection ? end : start
+  const lineEndMatch = value.indexOf('\n', endLineSearchIndex)
+  const lineEnd = lineEndMatch === -1 ? value.length : lineEndMatch
+  const block = value.slice(lineStart, lineEnd)
+  const lines = block.split('\n')
 
-    const transformedLines = lines.map((line) => {
-      if (line.trim() === '') return line
-      if (shouldUncomment) {
-        return line.replace(/^(\s*)#\s?/, '$1')
-      }
-      return line.replace(/^(\s*)/, '$1# ')
-    })
+  const nonEmptyLines = lines.filter((line) => line.trim() !== '')
+  const shouldUncomment = nonEmptyLines.length > 0
+    && nonEmptyLines.every((line) => /^\s*#/.test(line))
 
-    const transformedBlock = transformedLines.join('\n')
-    scriptView.value = `${value.slice(0, lineStart)}${transformedBlock}${value.slice(lineEnd)}`
-
-    if (hasSelection) {
-      scriptView.setSelectionRange(lineStart, lineStart + transformedBlock.length)
-    } else {
-      const originalLine = lines[0] ?? ''
-      const transformedLine = transformedLines[0] ?? ''
-      const delta = transformedLine.length - originalLine.length
-      const nextCaret = Math.max(lineStart, start + delta)
-      scriptView.setSelectionRange(nextCaret, nextCaret)
+  const transformedLines = lines.map((line) => {
+    if (line.trim() === '') return line
+    if (shouldUncomment) {
+      return line.replace(/^(\s*)#\s?/, '$1')
     }
+    return line.replace(/^(\s*)/, '$1# ')
+  })
 
-    scriptView.dispatchEvent(new Event('input', { bubbles: true }))
+  const transformedBlock = transformedLines.join('\n')
+  textarea.value = `${value.slice(0, lineStart)}${transformedBlock}${value.slice(lineEnd)}`
+
+  if (hasSelection) {
+    textarea.setSelectionRange(lineStart, lineStart + transformedBlock.length)
+  } else {
+    const originalLine = lines[0] ?? ''
+    const transformedLine = transformedLines[0] ?? ''
+    const delta = transformedLine.length - originalLine.length
+    const nextCaret = Math.max(lineStart, start + delta)
+    textarea.setSelectionRange(nextCaret, nextCaret)
   }
 
-  scriptView.addEventListener('keydown', (e) => {
+  textarea.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+function initEditorPanes() {
+  setEditorLayout(editorLayoutState.layoutMode)
+  for (const paneId of editorLayoutState.allPanes) {
+    const els = getPaneElements(paneId)
+    if (!els) continue
+    const pane = els.pane
+    if (!pane || pane.dataset.paneInit === '1') continue
+    pane.dataset.paneInit = '1'
+    pane.addEventListener('click', (e) => {
+      if (e.target === pane || pane.contains(e.target)) focusEditorPane(paneId)
+    })
+    pane.addEventListener('dragover', (e) => onPaneDragOver(e, paneId))
+    pane.addEventListener('dragleave', (e) => onPaneDragLeave(e, paneId))
+    pane.addEventListener('drop', (e) => onPaneDrop(e, paneId))
+  }
+}
+
+function bindEditorPaneEvents(paneId) {
+  const textarea = getPaneTextarea(paneId)
+  if (!textarea || textarea.dataset.paneBound === '1') return
+  textarea.dataset.paneBound = '1'
+
+  textarea.addEventListener('keydown', (e) => {
     const isCommentToggleShortcut = (e.ctrlKey || e.metaKey) && !e.altKey && (e.key === '/' || e.code === 'Slash')
     if (isCommentToggleShortcut) {
       e.preventDefault()
-      toggleScriptCommentBlock()
+      toggleScriptCommentBlockForPane(paneId)
       return
     }
 
@@ -8281,16 +9213,16 @@ if (scriptView) {
 
     e.preventDefault()
 
-    const value = scriptView.value
-    const start = Number(scriptView.selectionStart)
-    const end = Number(scriptView.selectionEnd)
+    const value = textarea.value
+    const start = Number(textarea.selectionStart)
+    const end = Number(textarea.selectionEnd)
     const hasSelection = start !== end
 
     if (!hasSelection && !e.shiftKey) {
       const inserted = '\t'
-      scriptView.value = `${value.slice(0, start)}${inserted}${value.slice(end)}`
-      scriptView.setSelectionRange(start + inserted.length, start + inserted.length)
-      scriptView.dispatchEvent(new Event('input', { bubbles: true }))
+      textarea.value = `${value.slice(0, start)}${inserted}${value.slice(end)}`
+      textarea.setSelectionRange(start + inserted.length, start + inserted.length)
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
       return
     }
 
@@ -8321,38 +9253,45 @@ if (scriptView) {
     }
 
     const transformedBlock = transformedLines.join('\n')
-    scriptView.value = `${value.slice(0, lineStart)}${transformedBlock}${value.slice(lineEnd)}`
+    textarea.value = `${value.slice(0, lineStart)}${transformedBlock}${value.slice(lineEnd)}`
 
     if (hasSelection) {
-      scriptView.setSelectionRange(lineStart, lineStart + transformedBlock.length)
+      textarea.setSelectionRange(lineStart, lineStart + transformedBlock.length)
     } else if (e.shiftKey) {
       const nextCaret = Math.max(lineStart, start - removedBeforeCaret)
-      scriptView.setSelectionRange(nextCaret, nextCaret)
+      textarea.setSelectionRange(nextCaret, nextCaret)
     } else {
-      scriptView.setSelectionRange(start + 1, start + 1)
+      textarea.setSelectionRange(start + 1, start + 1)
     }
 
-    scriptView.dispatchEvent(new Event('input', { bubbles: true }))
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
   })
 
-  scriptView.addEventListener('input', () => {
+  textarea.addEventListener('input', () => {
     activeScriptLine = null
-    scriptEditorState.dirty = getScriptEditorText() !== scriptEditorState.loadedText
-    renderScriptMirror()
-    syncScriptBadgeState()
+    const paneState = getPaneState(paneId)
+    paneState.dirty = normalizeNewlines(textarea.value) !== paneState.loadedText
+    renderScriptMirrorForPane(paneId, textarea.value)
+    if (activePaneId === paneId) syncScriptBadgeState()
     renderOpenFileTabs()
     scheduleNextVAutoSave()
   })
 
-  scriptView.addEventListener('scroll', () => {
-    syncScriptMirrorScroll()
+  textarea.addEventListener('scroll', () => {
+    syncScriptMirrorScrollForPane(paneId)
   })
 
-  scriptView.addEventListener('click', async () => {
-    if (scriptView.selectionStart !== scriptView.selectionEnd) return
+  textarea.addEventListener('focus', () => {
+    focusEditorPane(paneId)
+  })
 
-    const text = getScriptEditorText()
-    const primaryOffset = Number(scriptView.selectionStart)
+  bindTextareaFileRefCursor(textarea, () => textarea.value)
+
+  textarea.addEventListener('click', async () => {
+    if (textarea.selectionStart !== textarea.selectionEnd) return
+
+    const text = normalizeNewlines(textarea.value)
+    const primaryOffset = Number(textarea.selectionStart)
     const candidateOffsets = [primaryOffset, Math.max(0, primaryOffset - 1)]
 
     for (const offset of candidateOffsets) {
@@ -8364,10 +9303,23 @@ if (scriptView) {
   })
 }
 
+for (const paneId of editorLayoutState.allPanes) {
+  bindEditorPaneEvents(paneId)
+}
+initEditorPanes()
+bindFloatingGraphCodePanelEvents()
+updateFloatingGraphCodePanelMeta()
+
+if (scriptView) {
+  renderPaneTitles()
+  focusEditorPane(activePaneId)
+}
+
 if (scriptPathInput) {
   scriptPathInput.addEventListener('input', () => {
     const nextPath = scriptPathInput.value.trim()
-    scriptEditorState.dirty = nextPath !== scriptEditorState.path || getScriptEditorText() !== scriptEditorState.loadedText
+    const paneState = getPaneState(activePaneId)
+    paneState.dirty = nextPath !== paneState.path || getScriptEditorText() !== paneState.loadedText
     syncScriptBadgeState()
   })
 }

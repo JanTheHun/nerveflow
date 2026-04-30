@@ -1634,6 +1634,17 @@ function buildFunctions(options, runtimeContext) {
     return keyName
   }
 
+    const requireCutOperator = (value) => {
+      const operator = String(value ?? '').trim()
+      if (operator === '>' || operator === '>=' || operator === '<' || operator === '<=') {
+        return operator
+      }
+      collectionError(
+        'INVALID_COLLECTION_ARGUMENT',
+        `cut() requires one of ">", ">=", "<", or "<=" as third argument; received "${value}".`,
+      )
+    }
+
   const readKey = (entry, keyName) => (isPlainObject(entry) ? entry[keyName] : undefined)
 
   return {
@@ -1680,6 +1691,46 @@ function buildFunctions(options, runtimeContext) {
         seen.add(keyValue)
         out.push(entry)
       }
+      return out
+    },
+    sort: ({ positional, named }) => {
+      const list = requireArray(positional[0], 'sort')
+      const keyName = requireKeyName(positional[1], 'sort')
+      const desc = named?.desc === true
+      const sorted = list.slice().sort((a, b) => {
+        const av = readKey(a, keyName)
+        const bv = readKey(b, keyName)
+        if (typeof av === 'number' && typeof bv === 'number') {
+          return desc ? bv - av : av - bv
+        }
+        const as = String(av ?? '')
+        const bs = String(bv ?? '')
+        return desc ? bs.localeCompare(as) : as.localeCompare(bs)
+      })
+      return sorted
+    },
+    cut: ({ positional }) => {
+      const list = requireArray(positional[0], 'cut')
+      const keyName = requireKeyName(positional[1], 'cut')
+      const operator = requireCutOperator(positional[2])
+      const expected = positional[3]
+      const out = []
+
+      for (const entry of list) {
+        const actual = readKey(entry, keyName)
+        let passes = false
+
+        if (actual !== undefined) {
+          if (operator === '>') passes = actual > expected
+          else if (operator === '>=') passes = actual >= expected
+          else if (operator === '<') passes = actual < expected
+          else passes = actual <= expected
+        }
+
+        if (!passes) break
+        out.push(entry)
+      }
+
       return out
     },
     exact_length: ({ positional }) => {

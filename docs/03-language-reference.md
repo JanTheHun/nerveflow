@@ -87,6 +87,8 @@ Core built-ins:
 - `find_by(list,key,value)`
 - `remove_by(list,key,value)`
 - `dedupe_by(list,key)`
+- `sort(list,key,desc=false)`
+- `cut(list,key,op,value)`
 - `exact_length(n, schema)`
 - `file(path)`
 - `input([prompt])`
@@ -101,8 +103,16 @@ Collection helper semantics:
 - `find_by`: returns first row where `row[key] == value`, else `null`
 - `remove_by`: returns a new list excluding rows where `row[key] == value`
 - `dedupe_by`: returns a new list where first occurrence of each `row[key]` is kept (stable order)
+- `sort`: returns a new list sorted by `row[key]` ascending; `desc=true` reverses order; numeric values use numeric comparison, others use lexicographic order; stable within ties
+- `cut`: returns the longest prefix where `row[key] op value` is true; supported operators are `>`, `>=`, `<`, `<=`; stops at the first failure, excludes the failing item, and preserves input order; intended for meaningfully ordered lists
 
 Current key support for collection helpers is flat key names (no dotted key traversal).
+
+Example:
+
+```
+relevant = cut(results, "similarity", ">=", 0.6)
+```
 
 Recognized integration calls:
 

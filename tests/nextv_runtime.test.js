@@ -855,6 +855,160 @@ test('dedupe_by() keeps first occurrence for each key value', async () => {
   ])
 })
 
+test('sort() returns a new list sorted by key ascending by default', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"score\\":3},{\\"score\\":1},{\\"score\\":2}]")',
+    'sorted = sort(items, "score")',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.sorted, [{ score: 1 }, { score: 2 }, { score: 3 }])
+})
+
+test('sort() returns a new list sorted by key descending when desc=true', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"score\\":3},{\\"score\\":1},{\\"score\\":2}]")',
+    'sorted = sort(items, "score", desc=true)',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.sorted, [{ score: 3 }, { score: 2 }, { score: 1 }])
+})
+
+test('sort() sorts by string key lexicographically', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"name\\":\\"charlie\\"},{\\"name\\":\\"alice\\"},{\\"name\\":\\"bob\\"}]")',
+    'sorted = sort(items, "name")',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.sorted, [{ name: 'alice' }, { name: 'bob' }, { name: 'charlie' }])
+})
+
+test('sort() returns empty list for empty input', async () => {
+  const result = await runNextVScript('sorted = sort(from_json("[]"), "score")')
+
+  assert.deepEqual(result.locals.sorted, [])
+})
+
+test('sort() does not mutate the original list', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"score\\":3},{\\"score\\":1}]")',
+    'sorted = sort(items, "score")',
+  ].join('\n'))
+
+  assert.equal(result.locals.items[0].score, 3)
+  assert.equal(result.locals.sorted[0].score, 1)
+})
+
+test('sort() rejects non-array first argument', async () => {
+  await assert.rejects(
+    () => runNextVScript('x = sort("oops", "score")'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')
+      return true
+    },
+  )
+})
+
+test('sort() rejects empty key name', async () => {
+  await assert.rejects(
+    () => runNextVScript('x = sort(from_json("[{\\"score\\":1}]"), "")'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')
+      return true
+    },
+  )
+})
+
+test('cut() returns the matching prefix for descending threshold checks', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"similarity\\":0.92},{\\"similarity\\":0.88},{\\"similarity\\":0.59},{\\"similarity\\":0.55}]")',
+    'relevant = cut(items, "similarity", ">", 0.6)',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.relevant, [
+    { similarity: 0.92 },
+    { similarity: 0.88 },
+  ])
+})
+
+test('cut() includes boundary values for >= comparisons', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"similarity\\":0.92},{\\"similarity\\":0.6},{\\"similarity\\":0.59}]")',
+    'relevant = cut(items, "similarity", ">=", 0.6)',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.relevant, [
+    { similarity: 0.92 },
+    { similarity: 0.6 },
+  ])
+})
+
+test('cut() supports <= comparisons for ascending ordered values', async () => {
+  const result = await runNextVScript([
+    'events = from_json("[{\\"timestamp\\":1},{\\"timestamp\\":2},{\\"timestamp\\":3},{\\"timestamp\\":6}]")',
+    'recent = cut(events, "timestamp", "<=", 3)',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.recent, [
+    { timestamp: 1 },
+    { timestamp: 2 },
+    { timestamp: 3 },
+  ])
+})
+
+test('cut() returns empty list for empty input', async () => {
+  const result = await runNextVScript('relevant = cut(from_json("[]"), "similarity", ">", 0.6)')
+
+  assert.deepEqual(result.locals.relevant, [])
+})
+
+test('cut() returns empty list when the first item fails', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"similarity\\":0.4},{\\"similarity\\":0.9}]")',
+    'relevant = cut(items, "similarity", ">", 0.6)',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.relevant, [])
+})
+
+test('cut() returns the full list when all items pass', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"similarity\\":0.9},{\\"similarity\\":0.8}]")',
+    'relevant = cut(items, "similarity", ">", 0.6)',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.relevant, [
+    { similarity: 0.9 },
+    { similarity: 0.8 },
+  ])
+})
+
+test('cut() stops when a later item is missing the comparison key', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"similarity\\":0.9},{\\"other\\":1},{\\"similarity\\":0.8}]")',
+    'relevant = cut(items, "similarity", ">", 0.6)',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.relevant, [
+    { similarity: 0.9 },
+  ])
+})
+
+test('cut() composes with sort() for ranked threshold selection', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"similarity\\":0.59},{\\"similarity\\":0.92},{\\"similarity\\":0.81},{\\"similarity\\":0.6}]")',
+    'sorted = sort(items, "similarity", desc=true)',
+    'relevant = cut(sorted, "similarity", ">=", 0.6)',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.relevant, [
+    { similarity: 0.92 },
+    { similarity: 0.81 },
+    { similarity: 0.6 },
+  ])
+})
+
 test('collection helpers reject invalid arguments', async () => {
   await assert.rejects(
     () => runNextVScript('x = take("oops", 1)'),
@@ -867,6 +1021,33 @@ test('collection helpers reject invalid arguments', async () => {
 
   await assert.rejects(
     () => runNextVScript('x = dedupe_by(from_json("[{\\"id\\":1}]"), "")'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')
+      return true
+    },
+  )
+
+  await assert.rejects(
+    () => runNextVScript('x = cut("oops", "score", ">", 1)'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')
+      return true
+    },
+  )
+
+  await assert.rejects(
+    () => runNextVScript('x = cut(from_json("[{\\"score\\":1}]"), "", ">", 1)'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')
+      return true
+    },
+  )
+
+  await assert.rejects(
+    () => runNextVScript('x = cut(from_json("[{\\"score\\":1}]"), "score", "==", 1)'),
     (err) => {
       assert.equal(err instanceof NextVError, true)
       assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')

@@ -133,21 +133,137 @@
               </label>
               <button type="button" class="panel-action" onclick="saveAllNextVFiles()">save all</button>
               <button type="button" class="panel-action" onclick="saveNextVEntrypoint()">save</button>
+              <div class="nextv-layout-actions" aria-label="editor layout controls">
+                <button type="button" id="editor-layout-split-btn" class="panel-action" onclick="setEditorLayout('split-2')" title="show two side-by-side panes">split</button>
+                <button type="button" id="editor-layout-grid-btn" class="panel-action" onclick="setEditorLayout('grid-2x2')" title="show a 2x2 editor grid">2x2</button>
+              </div>
             </div>
-            <div id="script-view-shell" class="panel-editor-shell">
-              <div id="script-line-gutter" class="script-editor-gutter" aria-hidden="true"></div>
-              <div id="script-view-mirror" class="script-editor-mirror" aria-hidden="true"></div>
-              <textarea
-                id="script-view"
-                class="panel-editor panel-editor-overlay"
-                placeholder="# Load a script file, edit here, then click run"
-                spellcheck="false"
-              ></textarea>
+            <div id="editor-panes-grid" class="editor-panes-grid">
+              <div id="editor-pane-a" class="editor-pane pane-empty pane-focused">
+                <div class="editor-pane-header">
+                  <span class="pane-label">A</span>
+                  <span id="pane-a-title" class="pane-title">—</span>
+                </div>
+                <div id="script-view-shell" class="panel-editor-shell">
+                  <div id="script-line-gutter" class="script-editor-gutter" aria-hidden="true"></div>
+                  <div id="script-view-mirror" class="script-editor-mirror" aria-hidden="true"></div>
+                  <textarea
+                    id="script-view"
+                    class="panel-editor panel-editor-overlay"
+                    placeholder="# Load a script file, edit here, then click run"
+                    spellcheck="false"
+                  ></textarea>
+                </div>
+              </div>
+              <div id="editor-pane-b" class="editor-pane pane-empty">
+                <div class="editor-pane-header">
+                  <span class="pane-label">B</span>
+                  <span id="pane-b-title" class="pane-title">—</span>
+                </div>
+                <div id="script-view-shell-b" class="panel-editor-shell">
+                  <div id="script-line-gutter-b" class="script-editor-gutter" aria-hidden="true"></div>
+                  <div id="script-view-mirror-b" class="script-editor-mirror" aria-hidden="true"></div>
+                  <textarea
+                    id="script-view-b"
+                    class="panel-editor panel-editor-overlay"
+                    spellcheck="false"
+                  ></textarea>
+                </div>
+              </div>
+              <div id="editor-pane-c" class="editor-pane pane-empty pane-hidden">
+                <div class="editor-pane-header">
+                  <span class="pane-label">C</span>
+                  <span id="pane-c-title" class="pane-title">—</span>
+                </div>
+                <div id="script-view-shell-c" class="panel-editor-shell">
+                  <div id="script-line-gutter-c" class="script-editor-gutter" aria-hidden="true"></div>
+                  <div id="script-view-mirror-c" class="script-editor-mirror" aria-hidden="true"></div>
+                  <textarea
+                    id="script-view-c"
+                    class="panel-editor panel-editor-overlay"
+                    spellcheck="false"
+                  ></textarea>
+                </div>
+              </div>
+              <div id="editor-pane-d" class="editor-pane pane-empty pane-hidden">
+                <div class="editor-pane-header">
+                  <span class="pane-label">D</span>
+                  <span id="pane-d-title" class="pane-title">—</span>
+                </div>
+                <div id="script-view-shell-d" class="panel-editor-shell">
+                  <div id="script-line-gutter-d" class="script-editor-gutter" aria-hidden="true"></div>
+                  <div id="script-view-mirror-d" class="script-editor-mirror" aria-hidden="true"></div>
+                  <textarea
+                    id="script-view-d"
+                    class="panel-editor panel-editor-overlay"
+                    spellcheck="false"
+                  ></textarea>
+                </div>
+              </div>
             </div>
           </div>
         </div>
         <div id="nextv-graph-shell" class="panel-scroll nextv-graph-shell nextv-primary-view" role="tabpanel" aria-labelledby="nextv-view-graph">
           <div id="nextv-graph-output" class="panel-scroll"></div>
+          <section id="nextv-floating-code-panel" class="nextv-floating-code-panel nextv-floating-code-panel-slot1" aria-label="floating graph code panel one" hidden>
+            <div class="nextv-floating-code-header">
+              <span id="nextv-floating-code-title" class="nextv-floating-code-title">graph code</span>
+              <div class="nextv-floating-code-actions">
+                <button type="button" class="panel-action" onclick="saveFloatingGraphCodePanel('FLOAT1')">save</button>
+                <button type="button" class="panel-icon-btn" onclick="closeFloatingGraphCodePanel('FLOAT1')" title="close panel" aria-label="close panel">✕</button>
+              </div>
+            </div>
+            <div class="nextv-floating-code-meta">
+              <span id="nextv-floating-code-path" class="nextv-floating-code-path">—</span>
+              <span id="nextv-floating-code-line" class="nextv-floating-code-line">line —</span>
+              <span id="nextv-floating-code-dirty" class="script-dirty-badge" hidden>* unsaved</span>
+            </div>
+            <div class="panel-editor-shell nextv-floating-code-shell">
+              <div id="nextv-floating-code-gutter" class="script-editor-gutter" aria-hidden="true"></div>
+              <div id="nextv-floating-code-mirror" class="script-editor-mirror" aria-hidden="true"></div>
+              <textarea
+                id="nextv-floating-code-textarea"
+                class="panel-editor panel-editor-overlay"
+                placeholder="# select a node, then open code"
+                spellcheck="false"
+              ></textarea>
+            </div>
+          </section>
+          <section id="nextv-floating-code-panel-2" class="nextv-floating-code-panel nextv-floating-code-panel-slot2" aria-label="floating graph code panel two" hidden>
+            <div class="nextv-floating-code-header">
+              <span id="nextv-floating-code-title-2" class="nextv-floating-code-title">graph code</span>
+              <div class="nextv-floating-code-actions">
+                <button type="button" class="panel-action" onclick="saveFloatingGraphCodePanel('FLOAT2')">save</button>
+                <button type="button" class="panel-icon-btn" onclick="closeFloatingGraphCodePanel('FLOAT2')" title="close panel" aria-label="close panel">✕</button>
+              </div>
+            </div>
+            <div class="nextv-floating-code-meta">
+              <span id="nextv-floating-code-path-2" class="nextv-floating-code-path">—</span>
+              <span id="nextv-floating-code-line-2" class="nextv-floating-code-line">line —</span>
+              <span id="nextv-floating-code-dirty-2" class="script-dirty-badge" hidden>* unsaved</span>
+            </div>
+            <div class="panel-editor-shell nextv-floating-code-shell">
+              <div id="nextv-floating-code-gutter-2" class="script-editor-gutter" aria-hidden="true"></div>
+              <div id="nextv-floating-code-mirror-2" class="script-editor-mirror" aria-hidden="true"></div>
+              <textarea
+                id="nextv-floating-code-textarea-2"
+                class="panel-editor panel-editor-overlay"
+                placeholder="# select a node, then open code"
+                spellcheck="false"
+              ></textarea>
+            </div>
+          </section>
+          <div id="nextv-floating-panel-chooser" class="nextv-floating-panel-chooser" role="dialog" aria-modal="true" aria-labelledby="nextv-floating-panel-chooser-title" hidden>
+            <div class="nextv-floating-panel-chooser-card" onclick="event.stopPropagation()">
+              <div id="nextv-floating-panel-chooser-title" class="nextv-floating-panel-chooser-title">Open in which panel?</div>
+              <div id="nextv-floating-panel-chooser-details" class="nextv-floating-panel-chooser-details"></div>
+              <div class="nextv-floating-panel-chooser-actions">
+                <button id="nextv-floating-panel-chooser-panel1" type="button" class="panel-action">Replace Panel 1</button>
+                <button id="nextv-floating-panel-chooser-panel2" type="button" class="panel-action">Replace Panel 2</button>
+                <button id="nextv-floating-panel-chooser-cancel" type="button" class="panel-action">Cancel</button>
+              </div>
+            </div>
+          </div>
           <div id="nextv-state-diff-splitter" class="panel-hsplitter" role="separator" aria-label="Resize graph and state diff panels"></div>
           <div id="nextv-state-diff-panel" class="nextv-state-diff-panel">
             <div class="nextv-state-diff-header">

@@ -8,10 +8,13 @@ All notable changes to this project are documented in this file.
 
 - Structured return contracts now support string scalar enum constraints via string-literal arrays.
 - Enum constraints are exact-literal only; wildcard/pattern semantics are explicitly unsupported.
+- Nerve Studio graph view now supports two floating source-code panels with per-panel save/close/drag interactions and a chooser dialog when both panel slots are occupied.
+- Floating and editor textareas now recognize `file("...")` references in addition to `file:...` references for hover/click navigation.
 
 ### Changed
 
 - Contract interpretation now treats multi-string arrays as scalar enums instead of collection schemas for those forms.
+- Editor gutter metrics now recalculate when pane content changes so line-number spacing stays aligned after loading files with different line counts.
 
 ### Notes
 

@@ -172,6 +172,47 @@ test('callTool enforces allow-list before tool runtime dispatch', async () => {
   assert.equal(called, 0)
 })
 
+test('callAgent supports direct model calls without profile lookup', async () => {
+  const calls = []
+  const adapter = createHostAdapter({
+    workspaceDir: {
+      absolutePath: '/workspace',
+      relativePath: '.',
+    },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: {} },
+      operators: { map: {} },
+    },
+    callAgent: async ({ model, messages }) => {
+      calls.push({ model, messages })
+      return 'pong'
+    },
+    defaultModel: 'default-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({
+      absolutePath: `${baseDir}/${pathRaw}`,
+      relativePath: pathRaw,
+    }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  const response = await adapter.callAgent({
+    model: 'phi3:mini-128k',
+    prompt: 'ping',
+  })
+
+  assert.deepEqual(response, { value: 'pong', metadata: null })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].model, 'phi3:mini-128k')
+  assert.equal(calls[0].messages.length, 1)
+  assert.equal(calls[0].messages[0].role, 'user')
+  assert.equal(calls[0].messages[0].content, 'ping')
+})
+
 test('callAgent includes images when event payload provides images', async () => {
   const calls = []
   const adapter = createHostAdapter({
@@ -589,4 +630,48 @@ test('callAgent throws JSON parse error when retries exhausted', async () => {
     }),
     /JSON_PARSE_ERROR/,
   )
+})
+
+test('callAgent emits slow-call warning metadata when transport exceeds threshold', async () => {
+  const warnings = []
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { chat: { model: 'llama3' } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      return { text: 'ok', metadata: { provider: 'test' } }
+    },
+    defaultModel: 'test-model',
+    slowAgentWarningMs: 5,
+    onSlowAgentCallWarning: (payload) => warnings.push(payload),
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  const result = await adapter.callAgent({
+    agent: 'chat',
+    prompt: 'route this',
+    event: { type: 'user_message', source: 'external' },
+    line: 12,
+    statement: 'route = agent("chat", event.value)',
+    sourcePath: 'intent.nrv',
+    sourceLine: 12,
+  })
+
+  assert.equal(warnings.length, 1)
+  assert.equal(warnings[0].agent, 'chat')
+  assert.equal(warnings[0].model, 'llama3')
+  assert.equal(warnings[0].thresholdMs, 5)
+  assert.equal(result.metadata.provider, 'test')
+  assert.equal(result.metadata.slowWarningEmitted, true)
+  assert.equal(typeof result.metadata.elapsedMs, 'number')
+  assert.equal(result.metadata.elapsedMs >= 20, true)
 })

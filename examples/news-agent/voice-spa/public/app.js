@@ -135,7 +135,9 @@ async function sendRecording(blob) {
   }
 
   console.log('[voice-command response]', payload)
-  setTranscript(payload.transcript)
+  if (transcriptLabel.hidden || !String(transcriptLabel.textContent ?? '').trim()) {
+    setTranscript(payload.transcript)
+  }
   setStatus('sent')
 }
 

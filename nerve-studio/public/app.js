@@ -149,7 +149,9 @@ const nextVGraphState = {
   nodeElements: new Map(),
   edgeElements: new Map(),
   stepLabelElements: new Map(),
+  agentTimerLabelElements: new Map(),
   runtimeStepByNode: new Map(),
+  runtimeAgentCallTimersByNode: new Map(),
   runtimeVisitedEdges: new Set(),
   runtimeActiveNodes: new Set(),
   runtimeActiveEdges: new Set(),
@@ -161,6 +163,7 @@ const nextVGraphState = {
   visualPulseTimersByNode: new Map(),
   runtimeLastDispatchedNode: '',
   runtimeSequence: 0,
+  runtimeAgentTickerId: null,
   selectedNodeId: '',
   autoFollowEnabled: false,
   layoutDirection: 'TB',
@@ -1356,6 +1359,12 @@ function clearNextVGraphOutput() {
   }
   nextVGraphState.visualPulseTimers.clear()
   nextVGraphState.visualPulseTimersByNode.clear()
+  if (nextVGraphState.runtimeAgentTickerId) {
+    window.clearInterval(nextVGraphState.runtimeAgentTickerId)
+    nextVGraphState.runtimeAgentTickerId = null
+  }
+  nextVGraphState.runtimeAgentCallTimersByNode.clear()
+  nextVGraphState.agentTimerLabelElements.clear()
   nextVGraphState.detailPopoverEl = null
   nextVGraphState.canvasEl = null
   nextVGraphState.layoutPositions = new Map()
@@ -2356,6 +2365,94 @@ function clearNextVGraphRuntimeTimers() {
   nextVGraphState.runtimeTimers.clear()
 }
 
+function parseNextVGraphRuntimeEventTimestampMs(runtimeEvent) {
+  const raw = String(runtimeEvent?.timestamp ?? '').trim()
+  if (!raw) return Date.now()
+  const parsed = Date.parse(raw)
+  if (!Number.isFinite(parsed)) return Date.now()
+  return parsed
+}
+
+function formatNextVGraphAgentElapsedMs(value) {
+  const elapsedMs = Math.max(0, Number(value) || 0)
+  if (elapsedMs >= 10000) {
+    return `${(elapsedMs / 1000).toFixed(1)}s`
+  }
+  if (elapsedMs >= 1000) {
+    return `${(elapsedMs / 1000).toFixed(2)}s`
+  }
+  return `${Math.round(elapsedMs)}ms`
+}
+
+function syncNextVGraphAgentTicker() {
+  let hasActiveAgentCalls = false
+  for (const timerState of nextVGraphState.runtimeAgentCallTimersByNode.values()) {
+    if (timerState?.active === true) {
+      hasActiveAgentCalls = true
+      break
+    }
+  }
+
+  if (hasActiveAgentCalls) {
+    if (!nextVGraphState.runtimeAgentTickerId) {
+      nextVGraphState.runtimeAgentTickerId = window.setInterval(() => {
+        applyNextVGraphRuntimeVisuals()
+        syncNextVGraphAgentTicker()
+      }, 120)
+    }
+    return
+  }
+
+  if (nextVGraphState.runtimeAgentTickerId) {
+    window.clearInterval(nextVGraphState.runtimeAgentTickerId)
+    nextVGraphState.runtimeAgentTickerId = null
+  }
+}
+
+function extractExecutionAgentElapsedMs(result) {
+  const agentCalls = Array.isArray(result?.agentCalls) ? result.agentCalls : []
+  let maxElapsedMs = null
+  for (const call of agentCalls) {
+    const elapsedMs = Number(call?.metadata?.elapsedMs)
+    if (!Number.isFinite(elapsedMs) || elapsedMs < 0) continue
+    maxElapsedMs = maxElapsedMs == null ? elapsedMs : Math.max(maxElapsedMs, elapsedMs)
+  }
+  return maxElapsedMs
+}
+
+function finalizeNextVGraphActiveAgentTimers(options = {}) {
+  const nowMs = Date.now()
+  const elapsedOverrideMs = Number(options.elapsedMs)
+  const hasElapsedOverride = Number.isFinite(elapsedOverrideMs) && elapsedOverrideMs >= 0
+  let changed = false
+  let finalizedCount = 0
+
+  for (const [nodeName, timerState] of nextVGraphState.runtimeAgentCallTimersByNode.entries()) {
+    if (timerState?.active !== true) continue
+
+    const startMs = Number(timerState?.startMs)
+    const computedElapsedMs = Math.max(0, nowMs - (Number.isFinite(startMs) ? startMs : nowMs))
+    const elapsedMs = hasElapsedOverride
+      ? Math.max(computedElapsedMs, elapsedOverrideMs)
+      : computedElapsedMs
+
+    nextVGraphState.runtimeAgentCallTimersByNode.set(nodeName, {
+      active: false,
+      startMs: Number.isFinite(startMs) ? startMs : Math.max(0, nowMs - elapsedMs),
+      elapsedMs,
+    })
+    changed = true
+    finalizedCount += 1
+  }
+
+  if (changed) {
+    syncNextVGraphAgentTicker()
+    applyNextVGraphRuntimeVisuals()
+  }
+
+  return finalizedCount
+}
+
 function resetNextVGraphRuntimeState(options = {}) {
   const { keepExternalNodes = true, keepContractState = true } = options
   clearNextVGraphRuntimeTimers()
@@ -2365,8 +2462,10 @@ function resetNextVGraphRuntimeState(options = {}) {
   nextVGraphState.runtimeActiveEdges.clear()
   nextVGraphState.runtimeTriggeredExternalNodes.clear()
   nextVGraphState.runtimeWarningNodes.clear()
+  nextVGraphState.runtimeAgentCallTimersByNode.clear()
   nextVGraphState.runtimeLastDispatchedNode = ''
   nextVGraphState.runtimeSequence = 0
+  syncNextVGraphAgentTicker()
   if (!keepExternalNodes) {
     nextVGraphState.runtimeExternalNodes.clear()
   }
@@ -2870,6 +2969,8 @@ function getNextVGraphNodeVisual(nodeObj, effectLabel = '') {
 }
 
 function applyNextVGraphRuntimeVisuals() {
+  const nowMs = Date.now()
+
   for (const [nodeName, nodeElement] of nextVGraphState.nodeElements.entries()) {
     const isActive = nextVGraphState.runtimeActiveNodes.has(nodeName)
     const hasWarning = nextVGraphState.runtimeWarningNodes.has(nodeName)
@@ -2877,6 +2978,8 @@ function applyNextVGraphRuntimeVisuals() {
     const isTriggeredExternal = nextVGraphState.runtimeTriggeredExternalNodes.has(nodeName)
     const stepValue = nextVGraphState.runtimeStepByNode.get(nodeName)
     const stepLabel = nextVGraphState.stepLabelElements.get(nodeName)
+    const agentTimerLabel = nextVGraphState.agentTimerLabelElements.get(nodeName)
+    const agentTimerState = nextVGraphState.runtimeAgentCallTimersByNode.get(nodeName)
 
     nodeElement.classList.toggle('is-active', isActive)
     nodeElement.classList.toggle('is-runtime-warning', hasWarning)
@@ -2892,6 +2995,24 @@ function applyNextVGraphRuntimeVisuals() {
       } else {
         stepLabel.textContent = ''
         stepLabel.classList.remove('visible')
+      }
+    }
+
+    if (agentTimerLabel) {
+      const startMs = Number(agentTimerState?.startMs)
+      const resolvedElapsedMs = (agentTimerState?.active === true)
+        ? Math.max(0, nowMs - (Number.isFinite(startMs) ? startMs : nowMs))
+        : Math.max(0, Number(agentTimerState?.elapsedMs) || 0)
+      const shouldShowTimer = agentTimerState?.active === true || resolvedElapsedMs > 0
+
+      if (shouldShowTimer) {
+        agentTimerLabel.textContent = formatNextVGraphAgentElapsedMs(resolvedElapsedMs)
+        agentTimerLabel.classList.add('visible')
+        agentTimerLabel.classList.toggle('running', agentTimerState?.active === true)
+      } else {
+        agentTimerLabel.textContent = ''
+        agentTimerLabel.classList.remove('visible')
+        agentTimerLabel.classList.remove('running')
       }
     }
   }
@@ -3074,6 +3195,34 @@ function handleNextVGraphRuntimeEvent(runtimeEvent) {
   if (runtimeEvent.type === 'tool_call' || runtimeEvent.type === 'tool_result') {
     const currentNode = String(nextVGraphState.runtimeLastDispatchedNode ?? '').trim()
     const toolName = String(runtimeEvent.tool ?? '').trim()
+    const runtimeEventTimestampMs = parseNextVGraphRuntimeEventTimestampMs(runtimeEvent)
+
+    if (currentNode && toolName === 'agent') {
+      if (runtimeEvent.type === 'tool_call') {
+        nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, {
+          active: true,
+          startMs: runtimeEventTimestampMs,
+          elapsedMs: 0,
+        })
+      } else {
+        const currentTimerState = nextVGraphState.runtimeAgentCallTimersByNode.get(currentNode)
+        const metadataElapsedMs = Number(runtimeEvent?.result?.metadata?.elapsedMs)
+        const startMs = Number(currentTimerState?.startMs)
+        const elapsedMs = Number.isFinite(metadataElapsedMs)
+          ? Math.max(0, metadataElapsedMs)
+          : Math.max(0, runtimeEventTimestampMs - (Number.isFinite(startMs) ? startMs : runtimeEventTimestampMs))
+
+        nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, {
+          active: false,
+          startMs: Number.isFinite(startMs) ? startMs : Math.max(0, runtimeEventTimestampMs - elapsedMs),
+          elapsedMs,
+        })
+      }
+
+      syncNextVGraphAgentTicker()
+      applyNextVGraphRuntimeVisuals()
+    }
+
     const isEffectful = runtimeEvent?.toolMetadata?.effectful === true
     if (currentNode && toolName && isEffectful) {
       markNextVGraphEffectEdgeActive(currentNode, 'tool', toolName)
@@ -3470,6 +3619,7 @@ function renderNextVGraph(data = {}, options = {}) {
   nextVGraphState.nodeElements = new Map()
   nextVGraphState.edgeElements = new Map()
   nextVGraphState.stepLabelElements = new Map()
+  nextVGraphState.agentTimerLabelElements = new Map()
 
   const nodeById = new Map(graphNodes.map((node) => [node.id, node]))
   const nodeClickHandlers = new Map()
@@ -4219,6 +4369,10 @@ function renderNextVGraph(data = {}, options = {}) {
         : '' // event and timer nodes carry no classification color
 
     const hasWarnings = isHandlerNode && Array.isArray(transition?.warnings) && transition.warnings.length > 0
+    const hasAgentCalls = isHandlerNode && (
+      (Array.isArray(transition?.agents) && transition.agents.length > 0)
+      || getTransitionClassName(transition?.classification) === 'llm'
+    )
     const isExternal = isEventNode && externalCandidates.has(nodeId)
     const isDeclaredExternal = isEventNode && nextVGraphState.declaredExternalNodes.has(nodeId)
     const nodeContractWarnings = isEventNode ? (nextVGraphState.contractWarningNodes.get(nodeId) ?? []) : []
@@ -4241,6 +4395,7 @@ function renderNextVGraph(data = {}, options = {}) {
       isHandlerNode ? 'handler-node' : '',
       isTimerNode ? 'timer-node' : '',
       isControlBranchNode ? 'control-branch-node' : '',
+      hasAgentCalls ? 'agent-node' : '',
       isExternal ? 'external' : '',
       isDeclaredExternal ? 'declared-external' : '',
       hasContractWarnings ? 'contract-warning' : '',
@@ -4355,6 +4510,16 @@ function renderNextVGraph(data = {}, options = {}) {
       stepTag.textContent = ''
       group.appendChild(stepTag)
       nextVGraphState.stepLabelElements.set(nodeId, stepTag)
+
+      if (hasAgentCalls) {
+        const timerTag = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+        timerTag.setAttribute('x', String(pos.x - visual.badgeOffsetX))
+        timerTag.setAttribute('y', String(pos.y + visual.badgeOffsetY - 2))
+        timerTag.setAttribute('class', 'nextv-graph-node-agent-timer')
+        timerTag.textContent = ''
+        group.appendChild(timerTag)
+        nextVGraphState.agentTimerLabelElements.set(nodeId, timerTag)
+      }
     }
 
     // Register node element by ID for runtime visual updates.
@@ -5895,7 +6060,21 @@ async function openWorkspaceEditorFile(filePath, options = {}) {
   let normalizedPath = normalizeRelativePath(filePath)
   if (!normalizedPath) return
 
+  const hasExplicitPaneTarget = Object.prototype.hasOwnProperty.call(options, 'paneId')
   const paneId = options.paneId ?? activePaneId
+
+  const existingPaneForPath = findPaneIdByFilePath(normalizedPath)
+  if (existingPaneForPath && existingPaneForPath !== paneId && !hasExplicitPaneTarget) {
+    const existingState = getPaneState(existingPaneForPath)
+    focusEditorPane(existingPaneForPath)
+    persistNextVOpenFile(existingState.path || normalizedPath)
+    renderPaneTitles()
+    syncScriptBadgeState()
+    renderOpenFileTabs()
+    renderWorkspaceTree()
+    return
+  }
+
   const state = getPaneState(paneId)
   const textarea = getPaneTextarea(paneId)
 
@@ -5929,6 +6108,17 @@ async function openWorkspaceEditorFile(filePath, options = {}) {
 
   const existingPaneId = findPaneIdByFilePath(normalizedPath)
   if (existingPaneId && existingPaneId !== paneId) {
+    if (!hasExplicitPaneTarget) {
+      const existingState = getPaneState(existingPaneId)
+      focusEditorPane(existingPaneId)
+      persistNextVOpenFile(existingState.path || normalizedPath)
+      renderPaneTitles()
+      syncScriptBadgeState()
+      renderOpenFileTabs()
+      renderWorkspaceTree()
+      return
+    }
+
     clearEditorPane(existingPaneId)
     paneAssignments.delete(normalizedPath)
     renderPaneTitles()
@@ -7031,6 +7221,10 @@ function openNextVStream() {
         // Mark both the queued event node and the inferred active handler node.
         nextVGraphState.runtimeActiveNodes.add(eventType)
         nextVGraphState.runtimeActiveNodes.add(fallbackHandlerId)
+      }
+      const fallbackFinalizedCount = finalizeNextVGraphActiveAgentTimers({ elapsedMs: extractExecutionAgentElapsedMs(payload?.result) })
+      if (fallbackFinalizedCount > 0) {
+        appendNextVLogRow(`[nextv:agent_timer] fallback finalizer closed ${fallbackFinalizedCount} active timer${fallbackFinalizedCount === 1 ? '' : 's'}`, 'step')
       }
       applyNextVGraphRuntimeVisuals()
       fadeNextVGraphActiveHighlights(760)

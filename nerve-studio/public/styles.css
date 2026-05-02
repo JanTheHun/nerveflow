@@ -2034,6 +2034,22 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
   opacity: 1;
 }
 
+.nextv-graph-node-agent-timer {
+  font-size: 9px;
+  fill: #9cdcfe;
+  opacity: 0;
+  transition: opacity 140ms ease;
+  font-weight: 700;
+}
+
+.nextv-graph-node-agent-timer.visible {
+  opacity: 1;
+}
+
+.nextv-graph-node-agent-timer.running {
+  fill: #d7ba7d;
+}
+
 .nextv-graph-emit-value-flash {
   position: absolute;
   z-index: 5;

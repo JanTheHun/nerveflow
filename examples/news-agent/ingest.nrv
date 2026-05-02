@@ -38,6 +38,8 @@ on "ingest_classify_batch"
     on_contract_violation=emit("user_output", "Sorry, this went sideways while prioritizing articles. Please try again.")
   )
 
+  # output json priority_batch
+  
   if priority_batch
     classified_count = length(priority_batch.classifications)
 

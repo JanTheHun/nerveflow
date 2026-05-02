@@ -4,7 +4,7 @@
     "tools": []
   },
   "priority-slow": {
-    "model": "qwen2.5:3b",
+    "model": "phi3:mini-128k",
     "tools": []
   },
   "summarizer": {

@@ -61,6 +61,10 @@ function createController(options = {}) {
   const FakeRunner = createFakeRunnerFactory()
   const {
     createRunner = () => new FakeRunner(),
+    createHostAdapter = () => ({
+      callAgent: async () => '',
+      callTool: async () => '',
+    }),
     workspaceConfig = {
       agents: { status: 'missing', source: '' },
       tools: { status: 'missing', source: '' },
@@ -79,10 +83,7 @@ function createController(options = {}) {
   const controller = createNextVRuntimeController({
     eventBus,
     createRunner,
-    createHostAdapter: () => ({
-      callAgent: async () => '',
-      callTool: async () => '',
-    }),
+    createHostAdapter,
     resolveWorkspaceDirectory: () => ({ absolutePath: '/workspace', relativePath: '.' }),
     loadWorkspaceConfig: () => workspaceConfig,
     resolveEntrypoint: () => ({ absolutePath: '/workspace/main.nrv', relativePath: 'main.nrv' }),
@@ -445,6 +446,80 @@ test('controller warns when effect realizer fails', async () => {
 
   assert.equal(
     published.some((entry) => entry.eventName === 'nextv_warning' && entry.payload?.code === 'EFFECT_REALIZER_FAILED'),
+    true,
+  )
+})
+
+test('controller publishes nextv_warning for slow agent calls', async () => {
+  class AgentCallingRunner {
+    constructor(options = {}) {
+      this.options = options
+      this.running = false
+    }
+
+    start() {
+      this.running = true
+    }
+
+    stop() {
+      this.running = false
+    }
+
+    async enqueue(event) {
+      if (!this.running) return false
+      await this.options.runOptions.hostAdapter.callAgent({
+        agent: 'router',
+        prompt: 'route this',
+        event,
+        line: 7,
+        statement: 'route = agent("router", event.value)',
+        sourcePath: 'intent.nrv',
+        sourceLine: 7,
+      })
+      return true
+    }
+
+    getSnapshot() {
+      return {
+        running: this.running,
+        executionCount: 0,
+        pendingEvents: 0,
+        state: {},
+        locals: {},
+      }
+    }
+  }
+
+  const { controller, published } = createController({
+    createRunner: (options) => new AgentCallingRunner(options),
+    createHostAdapter: ({ onSlowAgentCallWarning }) => ({
+      callTool: async () => '',
+      callAgent: async () => {
+        onSlowAgentCallWarning({
+          agent: 'router',
+          model: 'test-model',
+          thresholdMs: 15,
+          elapsedMs: 15,
+          attempt: 1,
+          retryLimit: 0,
+          line: 7,
+          statement: 'route = agent("router", event.value)',
+          sourcePath: 'intent.nrv',
+          sourceLine: 7,
+          eventType: 'user_message',
+          eventSource: 'external',
+          workspaceDir: '.',
+        })
+        return 'ok'
+      },
+    }),
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  await controller.enqueue({ type: 'user_message', value: 'hello', source: 'external' })
+
+  assert.equal(
+    published.some((entry) => entry.eventName === 'nextv_warning' && entry.payload?.code === 'SLOW_AGENT_CALL'),
     true,
   )
 })

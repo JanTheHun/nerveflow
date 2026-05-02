@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 import { createServer } from 'node:http'
-import { appendFileSync, mkdirSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { resolve } from 'node:path'
+
+import {
+  createOllamaTransport,
+  createOllamaFileDebugLogger,
+  createLlamaCppTransport,
+  createLlamaCppFileDebugLogger,
+} from '../src/host_core/agent_transports/index.js'
 
 import {
   createRuntimeCore,
@@ -76,154 +82,6 @@ function parseCliOptions(argv) {
   return options
 }
 
-async function callOllamaAgent({ model, messages }) {
-  const baseUrl = String(process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/+$/, '')
-  const requestPayload = {
-    model,
-    messages,
-    stream: false,
-  }
-
-  appendOllamaDebugRecord({
-    source: 'nerve-runtime',
-    phase: 'request',
-    url: `${baseUrl}/api/chat`,
-    payload: requestPayload,
-  })
-
-  let response
-  try {
-    response = await fetch(`${baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestPayload),
-    })
-  } catch (err) {
-    appendOllamaDebugRecord({
-      source: 'nerve-runtime',
-      phase: 'fetch_error',
-      url: `${baseUrl}/api/chat`,
-      error: String(err?.message ?? err),
-    })
-    throw err
-  }
-
-  if (!response.ok) {
-    const bodyText = await response.text().catch(() => '')
-    appendOllamaDebugRecord({
-      source: 'nerve-runtime',
-      phase: 'response',
-      ok: false,
-      status: response.status,
-      statusText: response.statusText,
-      bodyText,
-    })
-    throw new Error(`Ollama chat failed (${response.status}): ${bodyText || response.statusText}`)
-  }
-
-  const payload = await response.json()
-  appendOllamaDebugRecord({
-    source: 'nerve-runtime',
-    phase: 'response',
-    ok: true,
-    status: response.status,
-    payload,
-  })
-
-  const promptTokens = Number.isFinite(Number(payload?.prompt_eval_count))
-    ? Number(payload.prompt_eval_count)
-    : null
-  const completionTokens = Number.isFinite(Number(payload?.eval_count))
-    ? Number(payload.eval_count)
-    : null
-  const totalTokens = (
-    Number.isFinite(promptTokens) && Number.isFinite(completionTokens)
-      ? promptTokens + completionTokens
-      : null
-  )
-
-  return {
-    text: String(payload?.message?.content ?? payload?.response ?? '').trim(),
-    metadata: {
-      provider: 'ollama',
-      model: String(model ?? payload?.model ?? '').trim(),
-      usage: {
-        promptTokens,
-        completionTokens,
-        totalTokens,
-      },
-      timings: {
-        totalDurationNs: Number.isFinite(Number(payload?.total_duration)) ? Number(payload.total_duration) : null,
-        loadDurationNs: Number.isFinite(Number(payload?.load_duration)) ? Number(payload.load_duration) : null,
-        promptEvalDurationNs: Number.isFinite(Number(payload?.prompt_eval_duration)) ? Number(payload.prompt_eval_duration) : null,
-        evalDurationNs: Number.isFinite(Number(payload?.eval_duration)) ? Number(payload.eval_duration) : null,
-      },
-      rawProvider: {
-        createdAt: String(payload?.created_at ?? ''),
-        doneReason: String(payload?.done_reason ?? ''),
-        prompt_eval_count: Number.isFinite(Number(payload?.prompt_eval_count)) ? Number(payload.prompt_eval_count) : null,
-        eval_count: Number.isFinite(Number(payload?.eval_count)) ? Number(payload.eval_count) : null,
-        prompt_eval_duration: Number.isFinite(Number(payload?.prompt_eval_duration)) ? Number(payload.prompt_eval_duration) : null,
-        eval_duration: Number.isFinite(Number(payload?.eval_duration)) ? Number(payload.eval_duration) : null,
-        total_duration: Number.isFinite(Number(payload?.total_duration)) ? Number(payload.total_duration) : null,
-        load_duration: Number.isFinite(Number(payload?.load_duration)) ? Number(payload.load_duration) : null,
-      },
-    },
-  }
-}
-
-function previewDebugText(value, maxLength = 240) {
-  const text = String(value ?? '')
-  if (text.length <= maxLength) return text
-  return `${text.slice(0, maxLength)}...`
-}
-
-function summarizeDebugValue(value) {
-  if (Array.isArray(value)) {
-    return value.map((entry) => summarizeDebugValue(entry))
-  }
-
-  if (!value || typeof value !== 'object') {
-    return value
-  }
-
-  const summary = {}
-  for (const [key, entry] of Object.entries(value)) {
-    if (key === 'messages' && Array.isArray(entry)) {
-      summary.messages = entry.map((message) => {
-        const base = {
-          role: String(message?.role ?? ''),
-          contentLength: String(message?.content ?? '').length,
-          contentPreview: previewDebugText(message?.content ?? ''),
-        }
-        if (Array.isArray(message?.images)) {
-          base.imageCount = message.images.length
-          base.imageLengths = message.images.map((image) => String(image ?? '').length)
-        }
-        return base
-      })
-      continue
-    }
-
-    if (key === 'bodyText') {
-      summary.bodyTextLength = String(entry ?? '').length
-      summary.bodyTextPreview = previewDebugText(entry ?? '')
-      continue
-    }
-
-    if (typeof entry === 'string') {
-      summary[key] = entry.length > 400
-        ? { length: entry.length, preview: previewDebugText(entry, 240) }
-        : entry
-      continue
-    }
-
-    summary[key] = summarizeDebugValue(entry)
-  }
-
-  return summary
-}
-
 let options
 try {
   options = parseCliOptions(process.argv.slice(2))
@@ -233,22 +91,33 @@ try {
 }
 
 const repoRoot = resolve(process.cwd())
+const AGENT_TRANSPORT = String(process.env.AGENT_TRANSPORT ?? 'ollama').trim().toLowerCase()
+
 const OLLAMA_DEBUG_LOG_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.OLLAMA_DEBUG_LOG ?? '').trim())
 const OLLAMA_DEBUG_SUMMARY_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.OLLAMA_DEBUG_SUMMARY ?? '').trim())
 const OLLAMA_DEBUG_LOG_PATH = String(process.env.OLLAMA_DEBUG_LOG_PATH ?? '').trim()
   || resolve(repoRoot, 'logs', 'ollama-runtime.jsonl')
 
-function appendOllamaDebugRecord(record) {
-  if (!OLLAMA_DEBUG_LOG_ENABLED) return
-  try {
-    const payload = OLLAMA_DEBUG_SUMMARY_ENABLED
-      ? summarizeDebugValue(record)
-      : record
-    mkdirSync(dirname(OLLAMA_DEBUG_LOG_PATH), { recursive: true })
-    appendFileSync(OLLAMA_DEBUG_LOG_PATH, `${JSON.stringify({ timestamp: new Date().toISOString(), ...payload })}\n`, 'utf8')
-  } catch {
-    // Debug logging must never break runtime agent calls.
-  }
+const LLAMA_CPP_DEBUG_LOG_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.LLAMA_CPP_DEBUG_LOG ?? '').trim())
+const LLAMA_CPP_DEBUG_SUMMARY_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.LLAMA_CPP_DEBUG_SUMMARY ?? '').trim())
+const LLAMA_CPP_DEBUG_LOG_PATH = String(process.env.LLAMA_CPP_DEBUG_LOG_PATH ?? '').trim()
+  || resolve(repoRoot, 'logs', 'llama-cpp-runtime.jsonl')
+
+let callAgent
+if (AGENT_TRANSPORT === 'llama.cpp' || AGENT_TRANSPORT === 'llama_cpp') {
+  callAgent = createLlamaCppTransport({
+    baseUrl: process.env.LLAMA_CPP_BASE_URL,
+    onDebugRecord: LLAMA_CPP_DEBUG_LOG_ENABLED
+      ? createLlamaCppFileDebugLogger({ logPath: LLAMA_CPP_DEBUG_LOG_PATH, summarize: LLAMA_CPP_DEBUG_SUMMARY_ENABLED, source: 'nerve-runtime' })
+      : null,
+  })
+} else {
+  callAgent = createOllamaTransport({
+    baseUrl: process.env.OLLAMA_BASE_URL,
+    onDebugRecord: OLLAMA_DEBUG_LOG_ENABLED
+      ? createOllamaFileDebugLogger({ logPath: OLLAMA_DEBUG_LOG_PATH, summarize: OLLAMA_DEBUG_SUMMARY_ENABLED, source: 'nerve-runtime' })
+      : null,
+  })
 }
 
 const resolvers = createRuntimeResolvers({ repoRoot })
@@ -261,7 +130,7 @@ const effectRuntime = createEffectRealizerRuntime({ realizers: roles.effectReali
 
 const runtimeCore = createRuntimeCore({
   resolvers,
-  callAgent: callOllamaAgent,
+  callAgent,
   toolRuntime,
   ingressRuntime,
   effectRuntime,

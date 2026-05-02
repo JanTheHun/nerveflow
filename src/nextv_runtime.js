@@ -18,6 +18,17 @@ const AGENT_NAMED_ARG_ALLOWLIST = new Set([
   'retry_on_contract_violation',
   'on_contract_violation',
 ])
+const MODEL_NAMED_ARG_ALLOWLIST = new Set([
+  'model',
+  'prompt',
+  'instructions',
+  'messages',
+  'format',
+  'returns',
+  'validate',
+  'retry_on_contract_violation',
+  'on_contract_violation',
+])
 
 function isoNow() {
   return new Date().toISOString()
@@ -2035,6 +2046,127 @@ function buildFunctions(options, runtimeContext) {
       if (normalizedCallResult.metadata && Array.isArray(runtimeContext.agentCallMetadata)) {
         runtimeContext.agentCallMetadata.push({
           agent: agentName,
+          line,
+          statement,
+          metadata: normalizedCallResult.metadata,
+        })
+      }
+
+      return normalizedCallResult.value
+    },
+    model: async ({ positional, named, state, event, locals, line, statement, sourcePath, sourceLine }) => {
+      const context = { line, statement }
+      for (const key of Object.keys(named ?? {})) {
+        if (MODEL_NAMED_ARG_ALLOWLIST.has(key)) continue
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_MODEL_ARGUMENT',
+          statement,
+          message: `model() received unsupported named argument "${key}". Use: model, prompt, instructions, messages, format, returns, validate, retry_on_contract_violation, on_contract_violation.`,
+        })
+      }
+
+      const modelName = String(positional[0] ?? named?.model ?? '').trim()
+      const promptRaw = positional[1] ?? named?.prompt
+      const prompt = coerceTextValue(promptRaw, context, 'model() prompt').trim()
+      const instructions = coerceTextValue(positional[2] ?? named?.instructions, context, 'model() instructions').trim()
+      const messages = normalizeAgentMessagesValue(named?.messages, context)
+      const format = String(named?.format ?? '').trim().toLowerCase()
+
+      if (!modelName) {
+        runtimeUnavailable('MODEL_NAME_REQUIRED', 'model() requires a model name as first argument.')
+      }
+      if (!prompt && messages.length === 0) {
+        runtimeUnavailable('MODEL_PROMPT_REQUIRED', 'model() requires a prompt as second argument, or provide messages=... .')
+      }
+      if (format && !NEXTV_AGENT_OUTPUT_FORMATS.has(format)) {
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_MODEL_FORMAT',
+          statement,
+          message: `model() format must be one of json, text, or code; received "${format}".`,
+        })
+      }
+
+      const returns = normalizeAgentReturnsValue(named?.returns ?? null, context)
+      const validateRaw = String(named?.validate ?? '').trim().toLowerCase()
+      if (validateRaw && validateRaw !== 'strict' && validateRaw !== 'coerce') {
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_MODEL_VALIDATE',
+          statement,
+          message: `model() validate must be "strict" or "coerce"; received "${validateRaw}".`,
+        })
+      }
+      const validate = returns != null ? (validateRaw || 'coerce') : validateRaw
+      const effectiveFormat = returns != null ? '' : format
+
+      const retryCountRaw = named?.retry_on_contract_violation
+      const retryCount = Number.isInteger(retryCountRaw) ? retryCountRaw : 0
+      if (retryCount < 0) {
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_MODEL_RETRY',
+          statement,
+          message: `model() retry_on_contract_violation must be a non-negative integer; received ${retryCountRaw}.`,
+        })
+      }
+
+      const onViolationExpr = named?.on_contract_violation
+
+      if (typeof options.callAgent !== 'function') {
+        runtimeUnavailable('AGENT_CALL_UNAVAILABLE', `model("${modelName}") is not available in this runtime.`)
+      }
+
+      const callResult = await options.callAgent({
+        model: modelName,
+        prompt,
+        instructions,
+        messages,
+        format: effectiveFormat,
+        returns,
+        validate,
+        retry_on_contract_violation: retryCount,
+        on_contract_violation: onViolationExpr,
+        state,
+        event,
+        locals,
+        line,
+        statement,
+        sourcePath,
+        sourceLine,
+      })
+
+      if (callResult && typeof callResult === 'object' && callResult.__nextv_contract_violation__ === true) {
+        if (onViolationExpr) {
+          const violationLocals = { ...locals, violation: callResult.violation }
+          const violationContext = {
+            ...runtimeContext,
+            line,
+            statement,
+            locals: violationLocals,
+            state,
+            event,
+            executionRole: 'agent',
+          }
+          await evaluateExpression(callResult.expression, violationContext)
+        }
+        return null
+      }
+
+      const normalizedCallResult = (
+        callResult && typeof callResult === 'object' && !Array.isArray(callResult) && Object.prototype.hasOwnProperty.call(callResult, 'value')
+          ? callResult
+          : { value: callResult, metadata: null }
+      )
+
+      if (normalizedCallResult.metadata && Array.isArray(runtimeContext.agentCallMetadata)) {
+        runtimeContext.agentCallMetadata.push({
+          agent: `model:${modelName}`,
           line,
           statement,
           metadata: normalizedCallResult.metadata,

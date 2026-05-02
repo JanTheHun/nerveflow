@@ -48,6 +48,7 @@ export function createNextVRuntimeController({
   effectRuntime = null,
   callAgent,
   defaultModel = '',
+  slowAgentWarningMs = 15000,
 }) {
   let nextVRunner = null
   let nextVTimerHandles = []
@@ -216,6 +217,14 @@ export function createNextVRuntimeController({
       workspaceConfig,
       callAgent,
       defaultModel,
+      slowAgentWarningMs,
+      onSlowAgentCallWarning: (payload) => {
+        eventBus.publish('nextv_warning', {
+          code: 'SLOW_AGENT_CALL',
+          message: `agent("${payload.agent}") exceeded ${payload.thresholdMs}ms on model "${payload.model}".`,
+          ...payload,
+        })
+      },
       resolvePathFromBaseDirectory,
       existsSync,
       runNextVScriptFromFile,

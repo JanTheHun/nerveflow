@@ -145,6 +145,8 @@ export function createHostAdapter({
   workspaceConfig,
   callAgent,
   defaultModel = '',
+  slowAgentWarningMs = 15000,
+  onSlowAgentCallWarning = null,
   resolvePathFromBaseDirectory,
   existsSync,
   runNextVScriptFromFile,
@@ -202,19 +204,25 @@ export function createHostAdapter({
       throw new Error(`Tool "${toolName}" is not available in this host yet.`)
     },
 
-    callAgent: async ({ agent, prompt, instructions, messages, format, returns, validate, retry_on_contract_violation, on_contract_violation, event, line, statement, sourcePath, sourceLine }) => {
+    callAgent: async ({ agent, model: modelRaw, prompt, instructions, messages, format, returns, validate, retry_on_contract_violation, on_contract_violation, event, line, statement, sourcePath, sourceLine }) => {
       const agentName = String(agent ?? '').trim()
-      const profile = resolveAgentProfile(agentName)
-      if (!profile) {
+      const directModel = String(modelRaw ?? '').trim()
+
+      const profile = agentName ? resolveAgentProfile(agentName) : null
+      if (agentName && !profile) {
         throw new Error(`agent("${agentName}") profile was not found in workspace config.`)
       }
 
-      const model = String(profile.model ?? defaultModel ?? '').trim()
+      const model = String(profile?.model ?? directModel ?? defaultModel ?? '').trim()
       if (!model) {
-        throw new Error(`agent("${agentName}") is missing model; set it in agents.json or OLLAMA_MODEL.`)
+        if (agentName) {
+          throw new Error(`agent("${agentName}") is missing model; set it in agents.json or OLLAMA_MODEL.`)
+        }
+        throw new Error('model() is missing model name.')
       }
 
-      const profileInstructions = String(profile.instructions ?? '').trim()
+      const callLabel = agentName ? `agent("${agentName}")` : `model("${model}")`
+      const profileInstructions = String(profile?.instructions ?? '').trim()
       const callInstructions = String(instructions ?? '').trim()
       const baseInstructions = [profileInstructions, callInstructions].filter(Boolean).join('\n\n')
       const contractGuidance = (returns != null && typeof buildAgentReturnContractGuidance === 'function')
@@ -261,11 +269,61 @@ export function createHostAdapter({
         }
 
         if (chatMessages.length === 0) {
-          throw new Error(`agent("${agentName}") has no prompt/messages to send.`)
+          throw new Error(`${callLabel} has no prompt/messages to send.`)
         }
 
-        const transportResult = await callAgent({ model, messages: chatMessages })
+        const callStartedAt = Date.now()
+        let slowWarningEmitted = false
+        let slowWarningTimer = null
+
+        if (
+          Number.isFinite(Number(slowAgentWarningMs))
+          && Number(slowAgentWarningMs) > 0
+          && typeof onSlowAgentCallWarning === 'function'
+        ) {
+          slowWarningTimer = setTimeout(() => {
+            slowWarningEmitted = true
+            try {
+              onSlowAgentCallWarning({
+                agent: agentName || `model:${model}`,
+                model,
+                attempt: attemptNum + 1,
+                retryLimit,
+                elapsedMs: Number(slowAgentWarningMs),
+                thresholdMs: Number(slowAgentWarningMs),
+                line,
+                statement,
+                sourcePath,
+                sourceLine,
+                eventType: String(event?.type ?? ''),
+                eventSource: String(event?.source ?? ''),
+                workspaceDir: String(workspaceDir?.relativePath ?? ''),
+              })
+            } catch {
+              // Best-effort only; warning emission must not affect agent execution.
+            }
+          }, Number(slowAgentWarningMs))
+          if (typeof slowWarningTimer?.unref === 'function') {
+            slowWarningTimer.unref()
+          }
+        }
+
+        let transportResult
+        try {
+          transportResult = await callAgent({ model, messages: chatMessages })
+        } finally {
+          if (slowWarningTimer) {
+            clearTimeout(slowWarningTimer)
+          }
+        }
+
+        const elapsedMs = Math.max(0, Date.now() - callStartedAt)
         const { text: raw, metadata } = normalizeAgentTransportResult(transportResult)
+        const metadataWithTiming = (
+          metadata && typeof metadata === 'object'
+            ? { ...metadata, elapsedMs, slowWarningEmitted }
+            : (slowWarningEmitted ? { elapsedMs, slowWarningEmitted } : null)
+        )
         if (returns != null) {
           let parsed
           try {
@@ -298,7 +356,7 @@ export function createHostAdapter({
             try {
               return {
                 value: validateAgentReturnContract(parsed, returns, mode),
-                metadata,
+                metadata: metadataWithTiming,
               }
             } catch (err) {
               lastViolation = err
@@ -329,12 +387,12 @@ export function createHostAdapter({
               throw err
             }
           }
-          return { value: parsed, metadata }
+          return { value: parsed, metadata: metadataWithTiming }
         }
-        if (!format) return { value: raw, metadata }
+        if (!format) return { value: raw, metadata: metadataWithTiming }
         return {
           value: normalizeAgentFormattedOutput(raw, format),
-          metadata,
+          metadata: metadataWithTiming,
         }
       }
     },

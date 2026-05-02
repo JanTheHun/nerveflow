@@ -12,8 +12,10 @@
  *   MQTT_RESPONSE_TOPIC_PREFIX - default: nextv/response
  *   MQTT_INCLUDE_EVENTS        - comma-separated canonical event names to publish;
  *                                empty = publish all
- *   OLLAMA_BASE_URL            - default: http://127.0.0.1:11434
+ *   AGENT_TRANSPORT            - 'ollama' (default) or 'llama.cpp'
+ *   OLLAMA_BASE_URL            - default: http://127.0.0.1:11434 (used when AGENT_TRANSPORT=ollama)
  *   OLLAMA_MODEL               - default: '' (agent profile model is used first)
+ *   LLAMA_CPP_BASE_URL         - default: http://127.0.0.1:8080 (used when AGENT_TRANSPORT=llama.cpp)
  *   MQTT_AUTOSTART_WORKSPACE   - workspace-relative path to auto-start on connect (e.g. nerve-studio/workspaces-local/chatbot)
  *   MQTT_AUTOSTART_ENTRYPOINT  - entrypoint path relative to workspace; optional if nextv.json declares it
  *
@@ -37,6 +39,7 @@ import {
 } from '../../src/host_core/index.js'
 
 import { createMqttHost } from './create-mqtt-host.js'
+import { createOllamaTransport, createLlamaCppTransport } from '../../src/host_core/agent_transports/index.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -46,8 +49,10 @@ const MQTT_BROKER_URL = process.env.MQTT_BROKER_URL ?? 'mqtt://localhost:1883'
 const MQTT_COMMAND_TOPIC = process.env.MQTT_COMMAND_TOPIC ?? 'nextv/command'
 const MQTT_EVENT_TOPIC_PREFIX = process.env.MQTT_EVENT_TOPIC_PREFIX ?? 'nextv/event'
 const MQTT_RESPONSE_TOPIC_PREFIX = process.env.MQTT_RESPONSE_TOPIC_PREFIX ?? 'nextv/response'
+const AGENT_TRANSPORT = String(process.env.AGENT_TRANSPORT ?? 'ollama').trim().toLowerCase()
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434'
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? ''
+const LLAMA_CPP_BASE_URL = process.env.LLAMA_CPP_BASE_URL ?? 'http://127.0.0.1:8080'
 
 const MQTT_AUTOSTART_WORKSPACE = (process.env.MQTT_AUTOSTART_WORKSPACE ?? '').trim()
 const MQTT_AUTOSTART_ENTRYPOINT = (process.env.MQTT_AUTOSTART_ENTRYPOINT ?? '').trim()
@@ -162,26 +167,9 @@ function resolveEntrypoint(workspaceDir, requestedEntrypoint, workspaceConfig) {
   return entrypoint
 }
 
-async function callOllamaAgent({ model, messages }) {
-  const baseUrl = String(OLLAMA_BASE_URL).replace(/\/+$/, '')
-  const response = await fetch(`${baseUrl}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      messages,
-      stream: false,
-    }),
-  })
-
-  if (!response.ok) {
-    const bodyText = await response.text().catch(() => '')
-    throw new Error(`Ollama chat failed (${response.status}): ${bodyText || response.statusText}`)
-  }
-
-  const payload = await response.json()
-  return String(payload?.message?.content ?? payload?.response ?? '').trim()
-}
+const callAgent = (AGENT_TRANSPORT === 'llama.cpp' || AGENT_TRANSPORT === 'llama_cpp')
+  ? createLlamaCppTransport({ baseUrl: LLAMA_CPP_BASE_URL })
+  : createOllamaTransport({ baseUrl: OLLAMA_BASE_URL })
 
 // --- MQTT client and host wiring ---
 
@@ -215,7 +203,7 @@ const host = createMqttHost(
     eventTopicPrefix: MQTT_EVENT_TOPIC_PREFIX,
     responseTopicPrefix: MQTT_RESPONSE_TOPIC_PREFIX,
     includeEvents: INCLUDE_EVENTS,
-    callAgent: callOllamaAgent,
+    callAgent,
     defaultModel: OLLAMA_MODEL,
   },
 )

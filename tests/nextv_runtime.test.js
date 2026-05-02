@@ -1268,6 +1268,54 @@ test('agent() can use hostAdapter callAgent fallback', async () => {
   assert.equal(result.locals.summary, 'adapter summary')
 })
 
+test('model() delegates to runtime agent hook with explicit model name', async () => {
+  const calls = []
+  const result = await runNextVScript('summary = model("phi3:mini-128k", "summarize this")', {
+    callAgent: async ({ model, prompt, instructions, format }) => {
+      calls.push({ model, prompt, instructions, format })
+      return 'short summary'
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].model, 'phi3:mini-128k')
+  assert.equal(calls[0].prompt, 'summarize this')
+  assert.equal(calls[0].instructions, '')
+  assert.equal(calls[0].format, '')
+  assert.equal(result.locals.summary, 'short summary')
+})
+
+test('model() supports returns contract and on_contract_violation fallback routing', async () => {
+  const result = await runNextVScript([
+    'on external "test"',
+    '  value = model("phi3:mini-128k", "ping", returns={ text:["pong"] }, retry_on_contract_violation=1, on_contract_violation=emit("wrong_output"))',
+    '  if value',
+    '    output text value.text',
+    '  end',
+    'end',
+    '',
+    'on "wrong_output"',
+    '  output text "...should have been pong"',
+    'end',
+  ].join('\n'), {
+    event: { type: 'test', value: '' },
+    callAgent: async ({ on_contract_violation }) => ({
+      __nextv_contract_violation__: true,
+      expression: on_contract_violation,
+      violation: {
+        type: 'schema',
+        field: 'text',
+        expected: '"pong"',
+        actual: '"not-pong"',
+      },
+    }),
+  })
+
+  const outputs = result.events.filter((event) => event.type === 'output' && event.format === 'text')
+  assert.equal(outputs.length, 1)
+  assert.equal(outputs[0].content, '...should have been pong')
+})
+
 test('agent() supports named format json and structured dotted access', async () => {
   const calls = []
   const result = await runNextVScript([

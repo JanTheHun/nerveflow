@@ -1,0 +1,33 @@
+on "user_wants_music"
+  filter = { category: "music" }
+  if event.payload
+    filter = event.payload
+  end
+  results = tool("memory_retrieve", {
+    query_text: event.value,
+    limit: 10,
+    filter_metadata: filter
+  })
+
+  limit = 0.41
+
+  output play_music results
+  output text "${results.count} results from RAG"
+  relevant = cut(results.items, "similarity", ">=", limit)
+  output play_music relevant
+  mostrelevant = to_json(relevant)
+  output text "Most relevant: ${mostrelevant}"
+  music = agent(
+    "chat",
+    mostrelevant,
+    to_json(file("music-select/music-select.instructions.md")),
+    returns={
+	  type: ["author","album","song","unclear"],
+	  index: 0,
+	  confidence: 0
+	},
+    validate="strict",
+    retry_on_contract_violation=2
+    )
+  output json music
+end

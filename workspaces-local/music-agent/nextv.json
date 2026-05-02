@@ -1,0 +1,15 @@
+{
+  "entrypointPath": "entry.nrv",
+  "externals": [
+    "user_message",
+    "remember_music",
+    "recall_music",
+    "delete_music",
+    "update_music"
+  ],
+  "effects": {
+    "play_music": {
+      "format": "json"
+    }
+  }
+}

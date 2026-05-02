@@ -1,0 +1,7 @@
+include "intent_unknown.nrv"
+include "memory.nrv"
+include "music-select.nrv"
+
+on external "user_message"
+  emit("user_wants_music", event.value)
+end

@@ -1,0 +1,17 @@
+{
+	"chat": {
+		"model": "qwen2.5:3b",
+		"tools": [],
+		"instructions": ""
+	},
+	"intent": {
+		"model": "phi3:mini-128k",
+		"tools": [],
+		"instructions": ""
+	},
+	"intent-2": {
+		"model": "qwen3.5:0.8b",
+		"tools": [],
+		"instructions": ""
+	}
+}

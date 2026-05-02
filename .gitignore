@@ -6,3 +6,6 @@ examples/news-agent/voice-spa/.tmp/
 .tmp/
 examples/news-agent/.data/
 examples/memory-agent/.env
+workspaces-local/music-agent/.env
+workspaces-local/music-agent/exports/
+workspaces-local/music-agent/memory-export-*.jsonl

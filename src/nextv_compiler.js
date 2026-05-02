@@ -125,6 +125,13 @@ function walkExpr(expr, visitor) {
     return
   }
 
+  if (expr.type === 'parallel') {
+    for (const element of expr.elements ?? []) {
+      walkExpr(element, visitor)
+    }
+    return
+  }
+
   if (expr.type === 'call') {
     for (const arg of expr.args ?? []) {
       walkExpr(arg?.expr, visitor)

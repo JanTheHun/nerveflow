@@ -436,6 +436,49 @@ function parseTerm(raw, line, statement) {
     return { type: 'number', value: Number(text) }
   }
 
+  const parallelMatch = /^parallel\(([\s\S]*)\)$/.exec(text)
+  if (parallelMatch) {
+    const innerRaw = parallelMatch[1].trim()
+    if (!hasOuterBalancedPair(innerRaw, '[', ']')) {
+      throw nextvError({
+        line,
+        kind: 'parse',
+        code: 'PARALLEL_INVALID_SYNTAX',
+        statement,
+        message: 'parallel() requires a single array literal argument: parallel([...]).',
+      })
+    }
+    const arrayInner = innerRaw.slice(1, -1).trim()
+    const elementRaws = arrayInner ? splitTopLevel(arrayInner, ',').filter(Boolean) : []
+    const elements = elementRaws.map((elemRaw, idx) => {
+      const elemText = elemRaw.trim()
+      const elemMatch = /^([A-Za-z_][A-Za-z0-9_]*)\(([\s\S]*)\)$/.exec(elemText)
+      if (!elemMatch || (elemMatch[1] !== 'agent' && elemMatch[1] !== 'model')) {
+        throw nextvError({
+          line,
+          kind: 'parse',
+          code: 'PARALLEL_INVALID_ELEMENT',
+          statement,
+          message: `parallel([...]) element at index ${idx} must be a direct agent() or model() call.`,
+        })
+      }
+      const callArgs = parseFunctionArgs(elemMatch[2], line, statement)
+      for (const arg of callArgs) {
+        if (arg.kind === 'named' && arg.name === 'on_contract_violation') {
+          throw nextvError({
+            line,
+            kind: 'parse',
+            code: 'PARALLEL_ON_CONTRACT_VIOLATION_FORBIDDEN',
+            statement,
+            message: `parallel([...]) element at index ${idx}: on_contract_violation is not allowed inside parallel blocks.`,
+          })
+        }
+      }
+      return { type: 'call', name: elemMatch[1], args: callArgs }
+    })
+    return { type: 'parallel', elements }
+  }
+
   const fnMatch = /^([A-Za-z_][A-Za-z0-9_]*)\(([\s\S]*)\)$/.exec(text)
   if (fnMatch) {
     return {
@@ -905,6 +948,15 @@ export function parseNextVScript(source, options = {}) {
     }
 
     const expr = parseExpression(trimmed, line, statement)
+    if (expr.type === 'parallel') {
+      throw nextvError({
+        line,
+        kind: 'parse',
+        code: 'PARALLEL_STANDALONE_FORBIDDEN',
+        statement,
+        message: 'parallel([...]) must be assigned to a variable.',
+      })
+    }
     if (expr.type !== 'call') {
       throw nextvError({
         line,
@@ -1262,6 +1314,55 @@ function interpolateString(value, locals, state, event, context) {
   })
 }
 
+function cloneEventValue(event) {
+  if (!isPlainObject(event) && !Array.isArray(event)) return event
+  try {
+    return JSON.parse(JSON.stringify(event))
+  } catch {
+    return event
+  }
+}
+
+function normalizeParallelConcurrency(value, fallback) {
+  const raw = Number(value)
+  if (Number.isFinite(raw) && raw > 0) {
+    return Math.max(1, Math.floor(raw))
+  }
+  return Math.max(1, Math.floor(Number(fallback) || 1))
+}
+
+async function runParallelTasks(taskFns, maxConcurrency) {
+  const count = Array.isArray(taskFns) ? taskFns.length : 0
+  if (count === 0) return []
+
+  const results = new Array(count)
+  let nextIndex = 0
+
+  async function worker() {
+    while (true) {
+      const index = nextIndex
+      nextIndex += 1
+      if (index >= count) return
+
+      try {
+        results[index] = {
+          status: 'fulfilled',
+          value: await taskFns[index](),
+        }
+      } catch (err) {
+        results[index] = {
+          status: 'rejected',
+          reason: err,
+        }
+      }
+    }
+  }
+
+  const workerCount = Math.min(count, normalizeParallelConcurrency(maxConcurrency, count))
+  await Promise.all(Array.from({ length: workerCount }, () => worker()))
+  return results
+}
+
 async function evaluateExpression(expr, context) {
   if (expr.type === 'number' || expr.type === 'boolean' || expr.type === 'null') return expr.value
 
@@ -1352,6 +1453,32 @@ async function evaluateExpression(expr, context) {
       const right = await evaluateExpression(expr.right, context)
       return Boolean(right)
     }
+  }
+
+  if (expr.type === 'parallel') {
+    if (expr.elements.length === 0) return []
+
+    const snapshotLocals = cloneLocals(context.locals)
+    const snapshotState = cloneState(context.state)
+    const snapshotEvent = cloneEventValue(context.event)
+
+    const taskFns = expr.elements.map((elem) => async () => {
+      const taskContext = {
+        ...context,
+        locals: cloneLocals(snapshotLocals),
+        state: cloneState(snapshotState),
+        event: cloneEventValue(snapshotEvent),
+      }
+      return await executeFunctionCall(elem.name, elem.args, taskContext, 'expression')
+    })
+
+    const settled = await runParallelTasks(taskFns, context.parallelMaxConcurrency)
+    const failureIndex = settled.findIndex((entry) => entry?.status === 'rejected')
+    if (failureIndex !== -1) {
+      throw settled[failureIndex].reason
+    }
+
+    return settled.map((entry) => entry.value)
   }
 
   if (expr.type === 'call') {
@@ -2452,6 +2579,7 @@ export async function runNextVScript(source, options = {}) {
         state,
         event: activeEvent,
         executionRole,
+        parallelMaxConcurrency: runtimeOptions.parallelMaxConcurrency,
         agentCallMetadata,
         emitStateUpdates: runtimeOptions.emitStateUpdates === true,
         emitEvent: (payload) => emitEvent(payload, { step: steps, line: instr.line }),

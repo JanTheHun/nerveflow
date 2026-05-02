@@ -3,7 +3,14 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
-import { getConfiguredExternals, loadWorkspaceNextVConfig } from '../src/host_core/workspace_config.js'
+import {
+  getConfiguredExternals,
+  getConfiguredModelsMap,
+  getConfiguredAgentProfiles,
+  loadWorkspaceNextVConfig,
+  validateConfigReferences,
+  validateNoForbiddenAgentFields,
+} from '../src/host_core/workspace_config.js'
 
 function toWorkspaceDisplayPathFactory(workspaceDir) {
   return (targetPath) => relative(workspaceDir.absolutePath, targetPath).replace(/\\/g, '/')
@@ -404,4 +411,166 @@ test('getConfiguredExternals returns normalized nextv.json externals only', () =
 test('getConfiguredExternals returns empty list when externals are missing', () => {
   assert.deepEqual(getConfiguredExternals({ nextv: { config: {} } }), [])
   assert.deepEqual(getConfiguredExternals(null), [])
+})
+
+test('loads models layer from nextv.json with valid structure', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      models: {
+        'local-llama': {
+          model: 'llama2',
+          transport: 'ollama',
+        },
+        'remote-openai': {
+          model: 'gpt-4-turbo',
+          transport: 'openai',
+        },
+      },
+    }),
+  })
+
+  const config = loadConfig(workspaceDir)
+  const modelsMap = getConfiguredModelsMap(config)
+
+  assert.deepEqual(Object.keys(modelsMap).sort(), ['local-llama', 'remote-openai'])
+  assert.equal(modelsMap['local-llama'].model, 'llama2')
+  assert.equal(modelsMap['local-llama'].transport, 'ollama')
+  assert.equal(modelsMap['remote-openai'].model, 'gpt-4-turbo')
+  assert.equal(modelsMap['remote-openai'].transport, 'openai')
+})
+
+test('loads agent profiles with model references', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      models: {
+        'local-llama': {
+          model: 'llama2',
+          transport: 'ollama',
+        },
+      },
+      agents: {
+        profiles: {
+          qa_agent: {
+            model: 'local-llama',
+            instructions: 'You are a QA expert.',
+            tools: ['get_test_status', 'run_test'],
+          },
+        },
+      },
+    }),
+  })
+
+  const config = loadConfig(workspaceDir)
+  const profiles = getConfiguredAgentProfiles(config)
+
+  assert(profiles.qa_agent)
+  assert.equal(profiles.qa_agent.model, 'local-llama')
+  assert.equal(profiles.qa_agent.instructions, 'You are a QA expert.')
+  assert.deepEqual(profiles.qa_agent.tools, ['get_test_status', 'run_test'])
+})
+
+test('validateConfigReferences reports invalid transport names in models', () => {
+  const config = {
+    models: {
+      map: {
+        'model-a': { model: 'a', transport: 'ollama' },
+        'model-b': { model: 'b', transport: 'invalid-transport' },
+      },
+      status: 'ok',
+      source: 'nextv.json',
+    },
+    agents: {
+      profiles: {},
+    },
+  }
+
+  const registeredTransports = new Set(['ollama', 'openai', 'llama-cpp'])
+  const issues = validateConfigReferences(config, registeredTransports)
+
+  const invalidTransport = issues.find((i) => i.code === 'TRANSPORT_NOT_FOUND')
+  assert(invalidTransport)
+  assert.equal(invalidTransport.model, 'model-b')
+  assert.equal(invalidTransport.transport, 'invalid-transport')
+})
+
+test('validateConfigReferences allows agents to reference unregistered model names', () => {
+  const config = {
+    models: {
+      map: {
+        'model-a': { model: 'a', transport: 'ollama' },
+      },
+      status: 'ok',
+      source: 'nextv.json',
+    },
+    agents: {
+      profiles: {
+        'agent-1': { model: 'model-a', instructions: 'test', tools: [] },
+        'agent-2': { model: 'direct-model-name', instructions: 'test', tools: [] },
+      },
+      status: 'ok',
+      source: 'agents.json',
+    },
+  }
+
+  const issues = validateConfigReferences(config)
+  // Should not report errors for unregistered models (they can be used as direct names)
+  const modelRefErrors = issues.filter((i) => i.code === 'AGENT_INVALID_MODEL')
+  assert.equal(modelRefErrors.length, 0)
+})
+
+test('validateNoForbiddenAgentFields rejects transport in agent profiles', () => {
+  const config = {
+    agents: {
+      profiles: {
+        'agent-1': {
+          model: 'model-a',
+          transport: 'ollama',
+          instructions: 'test',
+          tools: [],
+        },
+      },
+    },
+  }
+
+  const issues = validateNoForbiddenAgentFields(config)
+  assert(issues.length > 0)
+  const forbidden = issues.find((i) => i.agent === 'agent-1')
+  assert(forbidden)
+  assert.equal(forbidden.field, 'transport')
+  assert.equal(forbidden.code, 'AGENT_INVALID_FIELD')
+})
+
+test('validateNoForbiddenAgentFields passes when only allowed fields are present', () => {
+  const config = {
+    agents: {
+      profiles: {
+        'agent-1': {
+          model: 'model-a',
+          instructions: 'test',
+          tools: [],
+        },
+      },
+    },
+  }
+
+  const issues = validateNoForbiddenAgentFields(config)
+  assert.equal(issues.length, 0)
+})
+
+test('getConfiguredModelsMap returns empty map when models section missing', () => {
+  const config = {
+    agents: { profiles: {} },
+  }
+
+  const modelsMap = getConfiguredModelsMap(config)
+  assert.deepEqual(modelsMap, {})
+})
+
+test('getConfiguredAgentProfiles returns empty profiles when agents section missing', () => {
+  const config = {
+    models: { map: {} },
+  }
+
+  const profiles = getConfiguredAgentProfiles(config)
+  assert.deepEqual(profiles, {})
 })

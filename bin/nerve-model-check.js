@@ -10,6 +10,7 @@
  *   nerve-model-check [<model>] [--transport ollama|llama.cpp] [--base-url <url>]
  *                     [--model <name>] [--ping] [--smoke]
  *                     [--smoke-port <n>] [--smoke-timeout-ms <n>]
+ *                     [--preflight-timeout-ms <n>]
  *
  * Model can be passed as a bare positional argument or via --model:
  *   npm run model:check phi3:mini-128k
@@ -20,6 +21,8 @@
  *   OLLAMA_BASE_URL    default: http://127.0.0.1:11434
  *   LLAMA_CPP_BASE_URL default: http://127.0.0.1:8080
  *   OLLAMA_MODEL       model name used when --model is not set
+ *   LLAMA_CPP_MODEL    model name used when --model is not set for llama.cpp
+ *   MODEL_CHECK_PREFLIGHT_TIMEOUT_MS timeout for preflight checks (default: 15000)
  *
  * Exit codes:
  *   0 — all required checks passed
@@ -49,6 +52,7 @@ function parseCliOptions(argv) {
     smoke: false,
     smokePort: 4297,
     smokeTimeoutMs: 45000,
+    preflightTimeoutMs: 15000,
   }
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -58,7 +62,7 @@ function parseCliOptions(argv) {
     if (token === '--ping') { options.ping = true; continue }
     if (token === '--smoke') { options.smoke = true; continue }
 
-    if (['--transport', '--base-url', '--model', '--smoke-port', '--smoke-timeout-ms'].includes(token)) {
+    if (['--transport', '--base-url', '--model', '--smoke-port', '--smoke-timeout-ms', '--preflight-timeout-ms'].includes(token)) {
       const value = String(argv[i + 1] ?? '').trim()
       if (!value || value.startsWith('--')) throw new Error(`${token} requires a value`)
       switch (token) {
@@ -67,6 +71,7 @@ function parseCliOptions(argv) {
         case '--model':            options.model = value; break
         case '--smoke-port':       options.smokePort = Number(value); break
         case '--smoke-timeout-ms': options.smokeTimeoutMs = Number(value); break
+        case '--preflight-timeout-ms': options.preflightTimeoutMs = Number(value); break
       }
       i += 1
       continue
@@ -93,6 +98,27 @@ function fail(msg) { console.log(`❌ ${msg}`) }
 function warn(msg) { console.log(`⚠️  ${msg}`) }
 function hint(msg) { console.log(`    ${msg}`) }
 function section(msg) { console.log(`\n${msg}`) }
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  if (typeof timeout?.unref === 'function') timeout.unref()
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    })
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      const timeoutErr = new Error(`request timed out after ${timeoutMs}ms`)
+      timeoutErr.code = 'MODEL_CHECK_TIMEOUT'
+      throw timeoutErr
+    }
+    throw err
+  } finally {
+    clearTimeout(timeout)
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Preflight checks
@@ -417,7 +443,7 @@ async function main() {
     console.error(`nerve-model-check: ${err?.message ?? err}`)
     console.error(
       'Usage: nerve-model-check [<model>] [--transport ollama|llama.cpp] ' +
-      '[--base-url <url>] [--model <name>] [--ping] [--smoke]'
+      '[--base-url <url>] [--model <name>] [--ping] [--smoke] [--preflight-timeout-ms <n>]'
     )
     process.exit(1)
   }
@@ -441,8 +467,14 @@ async function main() {
   const defaultBaseUrl = isOllama ? DEFAULT_OLLAMA_BASE_URL : DEFAULT_LLAMA_CPP_BASE_URL
   const baseUrl = String(cliOptions.baseUrl ?? (envBaseUrl || defaultBaseUrl)).replace(/\/+$/, '')
 
-  const modelEnv = isOllama ? String(process.env.OLLAMA_MODEL ?? '').trim() : ''
+  const modelEnv = isOllama
+    ? String(process.env.OLLAMA_MODEL ?? '').trim()
+    : String(process.env.LLAMA_CPP_MODEL ?? '').trim()
   const model = String(cliOptions.model ?? modelEnv).trim()
+  const preflightTimeoutRaw = Number(cliOptions.preflightTimeoutMs ?? process.env.MODEL_CHECK_PREFLIGHT_TIMEOUT_MS)
+  const preflightTimeoutMs = Number.isFinite(preflightTimeoutRaw) && preflightTimeoutRaw > 0
+    ? Math.floor(preflightTimeoutRaw)
+    : 15000
 
   const transportLabel = isOllama ? 'Ollama' : 'llama.cpp'
 
@@ -470,7 +502,7 @@ async function main() {
   const fallbackUrl = isLlamaCpp ? `${baseUrl}/health` : null
 
   try {
-    const res = await fetch(primaryUrl)
+    const res = await fetchWithTimeout(primaryUrl, {}, preflightTimeoutMs)
     if (res.ok) {
       reachable = true
       const body = await res.json().catch(() => null)
@@ -490,7 +522,7 @@ async function main() {
 
     if (fallbackUrl) {
       try {
-        const fallbackRes = await fetch(fallbackUrl)
+        const fallbackRes = await fetchWithTimeout(fallbackUrl, {}, preflightTimeoutMs)
         if (fallbackRes.ok) {
           reachable = true
           warn('/v1/models not available on this build — /health responded OK (model list check skipped)')
@@ -545,11 +577,11 @@ async function main() {
         ? { model, messages: [{ role: 'user', content: 'ping' }], stream: false }
         : { model, messages: [{ role: 'user', content: 'ping' }], stream: false, max_tokens: 4 }
       try {
-        const chatRes = await fetch(chatUrl, {
+        const chatRes = await fetchWithTimeout(chatUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(chatBody),
-        })
+        }, preflightTimeoutMs)
         if (!chatRes.ok) {
           const bodyText = await chatRes.text().catch(() => '')
           fail(`Chat ping failed: HTTP ${chatRes.status} — ${bodyText.slice(0, 120) || chatRes.statusText}`)

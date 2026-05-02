@@ -31,6 +31,8 @@ export function createNextVRuntimeController({
   normalizeEffectsPolicy = () => 'warn',
   validateDeclaredEffectBindings = () => [],
   validateRequiredCapabilityBindings = () => [],
+  validateConfigReferences = () => [],
+  validateNoForbiddenAgentFields = () => [],
   areJsonStatesEqual,
   hasMeaningfulNextVExecutionEvents,
   normalizeInputEvent,
@@ -49,6 +51,7 @@ export function createNextVRuntimeController({
   callAgent,
   defaultModel = '',
   slowAgentWarningMs = 15000,
+  parallelMaxConcurrency = null,
 }) {
   let nextVRunner = null
   let nextVTimerHandles = []
@@ -129,6 +132,34 @@ export function createNextVRuntimeController({
         message,
         policy: effectsPolicy,
         issues: capabilityBindingIssues,
+      })
+    }
+
+    const configRefIssues = validateConfigReferences(workspaceConfig)
+    if (configRefIssues.length > 0) {
+      const message = `Detected ${configRefIssues.length} config reference issue(s).`
+      if (effectsPolicy === 'strict') {
+        throw new Error(`${message} Set nextv.json#effectsPolicy to "warn" to allow startup.`)
+      }
+      eventBus.publish('nextv_warning', {
+        code: 'CONFIG_REFERENCE_ERROR',
+        message,
+        policy: effectsPolicy,
+        issues: configRefIssues,
+      })
+    }
+
+    const forbiddenFieldIssues = validateNoForbiddenAgentFields(workspaceConfig)
+    if (forbiddenFieldIssues.length > 0) {
+      const message = `Detected ${forbiddenFieldIssues.length} forbidden agent field(s).`
+      if (effectsPolicy === 'strict') {
+        throw new Error(`${message} Agents must not define transport or other execution parameters.`)
+      }
+      eventBus.publish('nextv_warning', {
+        code: 'FORBIDDEN_AGENT_FIELD',
+        message,
+        policy: effectsPolicy,
+        issues: forbiddenFieldIssues,
       })
     }
 
@@ -247,6 +278,7 @@ export function createNextVRuntimeController({
       runOptions: {
         emitTrace,
         emitTraceState,
+        parallelMaxConcurrency,
         declaredExternals: getDeclaredExternals(workspaceConfig),
         effectChannels: declaredEffectChannels,
         hostAdapter: runtimeCallHooks,
@@ -343,14 +375,16 @@ export function createNextVRuntimeController({
       stateLoadSource,
       stateLoadPath: stateLoadDisplayPath || null,
       workspaceConfig: {
-        agents: workspaceConfig.agents.status,
-        tools: workspaceConfig.tools.status,
-        nextv: workspaceConfig.nextv.status,
-        operators: workspaceConfig.operators.status,
-        agentsSource: workspaceConfig.agents.source,
-        toolsSource: workspaceConfig.tools.source,
-        nextvSource: workspaceConfig.nextv.file,
-        operatorsSource: workspaceConfig.operators.source,
+        models: workspaceConfig?.models?.status || 'not-loaded',
+        agents: workspaceConfig?.agents?.status || 'not-loaded',
+        tools: workspaceConfig?.tools?.status || 'not-loaded',
+        nextv: workspaceConfig?.nextv?.status || 'not-loaded',
+        operators: workspaceConfig?.operators?.status || 'not-loaded',
+        modelsSource: workspaceConfig?.models?.source || null,
+        agentsSource: workspaceConfig?.agents?.source || null,
+        toolsSource: workspaceConfig?.tools?.source || null,
+        nextvSource: workspaceConfig?.nextv?.file || null,
+        operatorsSource: workspaceConfig?.operators?.source || null,
       },
       timers: {
         configured: Array.isArray(workspaceConfig.nextv.timers) ? workspaceConfig.nextv.timers.length : 0,
@@ -368,6 +402,9 @@ export function createNextVRuntimeController({
       capabilities: {
         required: Object.values(requiredCapabilities).filter((entry) => entry?.required !== false).length,
         unsupportedBindings: capabilityBindingIssues.length,
+        agentRouting: typeof runtimeCallHooks?.getAgentCapabilities === 'function'
+          ? runtimeCallHooks.getAgentCapabilities()
+          : null,
       },
       snapshot,
     }

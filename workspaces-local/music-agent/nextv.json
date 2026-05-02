@@ -11,5 +11,38 @@
     "play_music": {
       "format": "json"
     }
+  },
+  "models": {
+    "chat-model": {
+      "model": "qwen2.5:3b",
+      "transport": "ollama"
+    },
+    "intent-model": {
+      "model": "phi3:mini-128k",
+      "transport": "ollama"
+    },
+    "intent-2-model": {
+      "model": "qwen3.5:0.8b",
+      "transport": "ollama"
+    }
+  },
+  "agents": {
+    "profiles": {
+      "chat": {
+        "model": "chat-model",
+        "tools": [],
+        "instructions": ""
+      },
+      "intent": {
+        "model": "intent-model",
+        "tools": [],
+        "instructions": ""
+      },
+      "intent-2": {
+        "model": "intent-2-model",
+        "tools": [],
+        "instructions": ""
+      }
+    }
   }
 }

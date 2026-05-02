@@ -19,6 +19,8 @@ import {
   createEventBus,
   createHostAdapter,
   createNextVRuntimeController,
+  getConfiguredAgentProfiles,
+  getConfiguredModelsMap,
   getConfiguredModules,
   getDeclaredEffectChannels,
   getDeclaredExternals,
@@ -31,7 +33,9 @@ import {
   resolveOptionalStatePath,
   resolveStateDiscoveryBaseDir,
   startTimerHandles,
+  validateConfigReferences,
   validateDeclaredEffectBindings,
+  validateNoForbiddenAgentFields,
   validateRequiredCapabilityBindings,
 } from '../host_core/index.js'
 
@@ -133,6 +137,7 @@ export function createRuntimeCore({
   ingressRuntime = null,
   effectRuntime = null,
   defaultModel = '',
+  parallelMaxConcurrency = null,
   resolvers,
 } = {}) {
   if (!resolvers || typeof resolvers !== 'object') {
@@ -164,6 +169,8 @@ export function createRuntimeCore({
     normalizeEffectsPolicy,
     validateDeclaredEffectBindings,
     validateRequiredCapabilityBindings,
+    validateConfigReferences,
+    validateNoForbiddenAgentFields,
     areJsonStatesEqual,
     hasMeaningfulNextVExecutionEvents,
     normalizeInputEvent,
@@ -181,6 +188,7 @@ export function createRuntimeCore({
     effectRuntime,
     callAgent,
     defaultModel,
+    parallelMaxConcurrency,
   })
 
   function getLifecycleState() {

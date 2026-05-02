@@ -96,6 +96,14 @@ Core built-ins:
 - `to_json(value)`
 - `emit(type, value)`
 
+Language constructs (not regular function calls):
+
+- `parallel([agent(...), model(...), ...])`
+
+`parallel([...])` evaluates a group of independent `agent()` or `model()` calls and returns their results in input order. All children are evaluated under a shared context snapshot. If any child fails, the entire expression fails; if multiple fail, the error from the lowest input index is surfaced. `on_contract_violation` is not allowed inside parallel children. `parallel([...])` must be assigned to a variable.
+
+See `docs/spec-parallel-group-evaluation.md` for full semantics.
+
 Collection helper semantics:
 
 - `length`: arrays -> item count, strings -> character count, objects -> top-level key count
@@ -118,6 +126,9 @@ Recognized integration calls:
 
 - `tool(name, ...)`
 - `agent(agentName, prompt?, instructions?, messages=?, format=?, returns=?, validate=?, retry_on_contract_violation=?, on_contract_violation=?)`
+- `model(modelName, prompt?, instructions?, messages=?, format=?, returns=?, validate=?, retry_on_contract_violation=?, on_contract_violation=?)`
+
+`model()` has the same signature and semantics as `agent()`, but takes a direct model identifier instead of an agent profile name. The model name is passed directly to the transport layer.
 
 `messages` entries have the shape `{ role, content, images? }`. `role` and `content` are required. `images` is an optional array of base64-encoded image strings; empty strings are filtered and the field is omitted when no valid entries remain. Example:
 
@@ -185,6 +196,73 @@ returns={
   area: ["kitchen", "garage", "other"]
 }
 ```
+
+## 5. Configuration Layer: Models and Agents
+
+Workflows can reference LLM models and agent profiles through a centralized two-layer configuration system. This allows you to:
+
+- Define reusable model configurations (transport, model ID) once
+- Define agent profiles with shared instructions and tools
+- Keep script logic decoupled from infrastructure details
+
+### Models Registry
+
+Define models in `nextv.json#models` or a separate `models.json` file:
+
+```json
+{
+  "models": {
+    "local-llama": {
+      "model": "llama3.2",
+      "transport": "ollama"
+    },
+    "remote-gpt": {
+      "model": "gpt-4-turbo",
+      "transport": "openai"
+    }
+  }
+}
+```
+
+Supported transports: `ollama`, `llama.cpp`, `llama_cpp`.
+
+### Agent Profiles
+
+Define agent profiles in `nextv.json#agents` or a separate `agents.json` file:
+
+```json
+{
+  "agents": {
+    "profiles": {
+      "qa_bot": {
+        "model": "local-llama",
+        "instructions": "You are a QA expert. Respond concisely.",
+        "tools": ["run_test", "check_coverage"]
+      }
+    }
+  }
+}
+```
+
+Agent profiles must not define `transport`; this is reserved for the models layer. Profiles must reference a model name that exists in the models registry.
+
+### Resolution Chain
+
+When you call `agent("qa_bot", ...)` in a script:
+
+1. Runtime looks up "qa_bot" in agent profiles
+2. Profile specifies `model: "local-llama"`
+3. Runtime looks up "local-llama" in models registry
+4. Models registry specifies transport (ollama) and model ID (llama3.2)
+5. Profile instructions and tools are merged with call-time arguments
+
+If the agent or model is not found in config, the runtime falls back to treating the name as a direct model identifier (for backward compatibility) or uses environment variables (`OLLAMA_MODEL`, `AGENT_TRANSPORT`).
+
+### Backward Compatibility
+
+- Existing scripts using `agent("modelname", ...)` without configuration still work
+- Direct `model("llama3.2", ...)` calls bypass configuration entirely
+- Environment variables (`OLLAMA_MODEL`, `AGENT_TRANSPORT`) still apply as fallback
 
 ## Cardinality Constraints
 
@@ -298,7 +376,7 @@ IR lowering note:
 - `operator(...) -> operator_call`
 - `emit(...)` currently lowers through generic call handling and queues a runtime signal
 
-## 5. Events, Subscriptions, And Queueing
+## 6. Events, Subscriptions, And Queueing
 
 Signal model:
 
@@ -313,7 +391,7 @@ External ingress model:
 - `on external "type"` is auto-bound to matching host input event type
 - manual bridge boilerplate is not required
 
-## 6. Output Model
+## 7. Output Model
 
 Built-in output channels:
 
@@ -340,14 +418,14 @@ Recommendations:
 - prefer `output json ...` for new structured output flows
 - use `interaction` only when host compatibility requires it
 
-## 7. Includes
+## 8. Includes
 
 Include behavior:
 
 - include paths resolve relative to current file directory when run from file context
 - include cycles are rejected
 
-## 8. Strict Mode
+## 9. Strict Mode
 
 Strict mode is compile-time validation.
 
@@ -358,7 +436,7 @@ Current strict-mode forbidden calls:
 
 Strict checks apply across nested expressions, not just top-level calls.
 
-## 9. Host Boundary
+## 10. Host Boundary
 
 Nerveflow runtime computes and emits events; host adapters provide side effects and integrations.
 
@@ -375,7 +453,7 @@ Agent metadata note:
 - `agent()` still returns workflow values only; per-call provider metadata is a host observability payload surfaced in `nextv_execution.result.agentCalls`
 - see [04-host-integration.md](04-host-integration.md#agent-call-metadata-contract-additive) for the additive metadata contract and example payloads
 
-## 10. Contract Notes
+## 11. Contract Notes
 
 This reference is intentionally implementation-aligned.
 

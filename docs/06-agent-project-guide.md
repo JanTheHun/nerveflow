@@ -25,7 +25,67 @@ Optional but recommended:
 - test script or smoke workflow
 - host adapter config
 
-## 2. Build Order For Agents
+## 2. Configuration: Models and Agent Profiles
+
+When your workflow calls `agent(...)`, define reusable configurations in `nextv.json` to decouple scripts from infrastructure details.
+
+### Models Registry
+
+Define available models and their transports in `nextv.json#models`:
+
+```json
+{
+  "models": {
+    "classifier-model": {
+      "model": "phi3:mini",
+      "transport": "ollama"
+    },
+    "router-model": {
+      "model": "llama3.2",
+      "transport": "ollama"
+    }
+  }
+}
+```
+
+### Agent Profiles
+
+Define agent profiles in `nextv.json#agents` that reference models by name:
+
+```json
+{
+  "agents": {
+    "profiles": {
+      "classifier": {
+        "model": "classifier-model",
+        "instructions": "You classify user intents into predefined categories.",
+        "tools": []
+      },
+      "router": {
+        "model": "router-model",
+        "instructions": "You route requests to the appropriate handler.",
+        "tools": ["route_to_handler"]
+      }
+    }
+  }
+}
+```
+
+### Usage in Workflows
+
+Call agents by their profile name:
+
+```nrv
+decision = agent(
+  "classifier",
+  event.value,
+  returns={ intent: ["chat", "search", "other"] }
+)
+```
+
+The runtime resolves `"classifier"` → agent profile → model reference → transport configuration.
+
+## 3. Build Order For Agents
 
 Use this order to avoid fragile flows:
 
@@ -37,7 +97,7 @@ Use this order to avoid fragile flows:
 6. Add `on_contract_violation=emit(...)` for explicit failure routing.
 7. Add final fallback outputs for unresolved paths.
 
-## 3. Contract-First Pattern
+## 4. Contract-First Pattern
 
 Always write the contract before refining prompt text.
 
@@ -62,7 +122,7 @@ Rules:
 - Include `"other"` only when fallback behavior exists.
 - Do not rely on prompts to replace missing contract boundaries.
 
-## 4. Deterministic Routing Pattern
+## 5. Deterministic Routing Pattern
 
 ```nrv
 on external "user_message"
@@ -83,7 +143,7 @@ on external "user_message"
 end
 ```
 
-## 5. Failure Routing Pattern
+## 6. Failure Routing Pattern
 
 ```nrv
 on "contract_violation"
@@ -93,14 +153,14 @@ end
 
 When available, use `event.value.field`, `event.value.expected`, and `event.value.actual` for user-facing repair prompts.
 
-## 6. Effect Surface Rules
+## 7. Effect Surface Rules
 
 - Use explicit `output <channel> <value>` statements.
 - Prefer `output json` for structured payloads.
 - Ensure each route has a visible effect or emitted event.
 - Avoid hidden side effects in prompt text.
 
-## 7. Prompt Authoring Rules For Agents
+## 8. Prompt Authoring Rules For Agents
 
 Prompt files should be domain-specific and brief.
 
@@ -115,7 +175,7 @@ Do not:
 - include generic JSON formatting boilerplate already enforced by runtime
 - duplicate contract schema text manually
 
-## 8. Agent Output Quality Bar
+## 9. Agent Output Quality Bar
 
 A generated project is acceptable when:
 

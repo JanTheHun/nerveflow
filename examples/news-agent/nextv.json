@@ -13,5 +13,32 @@
       "kind": "visual",
       "format": "json"
     }
+  },
+  "models": {
+    "priority-model": {
+      "model": "phi3:mini-128k",
+      "transport": "ollama"
+    },
+    "summarizer-model": {
+      "model": "cogito:3b",
+      "transport": "ollama"
+    }
+  },
+  "agents": {
+    "profiles": {
+      "priority": {
+        "model": "priority-model",
+        "tools": []
+      },
+      "priority-slow": {
+        "model": "priority-model",
+        "tools": []
+      },
+      "summarizer": {
+        "model": "summarizer-model",
+        "tools": [],
+        "instructions": "You are a concise news briefing assistant. Prioritize actionable clarity and factual phrasing."
+      }
+    }
   }
 }

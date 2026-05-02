@@ -92,6 +92,15 @@ try {
 
 const repoRoot = resolve(process.cwd())
 const AGENT_TRANSPORT = String(process.env.AGENT_TRANSPORT ?? 'ollama').trim().toLowerCase()
+const AGENT_ROUTING_DEFAULT = String(process.env.AGENT_ROUTING_DEFAULT ?? 'external').trim().toLowerCase()
+const AGENT_TRANSPORT_TIMEOUT_MS_RAW = Number(process.env.AGENT_TRANSPORT_TIMEOUT_MS)
+const AGENT_TRANSPORT_TIMEOUT_MS = Number.isFinite(AGENT_TRANSPORT_TIMEOUT_MS_RAW) && AGENT_TRANSPORT_TIMEOUT_MS_RAW > 0
+  ? Math.floor(AGENT_TRANSPORT_TIMEOUT_MS_RAW)
+  : 60000
+const PARALLEL_MAX_CONCURRENCY_RAW = Number(process.env.PARALLEL_MAX_CONCURRENCY)
+const PARALLEL_MAX_CONCURRENCY = Number.isFinite(PARALLEL_MAX_CONCURRENCY_RAW) && PARALLEL_MAX_CONCURRENCY_RAW > 0
+  ? Math.floor(PARALLEL_MAX_CONCURRENCY_RAW)
+  : null
 
 const OLLAMA_DEBUG_LOG_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.OLLAMA_DEBUG_LOG ?? '').trim())
 const OLLAMA_DEBUG_SUMMARY_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.OLLAMA_DEBUG_SUMMARY ?? '').trim())
@@ -104,21 +113,111 @@ const LLAMA_CPP_DEBUG_LOG_PATH = String(process.env.LLAMA_CPP_DEBUG_LOG_PATH ?? 
   || resolve(repoRoot, 'logs', 'llama-cpp-runtime.jsonl')
 
 let callAgent
-if (AGENT_TRANSPORT === 'llama.cpp' || AGENT_TRANSPORT === 'llama_cpp') {
-  callAgent = createLlamaCppTransport({
-    baseUrl: process.env.LLAMA_CPP_BASE_URL,
-    onDebugRecord: LLAMA_CPP_DEBUG_LOG_ENABLED
-      ? createLlamaCppFileDebugLogger({ logPath: LLAMA_CPP_DEBUG_LOG_PATH, summarize: LLAMA_CPP_DEBUG_SUMMARY_ENABLED, source: 'nerve-runtime' })
-      : null,
-  })
-} else {
-  callAgent = createOllamaTransport({
-    baseUrl: process.env.OLLAMA_BASE_URL,
-    onDebugRecord: OLLAMA_DEBUG_LOG_ENABLED
-      ? createOllamaFileDebugLogger({ logPath: OLLAMA_DEBUG_LOG_PATH, summarize: OLLAMA_DEBUG_SUMMARY_ENABLED, source: 'nerve-runtime' })
-      : null,
-  })
+const localCallAgent = createLlamaCppTransport({
+  baseUrl: process.env.LLAMA_CPP_BASE_URL,
+  timeoutMs: AGENT_TRANSPORT_TIMEOUT_MS,
+  onDebugRecord: LLAMA_CPP_DEBUG_LOG_ENABLED
+    ? createLlamaCppFileDebugLogger({ logPath: LLAMA_CPP_DEBUG_LOG_PATH, summarize: LLAMA_CPP_DEBUG_SUMMARY_ENABLED, source: 'nerve-runtime' })
+    : null,
+})
+
+const externalCallAgent = createOllamaTransport({
+  baseUrl: process.env.OLLAMA_BASE_URL,
+  timeoutMs: AGENT_TRANSPORT_TIMEOUT_MS,
+  onDebugRecord: OLLAMA_DEBUG_LOG_ENABLED
+    ? createOllamaFileDebugLogger({ logPath: OLLAMA_DEBUG_LOG_PATH, summarize: OLLAMA_DEBUG_SUMMARY_ENABLED, source: 'nerve-runtime' })
+    : null,
+})
+
+function parseModelRouteHint(modelRaw) {
+  const model = String(modelRaw ?? '').trim()
+  const localMatch = model.match(/^(?:local|llama(?:\.cpp)?):\s*(.+)$/i)
+  if (localMatch) {
+    return { route: 'local', model: localMatch[1].trim(), strategy: 'model-hint' }
+  }
+
+  const externalMatch = model.match(/^(?:external|remote|ollama):\s*(.+)$/i)
+  if (externalMatch) {
+    return { route: 'external', model: externalMatch[1].trim(), strategy: 'model-hint' }
+  }
+
+  return { route: '', model, strategy: '' }
 }
+
+function normalizeForcedRoute(rawTransport) {
+  if (rawTransport === 'llama.cpp' || rawTransport === 'llama_cpp') return 'local'
+  if (rawTransport === 'ollama') return 'external'
+  if (rawTransport === 'auto' || rawTransport === 'mixed' || rawTransport === '') return ''
+  return 'external'
+}
+
+const forcedRoute = normalizeForcedRoute(AGENT_TRANSPORT)
+
+callAgent = async ({ model, messages }) => {
+  const hint = parseModelRouteHint(model)
+  const selectedRoute = forcedRoute || hint.route || (AGENT_ROUTING_DEFAULT === 'local' ? 'local' : 'external')
+  const selectedModel = hint.model || String(model ?? '').trim()
+  const strategy = forcedRoute
+    ? 'forced-transport'
+    : (hint.route ? hint.strategy : 'default-route')
+
+  const transport = selectedRoute === 'local' ? localCallAgent : externalCallAgent
+  const transportResult = await transport({ model: selectedModel, messages })
+
+  if (typeof transportResult === 'string') {
+    return {
+      text: transportResult,
+      metadata: {
+        route: selectedRoute,
+        strategy,
+        model: selectedModel,
+      },
+    }
+  }
+
+  if (transportResult && typeof transportResult === 'object' && !Array.isArray(transportResult)) {
+    const metadata = (transportResult.metadata && typeof transportResult.metadata === 'object' && !Array.isArray(transportResult.metadata))
+      ? transportResult.metadata
+      : {}
+    return {
+      ...transportResult,
+      metadata: {
+        ...metadata,
+        route: selectedRoute,
+        strategy,
+        model: selectedModel,
+      },
+    }
+  }
+
+  return {
+    text: String(transportResult ?? ''),
+    metadata: {
+      route: selectedRoute,
+      strategy,
+      model: selectedModel,
+    },
+  }
+}
+
+callAgent.capabilities = {
+  routingMode: forcedRoute ? 'forced' : 'mixed',
+  defaultRoute: AGENT_ROUTING_DEFAULT === 'local' ? 'local' : 'external',
+  local: {
+    id: 'llama.cpp',
+    locality: 'local',
+  },
+  external: {
+    id: 'ollama',
+    locality: 'external',
+  },
+}
+
+const DEFAULT_AGENT_MODEL = forcedRoute === 'local'
+  ? (process.env.LLAMA_CPP_MODEL ?? '')
+  : forcedRoute === 'external'
+    ? (process.env.OLLAMA_MODEL ?? '')
+    : (process.env.AGENT_DEFAULT_MODEL ?? process.env.OLLAMA_MODEL ?? process.env.LLAMA_CPP_MODEL ?? '')
 
 const resolvers = createRuntimeResolvers({ repoRoot })
 
@@ -134,7 +233,8 @@ const runtimeCore = createRuntimeCore({
   toolRuntime,
   ingressRuntime,
   effectRuntime,
-  defaultModel: process.env.OLLAMA_MODEL ?? '',
+  defaultModel: DEFAULT_AGENT_MODEL,
+  parallelMaxConcurrency: PARALLEL_MAX_CONCURRENCY,
 })
 
 function sendJson(res, statusCode, payload) {

@@ -31,11 +31,15 @@ export {
 } from './runtime_lifecycle.js'
 
 export {
+  getConfiguredAgentProfiles,
+  getConfiguredModelsMap,
   getConfiguredModules,
   getDeclaredEffectChannels,
   getDeclaredExternals,
   getRequiredCapabilities,
   loadWorkspaceNextVConfig,
+  validateConfigReferences,
+  validateNoForbiddenAgentFields,
 } from './workspace_config.js'
 
 export {

@@ -23,6 +23,27 @@ on external "user_message"
 end
 ```
 
+**Configuration** (`nextv.json`):
+
+```json
+{
+  "models": {
+    "classifier-model": {
+      "model": "phi3:mini",
+      "transport": "ollama"
+    }
+  },
+  "agents": {
+    "profiles": {
+      "classifier": {
+        "model": "classifier-model",
+        "instructions": "Classify the user request into one of: chat, search, or other."
+      }
+    }
+  }
+}
+```
+
 ## 2. Bounded Tool Routing
 
 ```nrv
@@ -43,6 +64,28 @@ on external "tool_request"
     output text "I can use calendar or search. Which one should I use?"
   end
 end
+```
+
+**Configuration** (`nextv.json`):
+
+```json
+{
+  "models": {
+    "router-model": {
+      "model": "llama3.2",
+      "transport": "ollama"
+    }
+  },
+  "agents": {
+    "profiles": {
+      "tool_router": {
+        "model": "router-model",
+        "instructions": "Route requests to calendar or search tool based on intent.",
+        "tools": ["calendar", "search"]
+      }
+    }
+  }
+}
 ```
 
 ## 3. Light Control With "other" Fallback
@@ -70,6 +113,28 @@ on external "light_instruction"
     output text "Do what with ${light.area}?"
   end
 end
+```
+
+**Configuration** (`nextv.json`):
+
+```json
+{
+  "models": {
+    "intent-model": {
+      "model": "phi3:mini-128k",
+      "transport": "ollama"
+    }
+  },
+  "agents": {
+    "profiles": {
+      "intent": {
+        "model": "intent-model",
+        "instructions": "Extract the target light area and action. Use 'other' if no exact match.",
+        "tools": []
+      }
+    }
+  }
+}
 ```
 
 ## 4. Contract Violation Handler
@@ -104,6 +169,29 @@ decision = agent(
   on_contract_violation=emit("contract_violation", violation)
 )
 ```
+
+**Configuration** (`nextv.json`):
+
+```json
+{
+  "models": {
+    "router-model": {
+      "model": "llama3.2",
+      "transport": "ollama"
+    }
+  },
+  "agents": {
+    "profiles": {
+      "router": {
+        "model": "router-model",
+        "instructions": ""
+      }
+    }
+  }
+}
+```
+
+The prompt file is loaded from `prompts/router.md` and the contract from `contracts/router.contract.json`.
 
 ## 7. Prompt File Template (Domain-Only)
 

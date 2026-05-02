@@ -12,6 +12,10 @@ import { dirname } from 'node:path'
 export function createOllamaTransport(opts = {}) {
   const baseUrl = String(opts.baseUrl ?? 'http://127.0.0.1:11434').replace(/\/+$/, '')
   const onDebugRecord = typeof opts.onDebugRecord === 'function' ? opts.onDebugRecord : null
+  const timeoutMsRaw = Number(opts.timeoutMs)
+  const timeoutMs = Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
+    ? Math.floor(timeoutMsRaw)
+    : 60000
 
   function debug(record) {
     if (!onDebugRecord) return
@@ -23,17 +27,30 @@ export function createOllamaTransport(opts = {}) {
 
     debug({ phase: 'request', url: `${baseUrl}/api/chat`, payload: requestPayload })
 
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+    if (typeof timeout?.unref === 'function') timeout.unref()
+
     let response
     try {
       response = await fetch(`${baseUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestPayload),
+        signal: controller.signal,
       })
     } catch (err) {
+      clearTimeout(timeout)
+      if (err?.name === 'AbortError') {
+        const timeoutErr = new Error(`Ollama chat timed out after ${timeoutMs}ms`)
+        timeoutErr.code = 'AGENT_TRANSPORT_TIMEOUT'
+        debug({ phase: 'timeout', url: `${baseUrl}/api/chat`, timeoutMs })
+        throw timeoutErr
+      }
       debug({ phase: 'fetch_error', url: `${baseUrl}/api/chat`, error: String(err?.message ?? err) })
       throw err
     }
+    clearTimeout(timeout)
 
     if (!response.ok) {
       const bodyText = await response.text().catch(() => '')

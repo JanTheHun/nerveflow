@@ -32,6 +32,30 @@ function parseProfilesMap(raw, sourceLabel) {
   return map
 }
 
+function parseModelsMap(raw, sourceLabel) {
+  const map = (raw && typeof raw === 'object' && !Array.isArray(raw) && raw.models && typeof raw.models === 'object' && !Array.isArray(raw.models))
+    ? raw.models
+    : raw
+
+  if (!map || typeof map !== 'object' || Array.isArray(map)) {
+    throw new Error(`${sourceLabel} must be an object map of modelName -> modelConfig.`)
+  }
+
+  for (const [name, model] of Object.entries(map)) {
+    if (!model || typeof model !== 'object' || Array.isArray(model)) {
+      throw new Error(`${sourceLabel}: model "${name}" must be an object.`)
+    }
+    if (typeof model.model !== 'string' || !model.model.trim()) {
+      throw new Error(`${sourceLabel}: model "${name}.model" must be a non-empty string.`)
+    }
+    if (typeof model.transport !== 'string' || !model.transport.trim()) {
+      throw new Error(`${sourceLabel}: model "${name}.transport" must be a non-empty string.`)
+    }
+  }
+
+  return map
+}
+
 function parseWorkspaceToolsConfig(raw, sourceLabel) {
   let allow
   let aliases = {}
@@ -295,11 +319,18 @@ export function loadWorkspaceNextVConfig({
 }) {
   const nextVPath = join(workspaceDir.absolutePath, 'nextv.json')
   const agentsPath = join(workspaceDir.absolutePath, 'agents.json')
+  const modelsPath = join(workspaceDir.absolutePath, 'models.json')
   const toolsPath = join(workspaceDir.absolutePath, 'tools.json')
   const operatorsPath = join(workspaceDir.absolutePath, 'operators.json')
   const nextVDisplayPath = toWorkspaceDisplayPath(nextVPath)
 
   const config = {
+    models: {
+      status: 'missing',
+      file: toWorkspaceDisplayPath(modelsPath),
+      source: toWorkspaceDisplayPath(modelsPath),
+      map: {},
+    },
     agents: {
       status: 'missing',
       file: toWorkspaceDisplayPath(agentsPath),
@@ -346,6 +377,12 @@ export function loadWorkspaceNextVConfig({
 
     if (Object.prototype.hasOwnProperty.call(config.nextv.config, 'effectsPolicy')) {
       config.nextv.config.effectsPolicy = parseEffectsPolicy(config.nextv.config.effectsPolicy, 'nextv.json#effectsPolicy')
+    }
+
+    if (config.nextv.config.models != null) {
+      config.models.map = parseModelsMap(config.nextv.config.models, 'nextv.json#models')
+      config.models.status = 'loaded'
+      config.models.source = `${nextVDisplayPath}#models`
     }
 
     if (config.nextv.config.agents != null) {
@@ -406,7 +443,19 @@ export function loadWorkspaceNextVConfig({
 
     const agentsConfigRef = String(config.nextv.config.agentsConfig ?? '').trim()
     const toolsConfigRef = String(config.nextv.config.toolsConfig ?? '').trim()
+    const modelsConfigRef = String(config.nextv.config.modelsConfig ?? '').trim()
     const operatorsConfigRef = String(config.nextv.config.operatorsConfig ?? '').trim()
+
+    if (modelsConfigRef) {
+      const resolvedModels = resolvePathFromBaseDirectory(workspaceDir.absolutePath, modelsConfigRef, 'editor')
+      if (!existsSync(resolvedModels.absolutePath)) {
+        throw new Error(`nextv.json#modelsConfig file not found: ${resolvedModels.relativePath}`)
+      }
+      const modelsRaw = readJsonObjectFile(resolvedModels.absolutePath)
+      config.models.map = parseModelsMap(modelsRaw, 'nextv.json#modelsConfig')
+      config.models.status = 'loaded'
+      config.models.source = toWorkspaceDisplayPath(resolvedModels.absolutePath)
+    }
 
     if (agentsConfigRef) {
       const resolvedAgents = resolvePathFromBaseDirectory(workspaceDir.absolutePath, agentsConfigRef, 'editor')
@@ -444,6 +493,13 @@ export function loadWorkspaceNextVConfig({
     }
   }
 
+  if (config.models.status !== 'loaded' && existsSync(modelsPath)) {
+    const raw = readJsonObjectFile(modelsPath)
+    config.models.map = parseModelsMap(raw, 'models.json')
+    config.models.status = 'loaded'
+    config.models.source = toWorkspaceDisplayPath(modelsPath)
+  }
+
   if (config.agents.status !== 'loaded' && existsSync(agentsPath)) {
     const raw = readJsonObjectFile(agentsPath)
     config.agents.profiles = parseProfilesMap(raw, 'agents.json')
@@ -468,6 +524,47 @@ export function loadWorkspaceNextVConfig({
   }
 
   return config
+}
+
+export function validateConfigReferences(workspaceConfig, registeredTransports = new Set(['ollama', 'llama.cpp', 'llama_cpp'])) {
+  const issues = []
+  const modelsMap = workspaceConfig?.models?.map ?? {}
+
+  // Validate model transport names (models that ARE in the registry)
+  for (const [modelName, model] of Object.entries(modelsMap)) {
+    const transport = String(model?.transport ?? '').trim()
+    if (transport && !registeredTransports.has(transport)) {
+      issues.push({
+        code: 'TRANSPORT_NOT_FOUND',
+        model: modelName,
+        transport,
+        message: `model "${modelName}" references unknown transport "${transport}"`,
+      })
+    }
+  }
+
+  return issues
+}
+
+export function validateNoForbiddenAgentFields(workspaceConfig) {
+  const issues = []
+  const agentsMap = workspaceConfig?.agents?.profiles ?? {}
+  const forbiddenFields = ['transport']
+
+  for (const [agentName, agent] of Object.entries(agentsMap)) {
+    for (const field of forbiddenFields) {
+      if (Object.prototype.hasOwnProperty.call(agent, field)) {
+        issues.push({
+          code: 'AGENT_INVALID_FIELD',
+          agent: agentName,
+          field,
+          message: `agent "${agentName}" must not define "${field}" (use models registry instead)`,
+        })
+      }
+    }
+  }
+
+  return issues
 }
 
 export function getDeclaredExternals(workspaceConfig) {
@@ -504,3 +601,16 @@ export function getConfiguredModules(workspaceConfig) {
   if (!declared || typeof declared !== 'object' || Array.isArray(declared)) return {}
   return { ...declared }
 }
+
+export function getConfiguredModelsMap(workspaceConfig) {
+  const declared = workspaceConfig?.models?.map
+  if (!declared || typeof declared !== 'object' || Array.isArray(declared)) return {}
+  return { ...declared }
+}
+
+export function getConfiguredAgentProfiles(workspaceConfig) {
+  const declared = workspaceConfig?.agents?.profiles
+  if (!declared || typeof declared !== 'object' || Array.isArray(declared)) return {}
+  return { ...declared }
+}
+

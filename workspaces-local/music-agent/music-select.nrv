@@ -9,7 +9,7 @@ on "user_wants_music"
     filter_metadata: filter
   })
 
-  limit = 0.41
+  limit = 0.6
 
   output play_music results
   output text "${results.count} results from RAG"

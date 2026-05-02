@@ -1817,6 +1817,56 @@ test('agent() on_contract_violation can emit violation payload without eager eva
   assert.equal(result.state.violation_source_type, 'user_input')
 })
 
+test('agent() calls are dispatched with agent name to callAgent hook', async () => {
+  const calls = []
+  
+  const result = await runNextVScript('response = agent("qa_bot", "What tests should we run?")', {
+    callAgent: async (opts) => {
+      calls.push(opts)
+      return 'Profile instructions applied'
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].agent, 'qa_bot')
+  assert.equal(result.locals.response, 'Profile instructions applied')
+})
+
+test('model() calls are dispatched with model name to callAgent hook', async () => {
+  const calls = []
+  
+  const result = await runNextVScript('response = model("gpt-4", "test")', {
+    callAgent: async (opts) => {
+      calls.push(opts)
+      return 'Model called'
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].model, 'gpt-4')
+  assert.equal(result.locals.response, 'Model called')
+})
+
+test('agent() and model() both work as expected', async () => {
+  const calls = []
+  
+  const result = await runNextVScript([
+    'agent_result = agent("research", "summarize")',
+    'model_result = model("llama2", "continue")',
+  ].join('\n'), {
+    callAgent: async (opts) => {
+      calls.push(opts)
+      return opts.agent ? 'agent-response' : 'model-response'
+    },
+  })
+
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].agent, 'research')
+  assert.equal(calls[1].model, 'llama2')
+  assert.equal(result.locals.agent_result, 'agent-response')
+  assert.equal(result.locals.model_result, 'model-response')
+})
+
 test('if supports equality comparison with json intent field', async () => {
   const result = await runNextVScript([
     'raw = "{\\"intent\\":\\"chat\\"}"',
@@ -2479,5 +2529,252 @@ test('validateOutputContract rejects error status without error field', () => {
     assert.match(err.message, /error/)
     return true
   })
+})
+
+// --- parallel([...]) ---
+
+test('parallel([]) returns empty array', async () => {
+  const result = await runNextVScript('results = parallel([])')
+  assert.deepEqual(result.locals.results, [])
+})
+
+test('parallel([agent(...)]) returns single-element array', async () => {
+  const result = await runNextVScript('results = parallel([agent("a", "go")])', {
+    callAgent: async () => 'answer-a',
+  })
+  assert.deepEqual(result.locals.results, ['answer-a'])
+})
+
+test('parallel([agent, agent]) returns results in input order', async () => {
+  const order = []
+  const result = await runNextVScript([
+    'results = parallel([',
+    '  agent("first", "go"),',
+    '  agent("second", "go"),',
+    '  agent("third", "go")',
+    '])',
+  ].join('\n'), {
+    callAgent: async ({ agent }) => {
+      order.push(agent)
+      return `result-${agent}`
+    },
+  })
+  assert.deepEqual(result.locals.results, ['result-first', 'result-second', 'result-third'])
+})
+
+test('parallel all children observe the same pre-parallel event snapshot', async () => {
+  const seenValues = []
+  const result = await runNextVScript([
+    'results = parallel([',
+    '  agent("a", event.value),',
+    '  agent("b", event.value)',
+    '])',
+  ].join('\n'), {
+    event: { type: 'test', value: 'snapshot-value' },
+    callAgent: async ({ prompt }) => {
+      seenValues.push(prompt)
+      return prompt
+    },
+  })
+  assert.deepEqual(seenValues, ['snapshot-value', 'snapshot-value'])
+  assert.deepEqual(result.locals.results, ['snapshot-value', 'snapshot-value'])
+})
+
+test('parallel fails when one child fails (single failure)', async () => {
+  await assert.rejects(
+    () => runNextVScript([
+      'results = parallel([',
+      '  agent("a", "go"),',
+      '  agent("b", "go")',
+      '])',
+    ].join('\n'), {
+      callAgent: async ({ agent }) => {
+        if (agent === 'b') throw new Error('b-failed')
+        return `ok-${agent}`
+      },
+    }),
+    (err) => {
+      assert.match(err.message, /b-failed/)
+      return true
+    },
+  )
+})
+
+test('parallel surfaces lowest-index failure when multiple children fail', async () => {
+  await assert.rejects(
+    () => runNextVScript([
+      'results = parallel([',
+      '  agent("a", "go"),',
+      '  agent("b", "go"),',
+      '  agent("c", "go")',
+      '])',
+    ].join('\n'), {
+      callAgent: async ({ agent }) => {
+        if (agent === 'b') throw new Error('b-failed')
+        if (agent === 'c') throw new Error('c-failed')
+        return `ok-${agent}`
+      },
+    }),
+    (err) => {
+      assert.match(err.message, /b-failed/)
+      return true
+    },
+  )
+})
+
+test('parallel executes sibling calls concurrently and still reports lowest-index failure', async () => {
+  const calledAgents = []
+
+  await assert.rejects(
+    () => runNextVScript([
+      'results = parallel([',
+      '  agent("b", "go"),',
+      '  agent("c", "go")',
+      '])',
+    ].join('\n'), {
+      callAgent: async ({ agent }) => {
+        calledAgents.push(agent)
+        if (agent === 'b') {
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 25))
+          throw new Error('b-failed')
+        }
+        if (agent === 'c') {
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 1))
+          throw new Error('c-failed')
+        }
+        return `ok-${agent}`
+      },
+    }),
+    (err) => {
+      assert.match(err.message, /b-failed/)
+      return true
+    },
+  )
+
+  assert.deepEqual(calledAgents, ['b', 'c'])
+})
+
+test('parallel works with model() calls', async () => {
+  const result = await runNextVScript([
+    'results = parallel([',
+    '  model("gpt4", "prompt-1"),',
+    '  model("gpt4", "prompt-2")',
+    '])',
+  ].join('\n'), {
+    callAgent: async ({ model, prompt }) => `${model}:${prompt}`,
+  })
+  assert.deepEqual(result.locals.results, ['gpt4:prompt-1', 'gpt4:prompt-2'])
+})
+
+test('parallel works with mixed agent and model calls', async () => {
+  const result = await runNextVScript([
+    'results = parallel([',
+    '  agent("router", "q"),',
+    '  model("llama3", "q")',
+    '])',
+  ].join('\n'), {
+    callAgent: async ({ agent, model }) => `${agent ?? model}`,
+  })
+  assert.deepEqual(result.locals.results, ['router', 'llama3'])
+})
+
+test('parallel result array is usable after evaluation (length)', async () => {
+  const result = await runNextVScript([
+    'results = parallel([',
+    '  agent("a", "go"),',
+    '  agent("b", "go")',
+    '])',
+    'n = length(results)',
+  ].join('\n'), {
+    callAgent: async ({ agent }) => `result-${agent}`,
+  })
+  assert.equal(result.locals.n, 2)
+  assert.deepEqual(result.locals.results, ['result-a', 'result-b'])
+})
+
+test('parallel rejects element that is not agent() or model()', async () => {
+  await assert.rejects(
+    () => runNextVScript('results = parallel([tool("my_tool")])'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'PARALLEL_INVALID_ELEMENT')
+      assert.match(err.message, /index 0/)
+      return true
+    },
+  )
+})
+
+test('parallel rejects variable reference element', async () => {
+  await assert.rejects(
+    () => runNextVScript([
+      'x = "hello"',
+      'results = parallel([x])',
+    ].join('\n')),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'PARALLEL_INVALID_ELEMENT')
+      return true
+    },
+  )
+})
+
+test('parallel rejects element with on_contract_violation', async () => {
+  await assert.rejects(
+    () => runNextVScript([
+      'results = parallel([',
+      '  agent("a", "go", on_contract_violation=emit("err", violation))',
+      '])',
+    ].join('\n')),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'PARALLEL_ON_CONTRACT_VIOLATION_FORBIDDEN')
+      assert.match(err.message, /index 0/)
+      return true
+    },
+  )
+})
+
+test('parallel rejects non-array argument syntax', async () => {
+  await assert.rejects(
+    () => runNextVScript('results = parallel(agent("a", "go"))'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'PARALLEL_INVALID_SYNTAX')
+      return true
+    },
+  )
+})
+
+test('parallel standalone without assignment is rejected', async () => {
+  await assert.rejects(
+    () => runNextVScript('parallel([agent("a", "go")])'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'PARALLEL_STANDALONE_FORBIDDEN')
+      assert.match(err.message, /must be assigned/)
+      return true
+    },
+  )
+})
+
+test('parallel passes returns contract to child agents', async () => {
+  const calls = []
+  const result = await runNextVScript([
+    'results = parallel([',
+    '  agent("a", "q", returns={ type:"", score:0 }),',
+    '  agent("b", "q", returns={ type:"", score:0 })',
+    '])',
+  ].join('\n'), {
+    callAgent: async ({ agent, returns }) => {
+      calls.push({ agent, returns })
+      // custom callAgent hook returns final value (bypasses session-level JSON parsing)
+      return { type: 'ok', score: 1 }
+    },
+  })
+  assert.equal(calls.length, 2)
+  assert.ok(calls[0].returns)
+  assert.ok(calls[1].returns)
+  assert.deepEqual(result.locals.results[0], { type: 'ok', score: 1 })
+  assert.deepEqual(result.locals.results[1], { type: 'ok', score: 1 })
 })
 

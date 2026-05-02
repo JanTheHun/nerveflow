@@ -180,7 +180,67 @@ export function createHostAdapter({
     return profiles[agentName] ?? null
   }
 
+  function resolveAgentConfig(agentName) {
+    const profiles = workspaceConfig?.agents?.profiles ?? {}
+    const modelsMap = workspaceConfig?.models?.map ?? {}
+
+    const agent = agentName ? profiles[agentName] : null
+    if (agentName && !agent) {
+      return { error: 'AGENT_NOT_FOUND', agent: agentName }
+    }
+
+    if (!agentName) {
+      return { agent: null, model: null, transport: null }
+    }
+
+    const modelRef = String(agent?.model ?? '').trim()
+    if (!modelRef) {
+      return { error: 'AGENT_MISSING_MODEL_REF', agent: agentName }
+    }
+
+    // Check if model is in the registry
+    const modelConfig = modelsMap[modelRef]
+    if (modelConfig) {
+      // Model found in registry - use the registered config
+      return {
+        agent: {
+          name: agentName,
+          instructions: String(agent?.instructions ?? '').trim(),
+          tools: Array.isArray(agent?.tools) ? [...agent.tools] : [],
+        },
+        model: {
+          name: modelRef,
+          id: String(modelConfig?.model ?? '').trim(),
+          transport: String(modelConfig?.transport ?? '').trim(),
+        },
+        source: 'config',
+      }
+    }
+
+    // Model not in registry - treat modelRef as direct model name (backward compat)
+    return {
+      agent: {
+        name: agentName,
+        instructions: String(agent?.instructions ?? '').trim(),
+        tools: Array.isArray(agent?.tools) ? [...agent.tools] : [],
+      },
+      model: {
+        name: modelRef,
+        id: modelRef,
+        transport: '',
+      },
+      source: 'config',
+    }
+  }
+
   const adapter = {
+    getAgentCapabilities: () => {
+      if (callAgent && typeof callAgent === 'function' && callAgent.capabilities && typeof callAgent.capabilities === 'object') {
+        return callAgent.capabilities
+      }
+      return null
+    },
+
     callTool: async ({ name, args, positional, state, event, locals, line, statement }) => {
       const toolNameRaw = String(name ?? '').trim()
       const toolName = resolveToolName(toolNameRaw)
@@ -208,21 +268,43 @@ export function createHostAdapter({
       const agentName = String(agent ?? '').trim()
       const directModel = String(modelRaw ?? '').trim()
 
-      const profile = agentName ? resolveAgentProfile(agentName) : null
-      if (agentName && !profile) {
-        throw new Error(`agent("${agentName}") profile was not found in workspace config.`)
+      let resolvedModel = directModel || defaultModel || ''
+      let profileInstructions = ''
+      let profileTools = []
+      let configSource = 'env'
+
+      if (agentName) {
+        const resolved = resolveAgentConfig(agentName)
+        if (resolved.error) {
+          if (resolved.error === 'AGENT_NOT_FOUND') {
+            throw new Error(`agent("${agentName}") profile was not found in workspace config.`)
+          }
+          if (resolved.error === 'MODEL_NOT_FOUND') {
+            throw new Error(`agent("${agentName}") references model "${resolved.modelRef}" which was not found in models registry.`)
+          }
+          if (resolved.error === 'AGENT_MISSING_MODEL_REF') {
+            throw new Error(`agent("${agentName}") is missing model reference; set it in agents.json.`)
+          }
+        }
+
+        if (resolved.source === 'config') {
+          resolvedModel = resolved.model.id
+          profileInstructions = resolved.agent.instructions
+          profileTools = resolved.agent.tools
+          configSource = 'config'
+        }
+      } else {
+        const profile = null
       }
 
-      const model = String(profile?.model ?? directModel ?? defaultModel ?? '').trim()
-      if (!model) {
+      if (!resolvedModel) {
         if (agentName) {
           throw new Error(`agent("${agentName}") is missing model; set it in agents.json or OLLAMA_MODEL.`)
         }
         throw new Error('model() is missing model name.')
       }
 
-      const callLabel = agentName ? `agent("${agentName}")` : `model("${model}")`
-      const profileInstructions = String(profile?.instructions ?? '').trim()
+      const callLabel = agentName ? `agent("${agentName}")` : `model("${resolvedModel}")`
       const callInstructions = String(instructions ?? '').trim()
       const baseInstructions = [profileInstructions, callInstructions].filter(Boolean).join('\n\n')
       const contractGuidance = (returns != null && typeof buildAgentReturnContractGuidance === 'function')
@@ -285,8 +367,8 @@ export function createHostAdapter({
             slowWarningEmitted = true
             try {
               onSlowAgentCallWarning({
-                agent: agentName || `model:${model}`,
-                model,
+                agent: agentName || `model:${resolvedModel}`,
+                model: resolvedModel,
                 attempt: attemptNum + 1,
                 retryLimit,
                 elapsedMs: Number(slowAgentWarningMs),
@@ -310,7 +392,7 @@ export function createHostAdapter({
 
         let transportResult
         try {
-          transportResult = await callAgent({ model, messages: chatMessages })
+          transportResult = await callAgent({ model: resolvedModel, messages: chatMessages })
         } finally {
           if (slowWarningTimer) {
             clearTimeout(slowWarningTimer)

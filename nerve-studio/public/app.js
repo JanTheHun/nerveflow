@@ -9,6 +9,7 @@ let isFileTreeResizing = false
 let isStateDiffResizing = false
 let isUserIOResizing = false
 let activeVerticalResize = null
+let activeEditorGridResize = false
 let activeScriptAbortController = null
 let activeScriptRunId = ''
 let nextVRuntimeRunning = false
@@ -61,9 +62,13 @@ const storageKeys = {
   nextVGraphDirection: 'local-agent.nextv.graphDirection',
   nextVControlOverlay: 'local-agent.nextv.controlOverlay',
   nextVShowControlBranches: 'local-agent.nextv.showControlBranches',
+  nextVEditorGridSplit: 'local-agent.nextv.editorGridSplit',
+  nextVEditorLayout: 'local-agent.nextv.editorLayout',
 }
 
 const MIN_LEFT_PANEL_SECTION_HEIGHT = 90
+const DEFAULT_EDITOR_GRID_SPLIT_PERCENT = 50
+const MIN_EDITOR_GRID_SPLIT_PERCENT = 20
 
 function createEditorPaneState(id) {
   return {
@@ -92,6 +97,11 @@ const editorLayoutState = {
   activePaneId: 'A',
   paneOrder: ['A', 'B'],
   allPanes: ['A', 'B', 'C', 'D'],
+}
+
+const editorGridSplitState = {
+  xPercent: DEFAULT_EDITOR_GRID_SPLIT_PERCENT,
+  yPercent: DEFAULT_EDITOR_GRID_SPLIT_PERCENT,
 }
 
 const scriptEditorState = createEditorPaneState('A')
@@ -271,6 +281,7 @@ const paneTitleC = document.getElementById('pane-c-title')
 const paneTitleD = document.getElementById('pane-d-title')
 const editorLayoutSplitBtn = document.getElementById('editor-layout-split-btn')
 const editorLayoutGridBtn = document.getElementById('editor-layout-grid-btn')
+const editorGridCenterHandle = document.getElementById('editor-grid-center-handle')
 const editorPaneDescriptors = new Map([
   ['A', {
     pane: editorPaneA,
@@ -1449,13 +1460,97 @@ function isFloatingGraphCodePanelDirty(panelId) {
 }
 
 function getFloatingPanelByFilePath(filePath) {
-  const normalized = normalizeRelativePath(filePath)
+  const normalized = canonicalizeFloatingPanelPath(filePath)
   if (!normalized) return ''
   for (const panelId of FLOATING_PANEL_IDS) {
     const state = getFloatingPanelState(panelId)
-    if (state?.open && normalizeRelativePath(state.filePath) === normalized) return panelId
+    if (state?.open && canonicalizeFloatingPanelPath(state.filePath) === normalized) return panelId
   }
   return ''
+}
+
+function areEditorPathsEquivalent(leftPath, rightPath) {
+  const left = normalizeRelativePath(leftPath)
+  const right = normalizeRelativePath(rightPath)
+  if (!left || !right) return false
+  if (left === right) return true
+
+  const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
+  if (workspaceDir) {
+    const stripWorkspace = (value) => (
+      value === workspaceDir
+        ? ''
+        : (value.startsWith(`${workspaceDir}/`) ? value.slice(workspaceDir.length + 1) : value)
+    )
+    if (stripWorkspace(left) === stripWorkspace(right)) return true
+  }
+
+  const resolvedLeft = canonicalizeFloatingPanelPath(left)
+  const resolvedRight = canonicalizeFloatingPanelPath(right)
+  return Boolean(resolvedLeft && resolvedRight && resolvedLeft === resolvedRight)
+}
+
+function syncEditorBuffersAfterFloatingSave(savedPath, content) {
+  const normalizedSavedPath = normalizeRelativePath(savedPath)
+  if (!normalizedSavedPath) return
+
+  const normalizedContent = normalizeNewlines(String(content ?? ''))
+  let updatedAnyPane = false
+
+  for (const paneId of editorLayoutState.allPanes) {
+    const paneState = getPaneState(paneId)
+    const panePath = normalizeRelativePath(paneState?.path)
+    if (!panePath || !areEditorPathsEquivalent(panePath, normalizedSavedPath)) continue
+
+    const textarea = getPaneTextarea(paneId)
+    if (textarea) textarea.value = normalizedContent
+    paneState.loadedText = normalizedContent
+    paneState.dirty = false
+    renderScriptMirrorForPane(paneId, normalizedContent)
+    syncScriptMirrorScrollForPane(paneId)
+    updatedAnyPane = true
+  }
+
+  if (updatedAnyPane) {
+    syncScriptBadgeState()
+    renderPaneTitles()
+    renderOpenFileTabs()
+  }
+
+  for (const [cachedPath] of dirtyEditsCache) {
+    if (areEditorPathsEquivalent(cachedPath, normalizedSavedPath)) {
+      dirtyEditsCache.delete(cachedPath)
+    }
+  }
+}
+
+function syncFloatingPanelsFromEditorBuffer(filePath, content, options = {}) {
+  const normalizedPath = normalizeRelativePath(filePath)
+  if (!normalizedPath) return
+
+  const markSaved = options.markSaved === true
+  const skipIfDirty = options.skipIfDirty === true
+  const normalizedContent = normalizeNewlines(String(content ?? ''))
+
+  for (const panelId of FLOATING_PANEL_IDS) {
+    const panelState = getFloatingPanelState(panelId)
+    const descriptor = getFloatingPanelDescriptor(panelId)
+    if (!panelState?.open || !panelState.filePath || !descriptor?.textarea) continue
+    if (!areEditorPathsEquivalent(panelState.filePath, normalizedPath)) continue
+    if (skipIfDirty && panelState.dirty) continue
+
+    descriptor.textarea.value = normalizedContent
+    if (markSaved) {
+      panelState.loadedText = normalizedContent
+      panelState.dirty = false
+    } else {
+      panelState.dirty = normalizedContent !== panelState.loadedText
+    }
+
+    renderScriptMirrorForPane(panelId, normalizedContent)
+    syncScriptMirrorScrollForPane(panelId)
+    updateFloatingGraphCodePanelMeta(panelId)
+  }
 }
 
 function getFirstAvailableFloatingPanelId() {
@@ -1500,7 +1595,7 @@ function showFloatingPanelChooser(options = {}) {
 }
 
 async function chooseFloatingPanelForOpen(options = {}) {
-  const requestedPath = normalizeRelativePath(options.filePath)
+  const requestedPath = canonicalizeFloatingPanelPath(options.filePath)
   const existingPanelId = getFloatingPanelByFilePath(requestedPath)
   if (existingPanelId) {
     setFloatingPanelActive(existingPanelId)
@@ -1532,17 +1627,32 @@ async function saveFloatingGraphCodePanel(arg = {}) {
 
   const silent = options.silent === true
   const content = normalizeNewlines(descriptor.textarea.value ?? '')
-  const { savedPath, bytes } = await saveEditorFileContent(state.filePath, content)
-  state.filePath = savedPath
-  state.loadedText = content
-  state.dirty = false
-  updateFloatingGraphCodePanelMeta(id)
 
-  if (!silent) {
-    appendScriptLogRow(`[file:save] path=${savedPath} bytes=${bytes}`, 'result')
-    setStatus('floating panel saved')
+  try {
+    const { savedPath, bytes } = await saveEditorFileContent(state.filePath, content)
+    state.filePath = canonicalizeFloatingPanelPath(savedPath)
+    state.loadedText = content
+    state.dirty = false
+    updateFloatingGraphCodePanelMeta(id)
+    syncEditorBuffersAfterFloatingSave(state.filePath, content)
+
+    if (!silent) {
+      appendScriptLogRow(`[file:save] path=${savedPath} bytes=${bytes}`, 'result')
+      setStatus('floating panel saved')
+    }
+
+    if (nextVViewState.currentView === 'graph') {
+      refreshNextVGraph({ silent: true, preserveViewport: true })
+    }
+
+    return true
+  } catch (err) {
+    if (!silent) {
+      appendScriptLogRow(`[file:error] ${err.message}`, 'error')
+      setStatus('floating panel save failed', 'responding')
+    }
+    return false
   }
-  return true
 }
 
 function closeFloatingGraphCodePanel(arg = {}) {
@@ -1582,6 +1692,7 @@ function closeFloatingGraphCodePanel(arg = {}) {
 async function openFloatingGraphCodePanel(options = {}) {
   const requestedPath = resolveNextVPath(normalizeGraphSourcePathForEditor(options.filePath))
   if (!requestedPath) return
+  const canonicalRequestedPath = canonicalizeFloatingPanelPath(requestedPath)
 
   const requestedPanelId = options.panelId ? normalizeFloatingPanelId(options.panelId) : ''
   const panelId = requestedPanelId || await chooseFloatingPanelForOpen({ filePath: requestedPath })
@@ -1591,8 +1702,7 @@ async function openFloatingGraphCodePanel(options = {}) {
   const descriptor = getFloatingPanelDescriptor(panelId)
   if (!state || !descriptor.panel || !descriptor.textarea) return
 
-  const normalizedRequestedPath = normalizeRelativePath(requestedPath)
-  if (state.open && state.filePath && normalizeRelativePath(state.filePath) === normalizedRequestedPath) {
+  if (state.open && state.filePath && canonicalizeFloatingPanelPath(state.filePath) === canonicalRequestedPath) {
     state.line = Number.isFinite(Number(options.line)) ? Number(options.line) : state.line
     setFloatingPanelActive(panelId)
     if (state.line && state.line > 1) {
@@ -1608,13 +1718,13 @@ async function openFloatingGraphCodePanel(options = {}) {
     return
   }
 
-  if (state.open && state.filePath && normalizeRelativePath(state.filePath) !== normalizedRequestedPath && isFloatingGraphCodePanelDirty(panelId)) {
+  if (state.open && state.filePath && canonicalizeFloatingPanelPath(state.filePath) !== canonicalRequestedPath && isFloatingGraphCodePanelDirty(panelId)) {
     const discard = window.confirm('Discard unsaved floating panel edits?')
     if (!discard) return
   }
 
   const data = await loadEditorFileContent(requestedPath, { kind: 'editor' })
-  const normalizedPath = normalizeRelativePath(data.filePath ?? requestedPath)
+  const normalizedPath = canonicalizeFloatingPanelPath(data.filePath ?? requestedPath)
   const text = normalizeNewlines(String(data.content ?? ''))
 
   state.open = true
@@ -1712,6 +1822,59 @@ function bindFloatingGraphCodePanelEvents() {
           appendScriptLogRow(`[file:error] ${err.message}`, 'error')
           setStatus('floating panel save failed', 'responding')
         }
+        return
+      }
+
+      const isCommentToggle = (event.ctrlKey || event.metaKey) && !event.altKey && (event.key === '/' || event.code === 'Slash')
+      if (isCommentToggle) {
+        event.preventDefault()
+        toggleCommentInTextarea(textarea)
+        return
+      }
+
+      if (event.key === 'Tab') {
+        event.preventDefault()
+        const value = textarea.value
+        const start = Number(textarea.selectionStart)
+        const end = Number(textarea.selectionEnd)
+        const hasSelection = start !== end
+
+        if (!hasSelection && !event.shiftKey) {
+          textarea.value = `${value.slice(0, start)}\t${value.slice(end)}`
+          textarea.setSelectionRange(start + 1, start + 1)
+          textarea.dispatchEvent(new Event('input', { bubbles: true }))
+          return
+        }
+
+        const lineStart = value.lastIndexOf('\n', Math.max(0, start - 1)) + 1
+        const lineEndMatch = value.indexOf('\n', hasSelection ? end : start)
+        const lineEnd = lineEndMatch === -1 ? value.length : lineEndMatch
+        const block = value.slice(lineStart, lineEnd)
+        const lines = block.split('\n')
+        let removedBeforeCaret = 0
+        const transformedLines = event.shiftKey
+          ? lines.map((line, index) => {
+              if (line.startsWith('\t')) {
+                if (index === 0 && start > lineStart) removedBeforeCaret = 1
+                return line.slice(1)
+              }
+              if (line.startsWith('  ')) {
+                if (index === 0 && start > lineStart) removedBeforeCaret = Math.min(2, start - lineStart)
+                return line.slice(2)
+              }
+              return line
+            })
+          : lines.map((line) => `\t${line}`)
+        const transformedBlock = transformedLines.join('\n')
+        textarea.value = `${value.slice(0, lineStart)}${transformedBlock}${value.slice(lineEnd)}`
+        if (hasSelection) {
+          textarea.setSelectionRange(lineStart, lineStart + transformedBlock.length)
+        } else if (event.shiftKey) {
+          textarea.setSelectionRange(Math.max(lineStart, start - removedBeforeCaret), Math.max(lineStart, start - removedBeforeCaret))
+        } else {
+          textarea.setSelectionRange(start + 1, start + 1)
+        }
+        textarea.dispatchEvent(new Event('input', { bubbles: true }))
         return
       }
 
@@ -2240,11 +2403,19 @@ function getNextVGraphHandlerLabel(nodeObj, transition) {
     ? transition.outputs.map((out) => String(out ?? '').trim()).filter(Boolean)
     : []
 
+  const isParallel = transition?.hasParallelAgents === true
+  const parallelPrefix = isParallel ? '‖ ' : ''
+
   const parts = []
   if (agents.length === 1) {
-    parts.push(`agent:${agents[0]}`)
+    parts.push(`${parallelPrefix}agent:${agents[0]}`)
   } else if (agents.length > 1) {
-    parts.push(`agents:${agents.length}`)
+    if (isParallel) {
+      // Each agent gets its own hard-break line so splitNextVGraphHandlerLabelLines keeps them separate.
+      parts.push(agents.map((name) => `‖ ${name}`).join('\n'))
+    } else {
+      parts.push(`agents:${agents.length}`)
+    }
   }
 
   if (tools.length === 1) {
@@ -2263,7 +2434,7 @@ function getNextVGraphHandlerLabel(nodeObj, transition) {
   }
 
   if (parts.length > 0) {
-    return parts.slice(0, 2).join('+')
+    return parts.join('+')
   }
 
   const classification = getTransitionClassName(transition?.classification)
@@ -2286,26 +2457,30 @@ function splitNextVGraphHandlerLabelLines(label, options = {}) {
   const raw = String(label ?? '').trim()
   if (!raw) return ['']
 
-  const segments = raw.includes('+')
-    ? raw.split('+').map((part) => String(part ?? '').trim()).filter(Boolean)
-    : [raw]
+  // Hard newlines (from parallel agent blocks) always force a line break.
+  const hardLines = raw.split('\n').map((s) => s.trim()).filter(Boolean)
 
   const lines = []
-  let current = ''
-  for (const segment of segments) {
-    if (!current) {
-      current = segment
-      continue
+  for (const hardLine of hardLines) {
+    const segments = hardLine.includes('+')
+      ? hardLine.split('+').map((part) => String(part ?? '').trim()).filter(Boolean)
+      : [hardLine]
+    let current = ''
+    for (const segment of segments) {
+      if (!current) {
+        current = segment
+        continue
+      }
+      const candidate = `${current}+${segment}`
+      if (candidate.length <= maxLineLength) {
+        current = candidate
+      } else {
+        lines.push(current)
+        current = segment
+      }
     }
-    const candidate = `${current}+${segment}`
-    if (candidate.length <= maxLineLength) {
-      current = candidate
-    } else {
-      lines.push(current)
-      current = segment
-    }
+    if (current) lines.push(current)
   }
-  if (current) lines.push(current)
 
   if (lines.length > maxLines) {
     const collapsed = lines.slice(0, maxLines - 1)
@@ -4373,6 +4548,9 @@ function renderNextVGraph(data = {}, options = {}) {
       (Array.isArray(transition?.agents) && transition.agents.length > 0)
       || getTransitionClassName(transition?.classification) === 'llm'
     )
+    const parallelAgentCount = isHandlerNode && Array.isArray(transition?.agents) ? transition.agents.length : 0
+    const hasParallelAgents = isHandlerNode && transition?.hasParallelAgents === true && parallelAgentCount > 1
+    const hasParallelSingle = isHandlerNode && transition?.hasParallelAgents === true && parallelAgentCount <= 1
     const isExternal = isEventNode && externalCandidates.has(nodeId)
     const isDeclaredExternal = isEventNode && nextVGraphState.declaredExternalNodes.has(nodeId)
     const nodeContractWarnings = isEventNode ? (nextVGraphState.contractWarningNodes.get(nodeId) ?? []) : []
@@ -4396,6 +4574,8 @@ function renderNextVGraph(data = {}, options = {}) {
       isTimerNode ? 'timer-node' : '',
       isControlBranchNode ? 'control-branch-node' : '',
       hasAgentCalls ? 'agent-node' : '',
+      hasParallelAgents ? 'parallel-agent' : '',
+      hasParallelSingle ? 'parallel-agent-single' : '',
       isExternal ? 'external' : '',
       isDeclaredExternal ? 'declared-external' : '',
       hasContractWarnings ? 'contract-warning' : '',
@@ -4429,6 +4609,7 @@ function renderNextVGraph(data = {}, options = {}) {
     if (transition?.classification && isHandlerNode) titleParts.push(`type=${formatTransitionClassification(transition.classification)}`)
     if (emittedEvents.length > 0) titleParts.push(`emits=${emittedEvents.join(', ')}`)
     if (emittedEffects.length > 0) titleParts.push(`effects=${emittedEffects.join(', ')}`)
+    if (hasParallelAgents && Array.isArray(transition?.agents) && transition.agents.length > 0) titleParts.push(`parallel=${transition.agents.join(', ')}`)
     if (Array.isArray(transition?.outputs) && transition.outputs.length > 0) titleParts.push(`outputs=${transition.outputs.join(', ')}`)
     if (Array.isArray(transition?.tools) && transition.tools.length > 0) titleParts.push(`tools=${transition.tools.map((tool) => tool.name || 'dynamic').join(', ')}`)
     if (hasWarnings) titleParts.push(`warnings=${transition.warnings.map((warning) => warning.code).join(', ')}`)
@@ -4484,18 +4665,34 @@ function renderNextVGraph(data = {}, options = {}) {
     }
 
     if (isHandlerNode && hasWarnings) {
+      const wx = Math.round(pos.x + visual.width / 2)
+      const wy = Math.round(pos.y - visual.height / 2)
+      const warningCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+      warningCircle.setAttribute('cx', String(wx))
+      warningCircle.setAttribute('cy', String(wy))
+      warningCircle.setAttribute('r', '8')
+      warningCircle.setAttribute('class', 'nextv-graph-node-warning-bg')
+      group.appendChild(warningCircle)
       const warningTag = document.createElementNS('http://www.w3.org/2000/svg', 'text')
-      warningTag.setAttribute('x', String(pos.x + visual.badgeOffsetX))
-      warningTag.setAttribute('y', String(pos.y + visual.badgeOffsetY))
+      warningTag.setAttribute('x', String(wx))
+      warningTag.setAttribute('y', String(wy))
       warningTag.setAttribute('class', 'nextv-graph-node-warning')
       warningTag.textContent = '!'
       group.appendChild(warningTag)
     }
 
     if (isEventNode && hasContractWarnings) {
+      const cx = Math.round(pos.x - visual.width / 2)
+      const cy = Math.round(pos.y - visual.height / 2)
+      const contractCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+      contractCircle.setAttribute('cx', String(cx))
+      contractCircle.setAttribute('cy', String(cy))
+      contractCircle.setAttribute('r', '8')
+      contractCircle.setAttribute('class', 'nextv-graph-node-contract-warning-bg')
+      group.appendChild(contractCircle)
       const contractTag = document.createElementNS('http://www.w3.org/2000/svg', 'text')
-      contractTag.setAttribute('x', String(pos.x - visual.badgeOffsetX))
-      contractTag.setAttribute('y', String(pos.y + visual.badgeOffsetY))
+      contractTag.setAttribute('x', String(cx))
+      contractTag.setAttribute('y', String(cy))
       contractTag.setAttribute('class', 'nextv-graph-node-contract-warning')
       contractTag.textContent = '!'
       group.appendChild(contractTag)
@@ -4640,7 +4837,6 @@ function appendNextVLogRow(line, cls = '') {
 
   if (cls === 'content') {
     appendPanelLogRow(nextVConsoleOutput, line, cls)
-    appendPanelLogRow(nextVEventsOutput, line, 'result')
     return
   }
 
@@ -4789,6 +4985,17 @@ function resolveNextVPath(pathValue) {
     return pathPart
   }
   return `${workspaceDir}/${pathPart}`
+}
+
+function canonicalizeFloatingPanelPath(pathValue) {
+  const normalized = normalizeRelativePath(pathValue)
+  if (!normalized) return ''
+
+  const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
+  if (!workspaceDir) return normalized
+  if (normalized === workspaceDir || normalized.startsWith(`${workspaceDir}/`)) return normalized
+  if (normalized.startsWith('workspaces-local/') || normalized.startsWith('workspaces/')) return normalized
+  return `${workspaceDir}/${normalized}`
 }
 
 function normalizePathSegments(pathValue) {
@@ -5682,6 +5889,7 @@ async function saveCurrentEditorFile(options = {}) {
   state.path = savedPath
   state.loadedText = content
   state.dirty = false
+  syncFloatingPanelsFromEditorBuffer(savedPath, content, { markSaved: true })
   dirtyEditsCache.delete(savedPath)
   persistNextVOpenFile(savedPath)
   persistPaneAssignments()
@@ -5717,6 +5925,13 @@ async function saveEditorFileContent(filePath, content) {
   }
 
   const savedPath = normalizeRelativePath(data.filePath ?? normalizedPath)
+  // Verify write by reading back from the same API surface before reporting success.
+  const verify = await loadEditorFileContent(savedPath, { kind })
+  const verifiedContent = normalizeNewlines(String(verify?.content ?? ''))
+  if (verifiedContent !== payload) {
+    throw new Error(`Save verification failed for ${savedPath}: disk content does not match saved payload.`)
+  }
+
   scriptCache.set(savedPath, payload.split('\n'))
   return { savedPath, bytes: data.bytes ?? 0 }
 }
@@ -5764,6 +5979,7 @@ async function saveAllNextVFiles(options = {}) {
         paneState.path = savedPath
         paneState.loadedText = content
         paneState.dirty = false
+        syncFloatingPanelsFromEditorBuffer(savedPath, content, { markSaved: true })
         if (activePaneId === paneIdForTab) persistNextVOpenFile(savedPath)
       }
 
@@ -5867,8 +6083,9 @@ function getPanePath(paneId) {
 function findPaneIdByFilePath(filePath) {
   const normalizedFilePath = normalizeRelativePath(filePath)
   if (!normalizedFilePath) return ''
-  for (const paneId of getPaneIds()) {
-    if (getPanePath(paneId) === normalizedFilePath) return paneId
+  for (const paneId of editorLayoutState.allPanes) {
+    const panePath = getPanePath(paneId)
+    if (panePath && areEditorPathsEquivalent(panePath, normalizedFilePath)) return paneId
   }
   return ''
 }
@@ -5897,14 +6114,113 @@ function focusEditorPane(paneId) {
   }
 }
 
-function setEditorLayout(mode) {
+function clampEditorGridSplitPercent(value) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return DEFAULT_EDITOR_GRID_SPLIT_PERCENT
+  return Math.max(MIN_EDITOR_GRID_SPLIT_PERCENT, Math.min(100 - MIN_EDITOR_GRID_SPLIT_PERCENT, numeric))
+}
+
+function parseEditorGridSplitPercent(value) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return null
+  return clampEditorGridSplitPercent(numeric)
+}
+
+function readStoredEditorGridSplit() {
+  try {
+    const raw = localStorage.getItem(storageKeys.nextVEditorGridSplit)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    const xPercent = parseEditorGridSplitPercent(parsed?.xPercent)
+    const yPercent = parseEditorGridSplitPercent(parsed?.yPercent)
+    if (xPercent === null || yPercent === null) return null
+    return { xPercent, yPercent }
+  } catch {
+    return null
+  }
+}
+
+function persistEditorGridSplit() {
+  try {
+    localStorage.setItem(storageKeys.nextVEditorGridSplit, JSON.stringify(editorGridSplitState))
+  } catch {}
+}
+
+function applyEditorGridSplit() {
+  if (!editorPanesGrid) return
+  editorPanesGrid.style.setProperty('--editor-grid-split-x', `${editorGridSplitState.xPercent}%`)
+  editorPanesGrid.style.setProperty('--editor-grid-split-y', `${editorGridSplitState.yPercent}%`)
+}
+
+function setEditorGridSplit(split, options = {}) {
+  editorGridSplitState.xPercent = clampEditorGridSplitPercent(split?.xPercent)
+  editorGridSplitState.yPercent = clampEditorGridSplitPercent(split?.yPercent)
+  applyEditorGridSplit()
+  if (options.persist !== false) {
+    persistEditorGridSplit()
+  }
+}
+
+function stopEditorGridResize(options = {}) {
+  if (!activeEditorGridResize) return
+  activeEditorGridResize = false
+  document.body.classList.remove('is-resizing-editor-grid')
+  if (options.persist !== false) {
+    persistEditorGridSplit()
+  }
+}
+
+function updateEditorGridSplitFromPointer(event) {
+  if (!editorPanesGrid) return
+  const rect = editorPanesGrid.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0) return
+  const xPercent = ((event.clientX - rect.left) / rect.width) * 100
+  const yPercent = ((event.clientY - rect.top) / rect.height) * 100
+  setEditorGridSplit({ xPercent, yPercent }, { persist: false })
+}
+
+function setupEditorGridCenterHandle() {
+  const storedSplit = readStoredEditorGridSplit()
+  if (storedSplit) {
+    setEditorGridSplit(storedSplit, { persist: false })
+  } else {
+    applyEditorGridSplit()
+  }
+
+  if (!editorGridCenterHandle || editorGridCenterHandle.dataset.bound === '1') return
+  editorGridCenterHandle.dataset.bound = '1'
+
+  editorGridCenterHandle.addEventListener('mousedown', (event) => {
+    if (event.button !== 0) return
+    if (editorLayoutState.layoutMode !== 'grid-2x2') return
+    activeEditorGridResize = true
+    document.body.classList.add('is-resizing-editor-grid')
+    updateEditorGridSplitFromPointer(event)
+    event.preventDefault()
+  })
+
+  window.addEventListener('mousemove', (event) => {
+    if (!activeEditorGridResize) return
+    updateEditorGridSplitFromPointer(event)
+  })
+
+  window.addEventListener('mouseup', () => {
+    stopEditorGridResize()
+  })
+}
+
+function setEditorLayout(mode, options = {}) {
   const panesByLayout = {
     'split-2': ['A', 'B'],
     'grid-2x2': ['A', 'B', 'C', 'D'],
   }
+  const persist = options.persist !== false
   const normalizedMode = panesByLayout[mode] ? mode : 'split-2'
   editorLayoutState.layoutMode = normalizedMode
   editorLayoutState.paneOrder = panesByLayout[normalizedMode]
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVEditorLayout, normalizedMode)
+  }
   if (editorPanesGrid) editorPanesGrid.dataset.layout = normalizedMode
   for (const paneId of editorLayoutState.allPanes) {
     const els = editorPaneDescriptors.get(paneId)
@@ -5921,6 +6237,11 @@ function setEditorLayout(mode) {
     const isActive = normalizedMode === 'grid-2x2'
     editorLayoutGridBtn.classList.toggle('active', isActive)
     editorLayoutGridBtn.setAttribute('aria-pressed', String(isActive))
+  }
+  if (normalizedMode === 'grid-2x2') {
+    applyEditorGridSplit()
+  } else {
+    stopEditorGridResize({ persist: false })
   }
   // If active pane is no longer visible, reset to first pane
   if (!editorLayoutState.paneOrder.includes(editorLayoutState.activePaneId)) {
@@ -6013,18 +6334,61 @@ function persistPaneAssignments() {
   try { localStorage.setItem('editor-pane-assignments', JSON.stringify(obj)) } catch {}
 }
 
-function restorePaneAssignments() {
+function getStoredPaneAssignments(workspaceDir = '') {
+  const normalizedWorkspaceDir = normalizeNextVWorkspaceDir(workspaceDir)
+  const paneToFile = new Map()
   try {
     const raw = localStorage.getItem('editor-pane-assignments')
-    if (!raw) return
+    if (!raw) return []
     const obj = JSON.parse(raw)
-    const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
+    if (!obj || typeof obj !== 'object') return []
     for (const [file, pane] of Object.entries(obj)) {
-      if (editorPaneStateById.has(pane) && (!workspaceDir || file.startsWith(`${workspaceDir}/`))) {
-        openWorkspaceEditorFile(file, { paneId: pane }).catch(() => {})
-      }
+      if (!editorPaneStateById.has(pane)) continue
+      const normalizedFile = normalizeRelativePath(file)
+      if (!normalizedFile) continue
+      if (normalizedWorkspaceDir && !normalizedFile.startsWith(`${normalizedWorkspaceDir}/`)) continue
+      paneToFile.set(pane, normalizedFile)
     }
-  } catch {}
+  } catch {
+    return []
+  }
+
+  return editorLayoutState.allPanes
+    .filter((paneId) => paneToFile.has(paneId))
+    .map((paneId) => ({ paneId, filePath: paneToFile.get(paneId) }))
+}
+
+async function restorePaneAssignments(options = {}) {
+  const workspaceDir = normalizeNextVWorkspaceDir(options.workspaceDir ?? (nextVWorkspaceDirInput?.value ?? ''))
+  const preferredOpenFile = normalizeRelativePath(options.preferredOpenFile ?? '')
+  const entries = getStoredPaneAssignments(workspaceDir)
+  if (entries.length === 0) {
+    return { restoredCount: 0, firstPath: '', focusedPath: '' }
+  }
+
+  let restoredCount = 0
+  let firstPath = ''
+  for (const entry of entries) {
+    try {
+      await openWorkspaceEditorFile(entry.filePath, { paneId: entry.paneId })
+      restoredCount += 1
+      if (!firstPath) firstPath = entry.filePath
+    } catch {
+      // best-effort restore for each pane
+    }
+  }
+
+  let focusedPath = ''
+  if (preferredOpenFile) {
+    const preferredPaneId = paneAssignments.get(preferredOpenFile)
+    if (preferredPaneId) {
+      focusEditorPane(preferredPaneId)
+      persistNextVOpenFile(preferredOpenFile)
+      focusedPath = preferredOpenFile
+    }
+  }
+
+  return { restoredCount, firstPath, focusedPath }
 }
 
 function scheduleNextVAutoSave() {
@@ -6132,6 +6496,8 @@ async function openWorkspaceEditorFile(filePath, options = {}) {
   state.path = normalizedPath
   state.loadedText = loadedText
   state.dirty = isDirty
+  // Only sync clean floating panels when loading from disk; never overwrite dirty floating panel edits.
+  syncFloatingPanelsFromEditorBuffer(normalizedPath, text, { markSaved: !isDirty, skipIfDirty: !isDirty })
   paneAssignments.set(normalizedPath, paneId)
   activeScriptLine = null
   rememberExpandedPath(state.path)
@@ -6207,6 +6573,8 @@ function restoreNextVConfig() {
   const graphDirection = normalizeNextVGraphDirection(localStorage.getItem(storageKeys.nextVGraphDirection) ?? 'TB')
   const controlOverlayEnabled = localStorage.getItem(storageKeys.nextVControlOverlay) !== '0'
   const showControlBranches = localStorage.getItem(storageKeys.nextVShowControlBranches) === '1'
+  const storedEditorLayout = String(localStorage.getItem(storageKeys.nextVEditorLayout) ?? '').trim()
+  const editorLayoutMode = storedEditorLayout === 'grid-2x2' ? 'grid-2x2' : 'split-2'
 
   if (nextVWorkspaceDirInput) nextVWorkspaceDirInput.value = workspaceDir
   if (nextVEntrypointInput) nextVEntrypointInput.value = entrypointPath
@@ -6220,6 +6588,8 @@ function restoreNextVConfig() {
   nextVGraphState.layoutDirection = graphDirection
   nextVGraphState.controlOverlayEnabled = controlOverlayEnabled
   nextVGraphState.showControlBranches = showControlBranches
+  editorLayoutState.layoutMode = editorLayoutMode
+  editorLayoutState.paneOrder = editorLayoutMode === 'grid-2x2' ? ['A', 'B', 'C', 'D'] : ['A', 'B']
 }
 
 function pathBasename(p) {
@@ -7360,6 +7730,11 @@ async function syncNextVRuntimeState() {
       closeNextVStream()
     }
     nextVRuntimeRunning = data?.running === true
+    if (nextVRuntimeRunning) {
+      nextVManagedProcessRunning = true
+      appendNextVLogRow('[nextv:reconnect] reattached to running workflow', 'step')
+      setStatus('reconnected to running workflow')
+    }
     setNextVRunControls()
   } catch {
     nextVRuntimeRunning = false
@@ -8595,23 +8970,29 @@ async function openNextVWorkspace() {
       ? storedOpenFile
       : ''
 
-    const openAttempts = []
-    if (preferredOpenFile) openAttempts.push(preferredOpenFile)
-    for (const relPath of candidateEntrypoints) {
-      const fullPath = `${workspaceDir}/${relPath}`
-      if (!openAttempts.includes(fullPath)) {
-        openAttempts.push(fullPath)
-      }
-    }
+    const restoredPanes = await restorePaneAssignments({ workspaceDir, preferredOpenFile })
 
     let openedPath = ''
-    for (const attemptPath of openAttempts) {
-      try {
-        await openWorkspaceEditorFile(attemptPath)
-        openedPath = attemptPath
-        break
-      } catch {
-        // try next candidate
+    if (restoredPanes.restoredCount > 0) {
+      openedPath = restoredPanes.focusedPath || preferredOpenFile || restoredPanes.firstPath
+    } else {
+      const openAttempts = []
+      if (preferredOpenFile) openAttempts.push(preferredOpenFile)
+      for (const relPath of candidateEntrypoints) {
+        const fullPath = `${workspaceDir}/${relPath}`
+        if (!openAttempts.includes(fullPath)) {
+          openAttempts.push(fullPath)
+        }
+      }
+
+      for (const attemptPath of openAttempts) {
+        try {
+          await openWorkspaceEditorFile(attemptPath)
+          openedPath = attemptPath
+          break
+        } catch {
+          // try next candidate
+        }
       }
     }
 
@@ -8648,7 +9029,6 @@ async function openNextVWorkspace() {
   setDeclaredEffectChannels(configDeclaredEffects, { preserveSelection: true })
   setNextVRunControls()
   await refreshNextVGraph({ silent: true })
-  restorePaneAssignments()
   if (loadedEntrypoint) {
     setStatus('workspace opened')
   } else {
@@ -9329,8 +9709,7 @@ if (userInputText) {
   })
 }
 
-function toggleScriptCommentBlockForPane(paneId) {
-  const textarea = getPaneTextarea(paneId)
+function toggleCommentInTextarea(textarea) {
   if (!textarea) return
 
   const value = textarea.value
@@ -9373,8 +9752,12 @@ function toggleScriptCommentBlockForPane(paneId) {
   textarea.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
+function toggleScriptCommentBlockForPane(paneId) {
+  toggleCommentInTextarea(getPaneTextarea(paneId))
+}
+
 function initEditorPanes() {
-  setEditorLayout(editorLayoutState.layoutMode)
+  setEditorLayout(editorLayoutState.layoutMode, { persist: false })
   for (const paneId of editorLayoutState.allPanes) {
     const els = getPaneElements(paneId)
     if (!els) continue
@@ -9500,6 +9883,7 @@ function bindEditorPaneEvents(paneId) {
 for (const paneId of editorLayoutState.allPanes) {
   bindEditorPaneEvents(paneId)
 }
+setupEditorGridCenterHandle()
 initEditorPanes()
 bindFloatingGraphCodePanelEvents()
 updateFloatingGraphCodePanelMeta()
@@ -9591,6 +9975,7 @@ function initLayoutState() {
   }
 
   restoreNextVConfig()
+  setEditorLayout(editorLayoutState.layoutMode, { persist: false })
 
   const queryWorkspaceDir = normalizeNextVWorkspaceDir(
     new URLSearchParams(window.location.search).get('workspaceDir') ?? ''

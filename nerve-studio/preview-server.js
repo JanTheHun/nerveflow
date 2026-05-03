@@ -1730,7 +1730,10 @@ async function handleRequest(req, res) {
 
   const content = readFileSync(fullPath)
   const mime = getMimeTypeForPath(fullPath)
-  res.writeHead(200, { 'Content-Type': mime })
+  res.writeHead(200, {
+    'Content-Type': mime,
+    'Cache-Control': 'no-store',
+  })
   res.end(content)
 }
 

@@ -1907,6 +1907,15 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
   stroke: #5aa8ff;
 }
 
+.nextv-graph-node.parallel-agent .nextv-graph-node-shape {
+  stroke-dasharray: 5 2;
+  stroke-width: 2.5;
+}
+
+.nextv-graph-node.parallel-agent-single .nextv-graph-node-shape {
+  stroke-width: 2.5;
+}
+
 .nextv-graph-node.side_effect .nextv-graph-node-shape {
   fill: #2f1717;
   stroke: #d16969;
@@ -1999,16 +2008,30 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
   text-transform: lowercase;
 }
 
+.nextv-graph-node-warning-bg {
+  fill: #c8a020;
+  stroke: none;
+}
+
 .nextv-graph-node-warning {
-  font-size: 12px;
-  fill: #f7c97d;
-  font-weight: 700;
+  font-size: 11px;
+  fill: #111;
+  font-weight: 900;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
+.nextv-graph-node-contract-warning-bg {
+  fill: #c0302a;
+  stroke: none;
 }
 
 .nextv-graph-node-contract-warning {
-  font-size: 12px;
-  fill: #f14c4c;
-  font-weight: 700;
+  font-size: 11px;
+  fill: #fff;
+  font-weight: 900;
+  text-anchor: middle;
+  dominant-baseline: central;
 }
 
 .nextv-graph-node.declared-external .nextv-graph-node-shape {
@@ -2666,6 +2689,9 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
   flex: 1;
   min-height: 0;
   flex-direction: row;
+  position: relative;
+  --editor-grid-split-x: 50%;
+  --editor-grid-split-y: 50%;
 }
 
 .editor-pane {
@@ -2787,24 +2813,48 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
 
 /* Layout mode: split-2 (default, 2 horizontal panes) */
 .editor-panes-grid[data-layout="split-2"] {
+  display: flex;
   flex-direction: row;
   flex-wrap: nowrap;
 }
 
+.editor-panes-grid[data-layout="split-2"] .editor-grid-center-handle {
+  display: none;
+}
+
 /* Layout mode: grid-2x2 (4 panes in 2 rows x 2 columns) */
 .editor-panes-grid[data-layout="grid-2x2"] {
-  flex-direction: row;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, var(--editor-grid-split-x)) minmax(0, calc(100% - var(--editor-grid-split-x)));
+  grid-template-rows: minmax(0, var(--editor-grid-split-y)) minmax(0, calc(100% - var(--editor-grid-split-y)));
 }
 
 .editor-panes-grid[data-layout="grid-2x2"] .editor-pane {
-  flex: 0 0 50%;
-  min-width: 0;
-  max-width: 50%;
+  min-height: 0;
 }
 
 .editor-panes-grid[data-layout="grid-2x2"] .editor-pane + .editor-pane {
   border-left: none;
+}
+
+.editor-panes-grid[data-layout="grid-2x2"] .editor-pane:nth-child(1) {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.editor-panes-grid[data-layout="grid-2x2"] .editor-pane:nth-child(2) {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.editor-panes-grid[data-layout="grid-2x2"] .editor-pane:nth-child(3) {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.editor-panes-grid[data-layout="grid-2x2"] .editor-pane:nth-child(4) {
+  grid-column: 2;
+  grid-row: 2;
 }
 
 .editor-panes-grid[data-layout="grid-2x2"] .editor-pane:nth-child(odd) {
@@ -2813,6 +2863,63 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
 
 .editor-panes-grid[data-layout="grid-2x2"] .editor-pane:nth-child(n+3) {
   border-top: 1px solid var(--border);
+}
+
+.editor-grid-center-handle {
+  display: none;
+  position: absolute;
+  left: var(--editor-grid-split-x);
+  top: var(--editor-grid-split-y);
+  width: 14px;
+  height: 14px;
+  transform: translate(-50%, -50%);
+  border: 1px solid #2d3b4a;
+  border-radius: 3px;
+  background: #111923;
+  cursor: grab;
+  z-index: 8;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.editor-grid-center-handle::before,
+.editor-grid-center-handle::after {
+  content: '';
+  position: absolute;
+  background: #5d6f81;
+}
+
+.editor-grid-center-handle::before {
+  left: 2px;
+  right: 2px;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+.editor-grid-center-handle::after {
+  top: 2px;
+  bottom: 2px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+}
+
+.editor-panes-grid[data-layout="grid-2x2"] .editor-grid-center-handle {
+  display: block;
+}
+
+.editor-grid-center-handle:hover,
+body.is-resizing-editor-grid .editor-grid-center-handle {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 0 2px rgba(74, 158, 255, 0.2);
+}
+
+body.is-resizing-editor-grid .editor-grid-center-handle {
+  cursor: grabbing;
+}
+
+body.is-resizing-editor-grid {
+  cursor: grabbing;
 }
 
 

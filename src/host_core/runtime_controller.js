@@ -137,16 +137,25 @@ export function createNextVRuntimeController({
 
     const configRefIssues = validateConfigReferences(workspaceConfig)
     if (configRefIssues.length > 0) {
-      const message = `Detected ${configRefIssues.length} config reference issue(s).`
-      if (effectsPolicy === 'strict') {
-        throw new Error(`${message} Set nextv.json#effectsPolicy to "warn" to allow startup.`)
+      // TRANSPORT_NOT_FOUND is always fatal — it indicates broken config regardless of policy.
+      const transportIssues = configRefIssues.filter((i) => i.code === 'TRANSPORT_NOT_FOUND')
+      if (transportIssues.length > 0) {
+        const details = transportIssues.map((i) => i.message).join('; ')
+        throw new Error(`Transport configuration error(s): ${details}`)
       }
-      eventBus.publish('nextv_warning', {
-        code: 'CONFIG_REFERENCE_ERROR',
-        message,
-        policy: effectsPolicy,
-        issues: configRefIssues,
-      })
+      const otherIssues = configRefIssues.filter((i) => i.code !== 'TRANSPORT_NOT_FOUND')
+      if (otherIssues.length > 0) {
+        const message = `Detected ${otherIssues.length} config reference issue(s).`
+        if (effectsPolicy === 'strict') {
+          throw new Error(`${message} Set nextv.json#effectsPolicy to "warn" to allow startup.`)
+        }
+        eventBus.publish('nextv_warning', {
+          code: 'CONFIG_REFERENCE_ERROR',
+          message,
+          policy: effectsPolicy,
+          issues: otherIssues,
+        })
+      }
     }
 
     const forbiddenFieldIssues = validateNoForbiddenAgentFields(workspaceConfig)

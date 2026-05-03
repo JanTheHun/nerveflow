@@ -32,6 +32,27 @@ function parseProfilesMap(raw, sourceLabel) {
   return map
 }
 
+function parseTransportsMap(raw, sourceLabel) {
+  const map = (raw && typeof raw === 'object' && !Array.isArray(raw) && raw.transports && typeof raw.transports === 'object' && !Array.isArray(raw.transports))
+    ? raw.transports
+    : raw
+
+  if (!map || typeof map !== 'object' || Array.isArray(map)) {
+    throw new Error(`${sourceLabel} must be an object map of transportName -> transportConfig.`)
+  }
+
+  for (const [name, transport] of Object.entries(map)) {
+    if (!transport || typeof transport !== 'object' || Array.isArray(transport)) {
+      throw new Error(`${sourceLabel}: transport "${name}" must be an object.`)
+    }
+    if (typeof transport.provider !== 'string' || !transport.provider.trim()) {
+      throw new Error(`${sourceLabel}: transport "${name}.provider" must be a non-empty string.`)
+    }
+  }
+
+  return map
+}
+
 function parseModelsMap(raw, sourceLabel) {
   const map = (raw && typeof raw === 'object' && !Array.isArray(raw) && raw.models && typeof raw.models === 'object' && !Array.isArray(raw.models))
     ? raw.models
@@ -320,6 +341,7 @@ export function loadWorkspaceNextVConfig({
   const nextVPath = join(workspaceDir.absolutePath, 'nextv.json')
   const agentsPath = join(workspaceDir.absolutePath, 'agents.json')
   const modelsPath = join(workspaceDir.absolutePath, 'models.json')
+  const transportsPath = join(workspaceDir.absolutePath, 'transports.json')
   const toolsPath = join(workspaceDir.absolutePath, 'tools.json')
   const operatorsPath = join(workspaceDir.absolutePath, 'operators.json')
   const nextVDisplayPath = toWorkspaceDisplayPath(nextVPath)
@@ -329,6 +351,12 @@ export function loadWorkspaceNextVConfig({
       status: 'missing',
       file: toWorkspaceDisplayPath(modelsPath),
       source: toWorkspaceDisplayPath(modelsPath),
+      map: {},
+    },
+    transports: {
+      status: 'missing',
+      file: toWorkspaceDisplayPath(transportsPath),
+      source: toWorkspaceDisplayPath(transportsPath),
       map: {},
     },
     agents: {
@@ -383,6 +411,12 @@ export function loadWorkspaceNextVConfig({
       config.models.map = parseModelsMap(config.nextv.config.models, 'nextv.json#models')
       config.models.status = 'loaded'
       config.models.source = `${nextVDisplayPath}#models`
+    }
+
+    if (config.nextv.config.transports != null) {
+      config.transports.map = parseTransportsMap(config.nextv.config.transports, 'nextv.json#transports')
+      config.transports.status = 'loaded'
+      config.transports.source = `${nextVDisplayPath}#transports`
     }
 
     if (config.nextv.config.agents != null) {
@@ -444,6 +478,7 @@ export function loadWorkspaceNextVConfig({
     const agentsConfigRef = String(config.nextv.config.agentsConfig ?? '').trim()
     const toolsConfigRef = String(config.nextv.config.toolsConfig ?? '').trim()
     const modelsConfigRef = String(config.nextv.config.modelsConfig ?? '').trim()
+    const transportsConfigRef = String(config.nextv.config.transportsConfig ?? '').trim()
     const operatorsConfigRef = String(config.nextv.config.operatorsConfig ?? '').trim()
 
     if (modelsConfigRef) {
@@ -455,6 +490,17 @@ export function loadWorkspaceNextVConfig({
       config.models.map = parseModelsMap(modelsRaw, 'nextv.json#modelsConfig')
       config.models.status = 'loaded'
       config.models.source = toWorkspaceDisplayPath(resolvedModels.absolutePath)
+    }
+
+    if (transportsConfigRef) {
+      const resolvedTransports = resolvePathFromBaseDirectory(workspaceDir.absolutePath, transportsConfigRef, 'editor')
+      if (!existsSync(resolvedTransports.absolutePath)) {
+        throw new Error(`nextv.json#transportsConfig file not found: ${resolvedTransports.relativePath}`)
+      }
+      const transportsRaw = readJsonObjectFile(resolvedTransports.absolutePath)
+      config.transports.map = parseTransportsMap(transportsRaw, 'nextv.json#transportsConfig')
+      config.transports.status = 'loaded'
+      config.transports.source = toWorkspaceDisplayPath(resolvedTransports.absolutePath)
     }
 
     if (agentsConfigRef) {
@@ -500,6 +546,13 @@ export function loadWorkspaceNextVConfig({
     config.models.source = toWorkspaceDisplayPath(modelsPath)
   }
 
+  if (config.transports.status !== 'loaded' && existsSync(transportsPath)) {
+    const raw = readJsonObjectFile(transportsPath)
+    config.transports.map = parseTransportsMap(raw, 'transports.json')
+    config.transports.status = 'loaded'
+    config.transports.source = toWorkspaceDisplayPath(transportsPath)
+  }
+
   if (config.agents.status !== 'loaded' && existsSync(agentsPath)) {
     const raw = readJsonObjectFile(agentsPath)
     config.agents.profiles = parseProfilesMap(raw, 'agents.json')
@@ -526,14 +579,23 @@ export function loadWorkspaceNextVConfig({
   return config
 }
 
-export function validateConfigReferences(workspaceConfig, registeredTransports = new Set(['ollama', 'llama.cpp', 'llama_cpp'])) {
+// When a transports registry is present in config, validate against it.
+// When absent, fall back to the built-in set so existing configs without
+// transports.json continue to work without errors.
+const BUILTIN_TRANSPORTS = new Set(['ollama', 'llama.cpp', 'llama_cpp', 'openai'])
+
+export function validateConfigReferences(workspaceConfig) {
   const issues = []
   const modelsMap = workspaceConfig?.models?.map ?? {}
+  const transportsMap = workspaceConfig?.transports?.map ?? {}
+  const hasTransportsRegistry = Object.keys(transportsMap).length > 0
+  const effectiveTransports = hasTransportsRegistry
+    ? new Set(Object.keys(transportsMap))
+    : BUILTIN_TRANSPORTS
 
-  // Validate model transport names (models that ARE in the registry)
   for (const [modelName, model] of Object.entries(modelsMap)) {
     const transport = String(model?.transport ?? '').trim()
-    if (transport && !registeredTransports.has(transport)) {
+    if (transport && !effectiveTransports.has(transport)) {
       issues.push({
         code: 'TRANSPORT_NOT_FOUND',
         model: modelName,
@@ -610,6 +672,12 @@ export function getConfiguredModelsMap(workspaceConfig) {
 
 export function getConfiguredAgentProfiles(workspaceConfig) {
   const declared = workspaceConfig?.agents?.profiles
+  if (!declared || typeof declared !== 'object' || Array.isArray(declared)) return {}
+  return { ...declared }
+}
+
+export function getConfiguredTransportsMap(workspaceConfig) {
+  const declared = workspaceConfig?.transports?.map
   if (!declared || typeof declared !== 'object' || Array.isArray(declared)) return {}
   return { ...declared }
 }

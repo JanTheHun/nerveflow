@@ -180,9 +180,17 @@ export function createHostAdapter({
     return profiles[agentName] ?? null
   }
 
+  // Session-scoped cache: avoids redundant multi-layer config lookups per callAgent invocation.
+  const resolvedAgentConfigCache = new Map()
+
   function resolveAgentConfig(agentName) {
+    if (resolvedAgentConfigCache.has(agentName)) {
+      return resolvedAgentConfigCache.get(agentName)
+    }
+
     const profiles = workspaceConfig?.agents?.profiles ?? {}
     const modelsMap = workspaceConfig?.models?.map ?? {}
+    const transportsMap = workspaceConfig?.transports?.map ?? {}
 
     const agent = agentName ? profiles[agentName] : null
     if (agentName && !agent) {
@@ -198,11 +206,12 @@ export function createHostAdapter({
       return { error: 'AGENT_MISSING_MODEL_REF', agent: agentName }
     }
 
-    // Check if model is in the registry
     const modelConfig = modelsMap[modelRef]
     if (modelConfig) {
-      // Model found in registry - use the registered config
-      return {
+      // Full registry path: agents.profiles → models.map → transports.map
+      const transportLabel = String(modelConfig?.transport ?? '').trim()
+      const transportConfig = transportsMap[transportLabel] ?? null
+      const result = {
         agent: {
           name: agentName,
           instructions: String(agent?.instructions ?? '').trim(),
@@ -211,14 +220,18 @@ export function createHostAdapter({
         model: {
           name: modelRef,
           id: String(modelConfig?.model ?? '').trim(),
-          transport: String(modelConfig?.transport ?? '').trim(),
+          transport: transportLabel,
         },
+        transportConfig,
         source: 'config',
       }
+      resolvedAgentConfigCache.set(agentName, result)
+      return result
     }
 
-    // Model not in registry - treat modelRef as direct model name (backward compat)
-    return {
+    // Backward-compat path: modelRef is treated as a direct model name (no registry entry).
+    // transportConfig is null since no transport label is known.
+    const result = {
       agent: {
         name: agentName,
         instructions: String(agent?.instructions ?? '').trim(),
@@ -229,14 +242,23 @@ export function createHostAdapter({
         id: modelRef,
         transport: '',
       },
+      transportConfig: null,
       source: 'config',
     }
+    resolvedAgentConfigCache.set(agentName, result)
+    return result
   }
 
   const adapter = {
     getAgentCapabilities: () => {
+      // Prefer runtime-detected capabilities (e.g. set directly on callAgent function by host).
       if (callAgent && typeof callAgent === 'function' && callAgent.capabilities && typeof callAgent.capabilities === 'object') {
         return callAgent.capabilities
+      }
+      // Fall back to config-declared transport metadata when no runtime detection is present.
+      const transportsMap = workspaceConfig?.transports?.map ?? {}
+      if (Object.keys(transportsMap).length > 0) {
+        return { source: 'config', transports: transportsMap }
       }
       return null
     },
@@ -271,6 +293,7 @@ export function createHostAdapter({
       let resolvedModel = directModel || defaultModel || ''
       let profileInstructions = ''
       let profileTools = []
+      let resolvedTransportConfig = null
       let configSource = 'env'
 
       if (agentName) {
@@ -279,22 +302,19 @@ export function createHostAdapter({
           if (resolved.error === 'AGENT_NOT_FOUND') {
             throw new Error(`agent("${agentName}") profile was not found in workspace config.`)
           }
-          if (resolved.error === 'MODEL_NOT_FOUND') {
-            throw new Error(`agent("${agentName}") references model "${resolved.modelRef}" which was not found in models registry.`)
-          }
           if (resolved.error === 'AGENT_MISSING_MODEL_REF') {
-            throw new Error(`agent("${agentName}") is missing model reference; set it in agents.json.`)
+            throw new Error(`agent("${agentName}") is missing model; set it in agents.json or defaultModel env.`)
           }
+          throw new Error(`agent("${agentName}") could not be resolved: ${resolved.error}`)
         }
 
         if (resolved.source === 'config') {
           resolvedModel = resolved.model.id
           profileInstructions = resolved.agent.instructions
           profileTools = resolved.agent.tools
+          resolvedTransportConfig = resolved.transportConfig
           configSource = 'config'
         }
-      } else {
-        const profile = null
       }
 
       if (!resolvedModel) {
@@ -392,7 +412,11 @@ export function createHostAdapter({
 
         let transportResult
         try {
-          transportResult = await callAgent({ model: resolvedModel, messages: chatMessages })
+          const callPayload = { model: resolvedModel, messages: chatMessages }
+          if (resolvedTransportConfig !== null) {
+            callPayload.transport = resolvedTransportConfig
+          }
+          transportResult = await callAgent(callPayload)
         } finally {
           if (slowWarningTimer) {
             clearTimeout(slowWarningTimer)

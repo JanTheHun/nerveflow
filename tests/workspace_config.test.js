@@ -7,6 +7,7 @@ import {
   getConfiguredExternals,
   getConfiguredModelsMap,
   getConfiguredAgentProfiles,
+  getConfiguredTransportsMap,
   loadWorkspaceNextVConfig,
   validateConfigReferences,
   validateNoForbiddenAgentFields,
@@ -470,6 +471,7 @@ test('loads agent profiles with model references', () => {
 })
 
 test('validateConfigReferences reports invalid transport names in models', () => {
+  // When a transports registry is loaded, unknown labels are always errors.
   const config = {
     models: {
       map: {
@@ -479,13 +481,15 @@ test('validateConfigReferences reports invalid transport names in models', () =>
       status: 'ok',
       source: 'nextv.json',
     },
-    agents: {
-      profiles: {},
+    transports: {
+      map: { ollama: { provider: 'ollama' } },
+      status: 'ok',
+      source: 'transports.json',
     },
+    agents: { profiles: {} },
   }
 
-  const registeredTransports = new Set(['ollama', 'openai', 'llama-cpp'])
-  const issues = validateConfigReferences(config, registeredTransports)
+  const issues = validateConfigReferences(config)
 
   const invalidTransport = issues.find((i) => i.code === 'TRANSPORT_NOT_FOUND')
   assert(invalidTransport)
@@ -573,4 +577,114 @@ test('getConfiguredAgentProfiles returns empty profiles when agents section miss
 
   const profiles = getConfiguredAgentProfiles(config)
   assert.deepEqual(profiles, {})
+})
+
+test('loads transports layer from inline nextv.json', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      transports: {
+        ollama: { provider: 'ollama', base_url: 'http://localhost:11434', timeout_ms: 30000 },
+        'llama.cpp': { provider: 'llama.cpp', endpoint: 'http://localhost:8080' },
+      },
+    }),
+  })
+
+  const config = loadConfig(workspaceDir)
+  const transports = getConfiguredTransportsMap(config)
+
+  assert.deepEqual(Object.keys(transports).sort(), ['llama.cpp', 'ollama'])
+  assert.equal(transports.ollama.provider, 'ollama')
+  assert.equal(transports.ollama.timeout_ms, 30000)
+  assert.equal(transports['llama.cpp'].provider, 'llama.cpp')
+  assert.equal(config.transports.status, 'loaded')
+  assert.match(config.transports.source, /nextv\.json#transports/)
+})
+
+test('loads transports layer from standalone transports.json', () => {
+  const workspaceDir = createWorkspace({
+    'transports.json': JSON.stringify({
+      transports: {
+        openai: { provider: 'openai', timeout_ms: 20000 },
+      },
+    }),
+  })
+
+  const config = loadConfig(workspaceDir)
+  const transports = getConfiguredTransportsMap(config)
+
+  assert.equal(transports.openai.provider, 'openai')
+  assert.equal(config.transports.status, 'loaded')
+  assert.match(config.transports.source, /transports\.json/)
+})
+
+test('transports.json bare map (without wrapper key) is also accepted', () => {
+  const workspaceDir = createWorkspace({
+    'transports.json': JSON.stringify({
+      ollama: { provider: 'ollama' },
+    }),
+  })
+
+  const config = loadConfig(workspaceDir)
+  const transports = getConfiguredTransportsMap(config)
+
+  assert.equal(transports.ollama.provider, 'ollama')
+})
+
+test('transports parser rejects missing provider field', () => {
+  const workspaceDir = createWorkspace({
+    'transports.json': JSON.stringify({
+      'bad-transport': { timeout_ms: 5000 },
+    }),
+  })
+
+  assert.throws(() => loadConfig(workspaceDir), /provider.*must be a non-empty string/)
+})
+
+test('validateConfigReferences uses loaded transports registry when present', () => {
+  const config = {
+    models: { map: { 'm': { model: 'x', transport: 'custom' } } },
+    transports: { map: { custom: { provider: 'custom-provider' } } },
+    agents: { profiles: {} },
+  }
+  const issues = validateConfigReferences(config)
+  assert.equal(issues.length, 0, 'custom transport defined in registry should not produce issues')
+})
+
+test('validateConfigReferences falls back to builtin set when transports registry is absent', () => {
+  const config = {
+    models: { map: { 'm': { model: 'x', transport: 'ollama' } } },
+    agents: { profiles: {} },
+  }
+  const issues = validateConfigReferences(config)
+  assert.equal(issues.length, 0, 'ollama is a builtin transport')
+})
+
+test('validateConfigReferences detects unknown transport without registry', () => {
+  const config = {
+    models: { map: { 'm': { model: 'x', transport: 'typo-transport' } } },
+    agents: { profiles: {} },
+  }
+  const issues = validateConfigReferences(config)
+  assert.equal(issues.filter((i) => i.code === 'TRANSPORT_NOT_FOUND').length, 1)
+})
+
+test('getConfiguredTransportsMap returns empty map when transports section missing', () => {
+  const config = { models: { map: {} }, agents: { profiles: {} } }
+  assert.deepEqual(getConfiguredTransportsMap(config), {})
+})
+
+test('inline nextv.json transports take precedence over transports.json', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      transports: { ollama: { provider: 'ollama', base_url: 'http://inline:11434' } },
+    }),
+    'transports.json': JSON.stringify({
+      transports: { ollama: { provider: 'ollama', base_url: 'http://file:11434' } },
+    }),
+  })
+
+  const config = loadConfig(workspaceDir)
+  const transports = getConfiguredTransportsMap(config)
+  assert.equal(transports.ollama.base_url, 'http://inline:11434')
+  assert.match(config.transports.source, /nextv\.json#transports/)
 })

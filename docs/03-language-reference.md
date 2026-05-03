@@ -197,13 +197,51 @@ returns={
 }
 ```
 
-## 5. Configuration Layer: Models and Agents
+## 5. Configuration Layer: Models, Transports, and Agents
 
-Workflows can reference LLM models and agent profiles through a centralized two-layer configuration system. This allows you to:
+Workflows can reference LLM models and agent profiles through a centralized three-layer configuration system. This allows you to:
 
-- Define reusable model configurations (transport, model ID) once
+- Define reusable transport configurations (endpoint, credentials) separately from model logic
+- Define reusable model configurations (transport reference, model ID) once
 - Define agent profiles with shared instructions and tools
 - Keep script logic decoupled from infrastructure details
+
+### Transports Registry
+
+Define transport endpoints in `nextv.json#transports` or a separate `transports.json` file.
+`transports.json` is environment-specific and should not be committed to version control.
+
+```json
+{
+  "transports": {
+    "ollama": {
+      "provider": "ollama",
+      "base_url": "http://localhost:11434"
+    },
+    "llama.cpp": {
+      "provider": "llama.cpp",
+      "endpoint": "http://localhost:8080"
+    }
+  }
+}
+```
+
+Each transport entry requires a `provider` field (non-empty string). All other fields are passed through to the transport adapter as-is, enabling capability metadata:
+
+```json
+{
+  "transports": {
+    "ollama": {
+      "provider": "ollama",
+      "base_url": "http://localhost:11434",
+      "vision": true,
+      "context_length": 128000
+    }
+  }
+}
+```
+
+Loading precedence: `nextv.json#transports` → `nextv.json#transportsConfig` (external file reference) → `transports.json` (auto-discovered in workspace root).
 
 ### Models Registry
 
@@ -224,7 +262,7 @@ Define models in `nextv.json#models` or a separate `models.json` file:
 }
 ```
 
-Supported transports: `ollama`, `llama.cpp`, `llama_cpp`.
+The `transport` field must match an entry in the transports registry (or a builtin name: `ollama`, `llama.cpp`, `llama_cpp`, `openai`).
 
 ### Agent Profiles
 
@@ -250,13 +288,17 @@ Agent profiles must not define `transport`; this is reserved for the models laye
 
 When you call `agent("qa_bot", ...)` in a script:
 
-1. Runtime looks up "qa_bot" in agent profiles
+1. Runtime looks up "qa_bot" in `agents.profiles`
 2. Profile specifies `model: "local-llama"`
-3. Runtime looks up "local-llama" in models registry
-4. Models registry specifies transport (ollama) and model ID (llama3.2)
-5. Profile instructions and tools are merged with call-time arguments
+3. Runtime looks up "local-llama" in `models.map`
+4. Models entry specifies transport label (`ollama`) and model ID (`llama3.2`)
+5. Runtime looks up "ollama" in `transports.map` — resolves endpoint config
+6. Profile instructions and tools are merged with call-time arguments
+7. Full resolved config (`model`, `transport`) is passed to the transport adapter
 
 If the agent or model is not found in config, the runtime falls back to treating the name as a direct model identifier (for backward compatibility) or uses environment variables (`OLLAMA_MODEL`, `AGENT_TRANSPORT`).
+
+Transport labels that appear in `models.map` but are absent from `transports.map` are flagged as `TRANSPORT_NOT_FOUND` at startup — this is always a fatal error regardless of `effectsPolicy`.
 
 ### Backward Compatibility
 

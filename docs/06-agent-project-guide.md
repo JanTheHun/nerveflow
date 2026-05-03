@@ -25,9 +25,26 @@ Optional but recommended:
 - test script or smoke workflow
 - host adapter config
 
-## 2. Configuration: Models and Agent Profiles
+## 2. Configuration: Models, Transports, and Agent Profiles
 
 When your workflow calls `agent(...)`, define reusable configurations in `nextv.json` to decouple scripts from infrastructure details.
+
+### Transports Registry
+
+Define transport endpoints in `transports.json` (workspace root, not committed) or inline in `nextv.json#transports`:
+
+```json
+{
+  "transports": {
+    "ollama": {
+      "provider": "ollama",
+      "base_url": "http://localhost:11434"
+    }
+  }
+}
+```
+
+Each entry requires a `provider` field. Extra fields (e.g. `vision`, `context_length`) are passed through to the transport adapter. A transport label used in `models` but absent from this registry is always a fatal startup error.
 
 ### Models Registry
 
@@ -50,7 +67,8 @@ Define available models and their transports in `nextv.json#models`:
 
 ### Agent Profiles
 
-Define agent profiles in `nextv.json#agents` that reference models by name:
+Define agent profiles in `nextv.json#agents` that reference models by name.
+Profiles are grouped under `agents.profiles` to allow future extension (e.g. routing policies) without a breaking change to the config schema:
 
 ```json
 {
@@ -83,7 +101,9 @@ decision = agent(
 )
 ```
 
-The runtime resolves `"classifier"` → agent profile → model reference → transport configuration.
+The runtime resolves `"classifier"` → `agents.profiles` → `models.map` → `transports.map` → transport adapter.
+
+Resolution is cached per session — repeated calls to the same agent name pay no extra config lookup cost.
 
 ## 3. Build Order For Agents
 

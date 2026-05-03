@@ -78,6 +78,7 @@ function createController(options = {}) {
     validateCapabilityBindings = null,
     ingressRuntime = null,
     effectRuntime = null,
+    validateConfigReferences = () => [],
   } = options
 
   const controller = createNextVRuntimeController({
@@ -116,6 +117,7 @@ function createController(options = {}) {
     effectRuntime,
     callAgent: async () => '',
     defaultModel: '',
+    validateConfigReferences,
   })
 
   return { controller, published }
@@ -731,4 +733,54 @@ test('[AC-6] Handler failure is isolated; other handlers unaffected', () => {
   assert.deepEqual(goodHandler2Events, ['nextv_execution'])
 
   // Runtime unaffected; surfaces continue
+})
+
+test('controller start throws on TRANSPORT_NOT_FOUND in strict mode', async () => {
+  const { controller } = createController({
+    validateConfigReferences: () => [
+      { code: 'TRANSPORT_NOT_FOUND', model: 'my-model', transport: 'typo-transport' },
+    ],
+    workspaceConfig: {
+      agents: { status: 'missing', source: '' },
+      tools: { status: 'missing', source: '' },
+      nextv: {
+        status: 'loaded',
+        file: 'nextv.json',
+        config: { effectsPolicy: 'strict' },
+        timers: [],
+        timersSource: '',
+      },
+      operators: { status: 'missing', source: '' },
+    },
+  })
+
+  await assert.rejects(
+    () => controller.start({ entrypointPath: 'main.nrv' }),
+    /Transport configuration error/,
+  )
+})
+
+test('controller start throws on TRANSPORT_NOT_FOUND in warn mode (always fatal)', async () => {
+  const { controller } = createController({
+    validateConfigReferences: () => [
+      { code: 'TRANSPORT_NOT_FOUND', model: 'my-model', transport: 'typo-transport' },
+    ],
+    workspaceConfig: {
+      agents: { status: 'missing', source: '' },
+      tools: { status: 'missing', source: '' },
+      nextv: {
+        status: 'loaded',
+        file: 'nextv.json',
+        config: { effectsPolicy: 'warn' },
+        timers: [],
+        timersSource: '',
+      },
+      operators: { status: 'missing', source: '' },
+    },
+  })
+
+  await assert.rejects(
+    () => controller.start({ entrypointPath: 'main.nrv' }),
+    /Transport configuration error/,
+  )
 })

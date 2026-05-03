@@ -180,6 +180,13 @@ function walkExpr(expr, visitor) {
     return
   }
 
+  if (expr.type === 'parallel') {
+    for (const element of expr.elements ?? []) {
+      walkExpr(element, visitor)
+    }
+    return
+  }
+
   if (expr.type === 'call') {
     for (const arg of expr.args ?? []) {
       walkExpr(arg?.expr, visitor)
@@ -300,6 +307,14 @@ function collectTransitionSignals(instr, state) {
 
   const visitExpr = (expr) => {
     walkExpr(expr, (node) => {
+      if (node?.type === 'parallel') {
+        const parallelAgentCount = (node.elements ?? []).filter(
+          (el) => el?.type === 'call' && (el.name === 'agent' || el.name === 'model')
+        ).length
+        if (parallelAgentCount > 1) state.hasParallelAgents = true
+        return
+      }
+
       if (node?.type !== 'call') return
 
       if (node.name === 'agent') {
@@ -477,6 +492,7 @@ export function extractEventGraph(astOrIR, options = {}) {
       hasAgent: false,
       hasEffect: false,
       hasDeclaredOutput: false,
+      hasParallelAgents: false,
       agents: [],
       tools: [],
       outputs: [],
@@ -529,6 +545,7 @@ export function extractEventGraph(astOrIR, options = {}) {
       subscriptionKind,
       classification,
       ...(transitionState.agents.length > 0 ? { agents: transitionState.agents } : {}),
+      ...(transitionState.hasParallelAgents ? { hasParallelAgents: true } : {}),
       tools: transitionState.tools,
       outputs: transitionState.outputs,
       warnings,

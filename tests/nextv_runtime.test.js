@@ -1009,6 +1009,122 @@ test('cut() composes with sort() for ranked threshold selection', async () => {
   ])
 })
 
+test('cut() composes with sort() for ranked threshold selection', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"similarity\\":0.59},{\\"similarity\\":0.92},{\\"similarity\\":0.81},{\\"similarity\\":0.6}]")',
+    'sorted = sort(items, "similarity", desc=true)',
+    'relevant = cut(sorted, "similarity", ">=", 0.6)',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.relevant, [
+    { similarity: 0.92 },
+    { similarity: 0.81 },
+    { similarity: 0.6 },
+  ])
+})
+
+test('pick() returns array element at valid index', async () => {
+  const result = await runNextVScript('x = pick(from_json("[10,20,30]"), 1)')
+  assert.equal(result.locals.x, 20)
+})
+
+test('pick() returns first element at index 0', async () => {
+  const result = await runNextVScript('x = pick(from_json("[10,20,30]"), 0)')
+  assert.equal(result.locals.x, 10)
+})
+
+test('pick() returns null for out-of-bounds index in safe mode', async () => {
+  const result = await runNextVScript('x = pick(from_json("[10,20,30]"), 10)')
+  assert.equal(result.locals.x, null)
+})
+
+test('pick() throws PICK_OUT_OF_BOUNDS for out-of-bounds index in strict mode', async () => {
+  await assert.rejects(
+    () => runNextVScript('x = pick(from_json("[10,20,30]"), 10, strict=true)'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'PICK_OUT_OF_BOUNDS')
+      return true
+    },
+  )
+})
+
+test('pick() throws INVALID_COLLECTION_ARGUMENT for negative index', async () => {
+  await assert.rejects(
+    () => runNextVScript('x = pick(from_json("[10,20,30]"), -1)'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')
+      return true
+    },
+  )
+})
+
+test('pick() throws INVALID_COLLECTION_ARGUMENT for float index', async () => {
+  await assert.rejects(
+    () => runNextVScript('x = pick(from_json("[10,20,30]"), 1.5)'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')
+      return true
+    },
+  )
+})
+
+test('pick() returns object value at valid string key', async () => {
+  const result = await runNextVScript('x = pick(from_json("{\\"title\\":\\"Jazz\\"}"), "title")')
+  assert.equal(result.locals.x, 'Jazz')
+})
+
+test('pick() returns null for missing object key in safe mode', async () => {
+  const result = await runNextVScript('x = pick(from_json("{\\"title\\":\\"Jazz\\"}"), "artist")')
+  assert.equal(result.locals.x, null)
+})
+
+test('pick() throws PICK_MISSING_KEY for missing object key in strict mode', async () => {
+  await assert.rejects(
+    () => runNextVScript('x = pick(from_json("{\\"title\\":\\"Jazz\\"}"), "artist", strict=true)'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'PICK_MISSING_KEY')
+      return true
+    },
+  )
+})
+
+test('pick() throws INVALID_COLLECTION_ARGUMENT for empty string key', async () => {
+  await assert.rejects(
+    () => runNextVScript('x = pick(from_json("{\\"title\\":\\"Jazz\\"}"), "")'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')
+      return true
+    },
+  )
+})
+
+test('pick() throws INVALID_COLLECTION_ARGUMENT for non-collection first arg in safe mode', async () => {
+  await assert.rejects(
+    () => runNextVScript('x = pick("not-a-list", 0)'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')
+      return true
+    },
+  )
+})
+
+test('pick() throws INVALID_COLLECTION_ARGUMENT for non-collection first arg in strict mode', async () => {
+  await assert.rejects(
+    () => runNextVScript('x = pick("not-a-list", 0, strict=true)'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')
+      return true
+    },
+  )
+})
+
 test('collection helpers reject invalid arguments', async () => {
   await assert.rejects(
     () => runNextVScript('x = take("oops", 1)'),

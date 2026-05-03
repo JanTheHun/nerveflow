@@ -449,7 +449,13 @@ function parseTerm(raw, line, statement) {
       })
     }
     const arrayInner = innerRaw.slice(1, -1).trim()
-    const elementRaws = arrayInner ? splitTopLevel(arrayInner, ',').filter(Boolean) : []
+    const isCommentedOutElement = (raw) => {
+      const nonEmpty = raw.split('\n').map((l) => l.trim()).filter(Boolean)
+      return nonEmpty.length > 0 && nonEmpty.every((l) => l.startsWith('#'))
+    }
+    const elementRaws = arrayInner
+      ? splitTopLevel(arrayInner, ',').filter(Boolean).filter((r) => !isCommentedOutElement(r))
+      : []
     const elements = elementRaws.map((elemRaw, idx) => {
       const elemText = elemRaw.trim()
       const elemMatch = /^([A-Za-z_][A-Za-z0-9_]*)\(([\s\S]*)\)$/.exec(elemText)
@@ -1870,6 +1876,41 @@ function buildFunctions(options, runtimeContext) {
       }
 
       return out
+    },
+    pick: ({ positional, named }) => {
+      const collection = positional[0]
+      const key = positional[1]
+      const strict = named?.strict === true
+
+      if (!Array.isArray(collection) && !isPlainObject(collection)) {
+        collectionError('INVALID_COLLECTION_ARGUMENT', 'pick() requires an array or object as first argument.')
+      }
+
+      if (Array.isArray(collection)) {
+        if (!Number.isInteger(key) || key < 0) {
+          collectionError('INVALID_COLLECTION_ARGUMENT', `pick() requires a non-negative integer index for array access; received "${key}".`)
+        }
+        if (key >= collection.length) {
+          if (strict) {
+            collectionError('PICK_OUT_OF_BOUNDS', `pick() index ${key} is out of bounds for array of length ${collection.length}.`)
+          }
+          return null
+        }
+        return collection[key] ?? null
+      }
+
+      // plain object
+      const keyStr = String(key ?? '').trim()
+      if (!keyStr) {
+        collectionError('INVALID_COLLECTION_ARGUMENT', 'pick() requires a non-empty string key for object access.')
+      }
+      if (!(keyStr in collection)) {
+        if (strict) {
+          collectionError('PICK_MISSING_KEY', `pick() key "${keyStr}" does not exist in object.`)
+        }
+        return null
+      }
+      return collection[keyStr] ?? null
     },
     exact_length: ({ positional }) => {
       const lengthValue = positional[0]

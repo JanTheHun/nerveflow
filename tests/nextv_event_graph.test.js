@@ -154,6 +154,37 @@ test('extractEventGraph classifies pure, llm, declared_output, side_effect, and 
   assert.equal(byEvent.mixed.warnings[0].code, 'MIXED_TRANSITION')
 })
 
+test('extractEventGraph sets hasParallelAgents when parallel([agent(), agent()]) is used', () => {
+  const ast = parseNextVScript([
+    'on "entry"',
+    '  results = parallel([agent("intent"), agent("intent-2", event.value)])',
+    'end',
+    'on "sequential"',
+    '  r1 = agent("intent", event.value)',
+    '  r2 = agent("intent-2", event.value)',
+    'end',
+  ].join('\n'))
+
+  const graph = extractEventGraph(ast)
+  const byEvent = Object.fromEntries(graph.transitions.map((t) => [t.eventType, t]))
+
+  assert.equal(byEvent.entry.hasParallelAgents, true, 'parallel agents should be flagged')
+  assert.ok(!byEvent.sequential.hasParallelAgents, 'sequential agents should not be flagged')
+})
+
+test('extractEventGraph does not set hasParallelAgents for single agent in parallel([])', () => {
+  const ast = parseNextVScript([
+    'on "single"',
+    '  r = parallel([agent("intent", event.value)])',
+    'end',
+  ].join('\n'))
+
+  const graph = extractEventGraph(ast)
+  const byEvent = Object.fromEntries(graph.transitions.map((t) => [t.eventType, t]))
+
+  assert.ok(!byEvent.single.hasParallelAgents, 'single agent in parallel should not be flagged')
+})
+
 test('extractEventGraph emits UNHANDLED_EMIT for internally emitted events with no handler', () => {
   const ast = parseNextVScript([
     'on "trigger"',

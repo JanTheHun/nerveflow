@@ -8,12 +8,17 @@
     "intent": {
       "model": "intent-model",
       "tools": [],
-      "instructions": ""
+      "instructions": "Classify user intent."
     },
     "intent-2": {
       "model": "intent-2-model",
       "tools": [],
-      "instructions": ""
+      "instructions": "Classify user intent."
+    },
+    "intent-3": {
+      "model": "intent-3-model",
+      "tools": [],
+      "instructions": "Classify user intent."
     }
   }
 }

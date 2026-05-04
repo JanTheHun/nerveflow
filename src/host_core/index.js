@@ -34,6 +34,7 @@ export {
   getConfiguredAgentProfiles,
   getConfiguredModelsMap,
   getConfiguredModules,
+  getConfiguredRuntimePreload,
   getConfiguredTransportsMap,
   getDeclaredEffectChannels,
   getDeclaredExternals,

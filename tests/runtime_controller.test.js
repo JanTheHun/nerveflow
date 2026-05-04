@@ -79,6 +79,7 @@ function createController(options = {}) {
     ingressRuntime = null,
     effectRuntime = null,
     validateConfigReferences = () => [],
+    loadWorkspaceConfig = () => workspaceConfig,
   } = options
 
   const controller = createNextVRuntimeController({
@@ -86,7 +87,7 @@ function createController(options = {}) {
     createRunner,
     createHostAdapter,
     resolveWorkspaceDirectory: () => ({ absolutePath: '/workspace', relativePath: '.' }),
-    loadWorkspaceConfig: () => workspaceConfig,
+    loadWorkspaceConfig,
     resolveEntrypoint: () => ({ absolutePath: '/workspace/main.nrv', relativePath: 'main.nrv' }),
     resolveOptionalStatePath: () => '',
     resolveStateDiscoveryBaseDir: () => '/workspace',
@@ -174,6 +175,56 @@ test('controller stop publishes stopped event and deactivates runtime', async ()
   assert.equal(snapshot.running, false)
   assert.equal(controller.isActive(), false)
   assert.equal(published.some((entry) => entry.eventName === 'nextv_stopped'), true)
+})
+
+test('controller reloadConfig throws when runtime is inactive', () => {
+  const { controller } = createController()
+
+  assert.throws(
+    () => controller.reloadConfig(),
+    /nextV runtime not active/,
+  )
+})
+
+test('controller reloadConfig refreshes live config and clears adapter cache', async () => {
+  const configA = {
+    agents: { status: 'loaded', source: 'agents.json', profiles: { alpha: { model: 'm1' } } },
+    tools: { status: 'loaded', source: 'tools.json', allow: null, aliases: {} },
+    nextv: { status: 'loaded', file: 'nextv.json', config: {}, timers: [], timersSource: '' },
+    operators: { status: 'missing', source: '', map: {} },
+  }
+  const configB = {
+    agents: { status: 'loaded', source: 'agents.v2.json', profiles: { beta: { model: 'm2' } } },
+    tools: { status: 'loaded', source: 'tools.json', allow: null, aliases: {} },
+    nextv: { status: 'loaded', file: 'nextv.json', config: {}, timers: [], timersSource: '' },
+    operators: { status: 'missing', source: '', map: {} },
+  }
+
+  const loadedConfigs = [configA, configB]
+  let loadIndex = 0
+  let clearConfigCacheCount = 0
+
+  const { controller, published } = createController({
+    loadWorkspaceConfig: () => loadedConfigs[Math.min(loadIndex++, loadedConfigs.length - 1)],
+    createHostAdapter: ({ getWorkspaceConfig }) => ({
+      clearConfigCache: () => {
+        clearConfigCacheCount += 1
+      },
+      getAgentCapabilities: () => {
+        const profiles = getWorkspaceConfig()?.agents?.profiles ?? {}
+        return { source: 'config', agentCount: Object.keys(profiles).length }
+      },
+      callAgent: async () => '',
+      callTool: async () => '',
+    }),
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  const reloaded = controller.reloadConfig()
+
+  assert.equal(reloaded.workspaceConfig.agentsSource, 'agents.v2.json')
+  assert.equal(clearConfigCacheCount, 1)
+  assert.equal(published.some((entry) => entry.eventName === 'nextv_config_reloaded'), true)
 })
 
 test('controller start warns for unsupported declared effects in warn mode and continues startup', async () => {

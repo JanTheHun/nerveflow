@@ -19,6 +19,16 @@
       "model": "intent-3-model",
       "tools": [],
       "instructions": "Classify user intent."
+    },
+    "intent-4": {
+      "model": "intent-4-model",
+      "tools": [],
+      "instructions": "Classify user intent."
+    },
+    "intent-5": {
+      "model": "intent-5-model",
+      "tools": [],
+      "instructions": "Classify user intent."
     }
   }
 }

@@ -11,15 +11,10 @@ on "user_wants_music"
 
   limit = 0.6
 
-  output play_music results
-  output text "${results.count} results from RAG"
   relevant = cut(results.items, "similarity", ">=", limit)
-  output play_music relevant
-  mostrelevant = to_json(relevant)
-  output text "Most relevant: ${mostrelevant}"
   music = agent(
-    "intent",
-    mostrelevant,
+    "intent-4",
+    to_json(relevant),
     to_json(file("music-select/music-select.instructions.md")),
     returns={
 	  type: ["author","album","song","unclear"],
@@ -29,8 +24,6 @@ on "user_wants_music"
     validate="strict",
     retry_on_contract_violation=2
     )
-  # output json music
-  # output text music.index
   winner = pick(relevant, music.index)
   output json winner.metadata
 end

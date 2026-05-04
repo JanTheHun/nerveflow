@@ -12,6 +12,12 @@
       "format": "json"
     }
   },
+  "transports": {
+    "ollama": {
+      "provider": "ollama",
+      "keep_alive": "30m"
+    }
+  },
   "models": {
     "chat-model": {
       "model": "qwen2.5:3b",
@@ -27,6 +33,14 @@
     },
     "intent-3-model": {
       "model": "phi3:mini-128k",
+      "transport": "ollama"
+    },
+    "intent-4-model": {
+      "model": "phi3:mini-4k",
+      "transport": "ollama"
+    },
+    "intent-5-model": {
+      "model": "gemma2:2b",
       "transport": "ollama"
     }
   }

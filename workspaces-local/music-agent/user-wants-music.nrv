@@ -1,0 +1,3 @@
+on "user_wants_music"
+  output text "music"
+end

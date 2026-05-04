@@ -7,6 +7,7 @@ import {
   getConfiguredExternals,
   getConfiguredModelsMap,
   getConfiguredAgentProfiles,
+  getConfiguredRuntimePreload,
   getConfiguredTransportsMap,
   loadWorkspaceNextVConfig,
   validateConfigReferences,
@@ -687,4 +688,23 @@ test('inline nextv.json transports take precedence over transports.json', () => 
   const transports = getConfiguredTransportsMap(config)
   assert.equal(transports.ollama.base_url, 'http://inline:11434')
   assert.match(config.transports.source, /nextv\.json#transports/)
+})
+
+test('getConfiguredRuntimePreload defaults to none when not specified', () => {
+  const config = loadConfig(createWorkspace({ 'nextv.json': JSON.stringify({ entrypointPath: 'entry.nrv' }) }))
+  assert.equal(getConfiguredRuntimePreload(config), 'none')
+})
+
+test('getConfiguredRuntimePreload reads valid value from nextv.json', () => {
+  const config = loadConfig(createWorkspace({
+    'nextv.json': JSON.stringify({ entrypointPath: 'entry.nrv', runtime: { preload: 'marked' } }),
+  }))
+  assert.equal(getConfiguredRuntimePreload(config), 'marked')
+})
+
+test('getConfiguredRuntimePreload ignores invalid value', () => {
+  const config = loadConfig(createWorkspace({
+    'nextv.json': JSON.stringify({ entrypointPath: 'entry.nrv', runtime: { preload: 'bogus' } }),
+  }))
+  assert.equal(getConfiguredRuntimePreload(config), 'none')
 })

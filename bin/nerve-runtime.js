@@ -153,7 +153,7 @@ function normalizeForcedRoute(rawTransport) {
 
 const forcedRoute = normalizeForcedRoute(AGENT_TRANSPORT)
 
-callAgent = async ({ model, messages }) => {
+callAgent = async ({ model, messages, transport: callTransportConfig }) => {
   const hint = parseModelRouteHint(model)
   const selectedRoute = forcedRoute || hint.route || (AGENT_ROUTING_DEFAULT === 'local' ? 'local' : 'external')
   const selectedModel = hint.model || String(model ?? '').trim()
@@ -162,7 +162,7 @@ callAgent = async ({ model, messages }) => {
     : (hint.route ? hint.strategy : 'default-route')
 
   const transport = selectedRoute === 'local' ? localCallAgent : externalCallAgent
-  const transportResult = await transport({ model: selectedModel, messages })
+  const transportResult = await transport({ model: selectedModel, messages, transport: callTransportConfig })
 
   if (typeof transportResult === 'string') {
     return {
@@ -203,6 +203,7 @@ callAgent = async ({ model, messages }) => {
 callAgent.capabilities = {
   routingMode: forcedRoute ? 'forced' : 'mixed',
   defaultRoute: AGENT_ROUTING_DEFAULT === 'local' ? 'local' : 'external',
+  supports_preload: true,
   local: {
     id: 'llama.cpp',
     locality: 'local',
@@ -211,6 +212,17 @@ callAgent.capabilities = {
     id: 'ollama',
     locality: 'external',
   },
+}
+
+callAgent.load = async ({ model, transport: callTransportConfig }) => {
+  const hint = parseModelRouteHint(model)
+  const selectedRoute = forcedRoute || hint.route || (AGENT_ROUTING_DEFAULT === 'local' ? 'local' : 'external')
+  const selectedModel = hint.model || String(model ?? '').trim()
+  const selectedTransport = selectedRoute === 'local' ? localCallAgent : externalCallAgent
+  if (typeof selectedTransport.load !== 'function' || !selectedTransport.capabilities?.supports_preload) {
+    return { ok: false, model: selectedModel, reason: 'transport does not support preload' }
+  }
+  return await selectedTransport.load({ model: selectedModel, transport: callTransportConfig })
 }
 
 const DEFAULT_AGENT_MODEL = forcedRoute === 'local'

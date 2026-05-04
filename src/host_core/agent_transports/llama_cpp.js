@@ -25,7 +25,7 @@ export function createLlamaCppTransport(opts = {}) {
     try { onDebugRecord(record) } catch { /* debug must never affect execution */ }
   }
 
-  return async function callLlamaCppAgent({ model, messages }) {
+  const callLlamaCppAgent = async function callLlamaCppAgent({ model, messages }) {
     const requestPayload = { model, messages, stream: false }
     const url = `${baseUrl}/v1/chat/completions`
 
@@ -107,6 +107,10 @@ export function createLlamaCppTransport(opts = {}) {
       },
     }
   }
+
+  callLlamaCppAgent.capabilities = { supports_preload: false }
+
+  return callLlamaCppAgent
 }
 
 /**

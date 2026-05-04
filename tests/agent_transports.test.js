@@ -70,6 +70,65 @@ test('createLlamaCppTransport times out with AGENT_TRANSPORT_TIMEOUT', async () 
   })
 })
 
+test('createOllamaTransport forwards keep_alive and options from transport config', async () => {
+  let capturedBody = null
+  await withFetchMock(async (_url, opts = {}) => {
+    capturedBody = JSON.parse(opts.body ?? 'null')
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        model: 'llama3.2',
+        message: { role: 'assistant', content: 'hello' },
+        done: true,
+        done_reason: 'stop',
+        prompt_eval_count: 5,
+        eval_count: 3,
+        total_duration: 1000000,
+        load_duration: 100000,
+        prompt_eval_duration: 200000,
+        eval_duration: 700000,
+        created_at: '2024-01-01T00:00:00Z',
+      }),
+      text: async () => '',
+    }
+  }, async () => {
+    const callAgent = createOllamaTransport({ timeoutMs: 5000 })
+    await callAgent({
+      model: 'llama3.2',
+      messages: [{ role: 'user', content: 'ping' }],
+      transport: { provider: 'ollama', keep_alive: '30m', options: { num_ctx: 8192, temperature: 0.5 } },
+    })
+    assert.equal(capturedBody.keep_alive, '30m')
+    assert.deepEqual(capturedBody.options, { num_ctx: 8192, temperature: 0.5 })
+  })
+})
+
+test('createOllamaTransport ignores transport config when not provided', async () => {
+  let capturedBody = null
+  await withFetchMock(async (_url, opts = {}) => {
+    capturedBody = JSON.parse(opts.body ?? 'null')
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        model: 'llama3.2',
+        message: { role: 'assistant', content: 'hello' },
+        done: true,
+        done_reason: 'stop',
+        prompt_eval_count: 5,
+        eval_count: 3,
+      }),
+      text: async () => '',
+    }
+  }, async () => {
+    const callAgent = createOllamaTransport({ timeoutMs: 5000 })
+    await callAgent({ model: 'llama3.2', messages: [{ role: 'user', content: 'ping' }] })
+    assert.equal(capturedBody.keep_alive, undefined)
+    assert.equal(capturedBody.options, undefined)
+  })
+})
+
 test('createOllamaTransport times out with AGENT_TRANSPORT_TIMEOUT', async () => {
   await withFetchMock((_url, options = {}) => new Promise((resolve, reject) => {
     options.signal?.addEventListener('abort', () => {
@@ -88,5 +147,37 @@ test('createOllamaTransport times out with AGENT_TRANSPORT_TIMEOUT', async () =>
         return true
       },
     )
+  })
+})
+
+test('createOllamaTransport exposes capabilities.supports_preload=true', () => {
+  const callAgent = createOllamaTransport({})
+  assert.equal(callAgent.capabilities?.supports_preload, true)
+  assert.equal(typeof callAgent.load, 'function')
+})
+
+test('createLlamaCppTransport exposes capabilities.supports_preload=false', () => {
+  const callAgent = createLlamaCppTransport({})
+  assert.equal(callAgent.capabilities?.supports_preload, false)
+  assert.equal(typeof callAgent.load, 'undefined')
+})
+
+test('createOllamaTransport.load sends empty messages and returns ok', async () => {
+  let capturedBody = null
+  await withFetchMock(async (_url, opts = {}) => {
+    capturedBody = JSON.parse(opts.body ?? 'null')
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({}),
+      text: async () => '',
+    }
+  }, async () => {
+    const callAgent = createOllamaTransport({ timeoutMs: 5000 })
+    const result = await callAgent.load({ model: 'llama3.2' })
+    assert.equal(result.ok, true)
+    assert.equal(result.model, 'llama3.2')
+    assert.deepEqual(capturedBody.messages, [])
+    assert.equal(capturedBody.model, 'llama3.2')
   })
 })

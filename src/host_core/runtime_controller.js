@@ -57,6 +57,9 @@ export function createNextVRuntimeController({
   let nextVTimerHandles = []
   let nextVWorkspaceDir = ''
   let nextVEntrypointPath = ''
+  let nextVWorkspaceDirResolved = null
+  let nextVWorkspaceConfig = null
+  let nextVRuntimeCallHooks = null
 
   function clearNextVTimers() {
     nextVTimerHandles = clearTimerHandles(nextVTimerHandles)
@@ -78,6 +81,9 @@ export function createNextVRuntimeController({
     nextVRunner.stop()
     const snapshot = nextVRunner.getSnapshot()
     nextVRunner = null
+    nextVRuntimeCallHooks = null
+    nextVWorkspaceConfig = null
+    nextVWorkspaceDirResolved = null
     return snapshot
   }
 
@@ -252,9 +258,12 @@ export function createNextVRuntimeController({
 
     nextVWorkspaceDir = workspaceDir.relativePath
     nextVEntrypointPath = entrypoint.relativePath
+    nextVWorkspaceDirResolved = workspaceDir
+    nextVWorkspaceConfig = workspaceConfig
     const runtimeCallHooks = createHostAdapter({
       workspaceDir,
       workspaceConfig,
+      getWorkspaceConfig: () => nextVWorkspaceConfig,
       callAgent,
       defaultModel,
       slowAgentWarningMs,
@@ -276,6 +285,34 @@ export function createNextVRuntimeController({
       buildAgentRetryPrompt,
       toolRuntime,
     })
+    nextVRuntimeCallHooks = runtimeCallHooks
+
+    // Preload phase — blocking, best-effort, must not abort startup
+    const preloadMode = String(workspaceConfig?.runtime?.preload ?? 'none').trim()
+    if ((preloadMode === 'marked' || preloadMode === 'all') && typeof callAgent.load === 'function') {
+      const modelsMap = workspaceConfig?.models?.map ?? {}
+      const transportsMap = workspaceConfig?.transports?.map ?? {}
+      const candidates = Object.entries(modelsMap).filter(([, modelConfig]) => {
+        if (preloadMode === 'marked' && modelConfig.preload !== true) return false
+        const transportConfig = transportsMap[modelConfig.transport] ?? null
+        return transportConfig?.capabilities?.supports_preload === true
+      })
+      for (const [modelLabel, modelConfig] of candidates) {
+        const transportConfig = transportsMap[modelConfig.transport] ?? null
+        const modelId = String(modelConfig.model ?? '').trim()
+        if (!modelId) continue
+        const startMs = Date.now()
+        eventBus.publish('nextv_preload_start', { model: modelLabel, modelId })
+        try {
+          await callAgent.load({ model: modelId, transport: transportConfig })
+          eventBus.publish('nextv_preload_success', { model: modelLabel, modelId, durationMs: Date.now() - startMs })
+        } catch (err) {
+          eventBus.publish('nextv_preload_error', { model: modelLabel, modelId, error: String(err?.message ?? err) })
+          // must not crash startup
+        }
+      }
+    }
+
     let lastObservedState = initialState
 
     nextVRunner = createRunner({
@@ -430,6 +467,58 @@ export function createNextVRuntimeController({
     return snapshot
   }
 
+  function reloadConfig() {
+    if (!nextVRunner) {
+      throw new Error('nextV runtime not active')
+    }
+
+    const workspaceDir = nextVWorkspaceDirResolved || resolveWorkspaceDirectory(nextVWorkspaceDir)
+    const workspaceConfig = loadWorkspaceConfig(workspaceDir)
+    const effectsPolicy = normalizeEffectsPolicy(workspaceConfig?.nextv?.config?.effectsPolicy)
+
+    const configRefIssues = validateConfigReferences(workspaceConfig)
+    if (configRefIssues.length > 0) {
+      const transportIssues = configRefIssues.filter((i) => i.code === 'TRANSPORT_NOT_FOUND')
+      if (transportIssues.length > 0) {
+        const details = transportIssues.map((i) => i.message).join('; ')
+        throw new Error(`Transport configuration error(s): ${details}`)
+      }
+      if (effectsPolicy === 'strict') {
+        throw new Error(`Detected ${configRefIssues.length} config reference issue(s). Set nextv.json#effectsPolicy to "warn" to allow reload.`)
+      }
+    }
+
+    const forbiddenFieldIssues = validateNoForbiddenAgentFields(workspaceConfig)
+    if (forbiddenFieldIssues.length > 0 && effectsPolicy === 'strict') {
+      throw new Error(`Detected ${forbiddenFieldIssues.length} forbidden agent field(s). Agents must not define transport or other execution parameters.`)
+    }
+
+    nextVWorkspaceDirResolved = workspaceDir
+    nextVWorkspaceConfig = workspaceConfig
+    if (nextVRuntimeCallHooks && typeof nextVRuntimeCallHooks.clearConfigCache === 'function') {
+      nextVRuntimeCallHooks.clearConfigCache()
+    }
+
+    const payload = {
+      workspaceDir: workspaceDir.relativePath,
+      entrypointPath: nextVEntrypointPath,
+      workspaceConfig: {
+        models: workspaceConfig?.models?.status || 'not-loaded',
+        agents: workspaceConfig?.agents?.status || 'not-loaded',
+        tools: workspaceConfig?.tools?.status || 'not-loaded',
+        nextv: workspaceConfig?.nextv?.status || 'not-loaded',
+        operators: workspaceConfig?.operators?.status || 'not-loaded',
+        modelsSource: workspaceConfig?.models?.source || null,
+        agentsSource: workspaceConfig?.agents?.source || null,
+        toolsSource: workspaceConfig?.tools?.source || null,
+        nextvSource: workspaceConfig?.nextv?.file || null,
+        operatorsSource: workspaceConfig?.operators?.source || null,
+      },
+    }
+    eventBus.publish('nextv_config_reloaded', payload)
+    return payload
+  }
+
   function enqueue(rawEvent) {
     if (!nextVRunner) {
       throw new Error('nextV runtime not active')
@@ -507,6 +596,7 @@ export function createNextVRuntimeController({
   return {
     start,
     stop,
+    reloadConfig,
     enqueue,
     dispatchIngress,
     getSnapshot,

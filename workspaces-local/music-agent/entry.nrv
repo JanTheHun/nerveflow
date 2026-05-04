@@ -1,12 +1,13 @@
 include "intent_unknown.nrv"
 include "memory.nrv"
 include "music-select.nrv"
+include "user-wants-music.nrv"
 
 on external "user_message"
   # Classify user intent in parallel using both intent models
   instructions = file("entry-instructions.md")
   intent_contract = {
-    intent: ["play", "search", "remember", "recall", "delete", "update", "unclear"]
+    intent: ["play", "unclear"]
   }
   
   intent_results = parallel([
@@ -17,7 +18,7 @@ on external "user_message"
       returns=intent_contract
     ),
     agent(
-      "intent",
+      "intent-4",
       event.value,
       instructions,
       returns=intent_contract

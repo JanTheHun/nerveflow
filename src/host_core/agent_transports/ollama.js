@@ -22,8 +22,17 @@ export function createOllamaTransport(opts = {}) {
     try { onDebugRecord(record) } catch { /* debug must never affect execution */ }
   }
 
-  return async function callOllamaAgent({ model, messages }) {
+  const callOllamaAgent = async function callOllamaAgent({ model, messages, transport }) {
     const requestPayload = { model, messages, stream: false }
+
+    if (transport && typeof transport === 'object') {
+      if (typeof transport.keep_alive === 'string' && transport.keep_alive.trim()) {
+        requestPayload.keep_alive = transport.keep_alive.trim()
+      }
+      if (transport.options && typeof transport.options === 'object' && !Array.isArray(transport.options)) {
+        requestPayload.options = transport.options
+      }
+    }
 
     debug({ phase: 'request', url: `${baseUrl}/api/chat`, payload: requestPayload })
 
@@ -98,6 +107,34 @@ export function createOllamaTransport(opts = {}) {
       },
     }
   }
+
+  callOllamaAgent.capabilities = { supports_preload: true }
+
+  callOllamaAgent.load = async function loadOllamaModel({ model: loadModel }) {
+    const loadPayload = { model: loadModel, messages: [], stream: false }
+    debug({ phase: 'preload_request', url: `${baseUrl}/api/chat`, model: loadModel })
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+    if (typeof timeout?.unref === 'function') timeout.unref()
+    let response
+    try {
+      response = await fetch(`${baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(loadPayload),
+        signal: controller.signal,
+      })
+    } catch (err) {
+      clearTimeout(timeout)
+      debug({ phase: 'preload_error', model: loadModel, error: String(err?.message ?? err) })
+      throw err
+    }
+    clearTimeout(timeout)
+    debug({ phase: 'preload_response', ok: response.ok, status: response.status, model: loadModel })
+    return { ok: response.ok, model: loadModel }
+  }
+
+  return callOllamaAgent
 }
 
 /**

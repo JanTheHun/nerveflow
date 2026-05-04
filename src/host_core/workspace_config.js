@@ -397,6 +397,9 @@ export function loadWorkspaceNextVConfig({
       source: `${nextVDisplayPath}#modules`,
       map: {},
     },
+    runtime: {
+      preload: 'none',
+    },
   }
 
   if (existsSync(nextVPath)) {
@@ -405,6 +408,14 @@ export function loadWorkspaceNextVConfig({
 
     if (Object.prototype.hasOwnProperty.call(config.nextv.config, 'effectsPolicy')) {
       config.nextv.config.effectsPolicy = parseEffectsPolicy(config.nextv.config.effectsPolicy, 'nextv.json#effectsPolicy')
+    }
+
+    if (config.nextv.config.runtime != null) {
+      const VALID_PRELOAD = new Set(['none', 'lazy', 'marked', 'all'])
+      const rawPreload = config.nextv.config.runtime?.preload
+      if (typeof rawPreload === 'string' && VALID_PRELOAD.has(rawPreload)) {
+        config.runtime.preload = rawPreload
+      }
     }
 
     if (config.nextv.config.models != null) {
@@ -680,5 +691,11 @@ export function getConfiguredTransportsMap(workspaceConfig) {
   const declared = workspaceConfig?.transports?.map
   if (!declared || typeof declared !== 'object' || Array.isArray(declared)) return {}
   return { ...declared }
+}
+
+export function getConfiguredRuntimePreload(workspaceConfig) {
+  const VALID = new Set(['none', 'lazy', 'marked', 'all'])
+  const mode = workspaceConfig?.runtime?.preload
+  return VALID.has(mode) ? mode : 'none'
 }
 

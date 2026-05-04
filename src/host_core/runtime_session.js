@@ -43,8 +43,12 @@ function enrichAgentContractError(err, { agentName, line, statement, sourcePath,
   const hasAgentName = baseMessage.includes(`agent("${agentName}")`)
   const withAgent = hasAgentName ? baseMessage : `agent("${agentName}"): ${baseMessage}`
   const displayLine = hasSourceLine ? normalizedSourceLine : normalizedLine
-  const withLine = Number.isFinite(displayLine) && !withAgent.includes(`line ${displayLine}`)
-    ? `${withAgent} (line ${displayLine})`
+  const fileBasename = normalizedSourcePath ? normalizedSourcePath.replace(/\\/g, '/').split('/').pop() : ''
+  const locationStr = fileBasename && Number.isFinite(displayLine) && displayLine > 0
+    ? `${fileBasename}:${displayLine}`
+    : (Number.isFinite(displayLine) && displayLine > 0 ? `line ${displayLine}` : fileBasename)
+  const withLine = locationStr && !withAgent.includes(locationStr)
+    ? `${withAgent} (${locationStr})`
     : withAgent
 
   err.message = withLine
@@ -129,6 +133,7 @@ function normalizeAgentTransportResult(result) {
  * @param {object} opts
  * @param {object} opts.workspaceDir       - resolved workspace dir { absolutePath, relativePath }
  * @param {object} opts.workspaceConfig    - loaded workspace config (from workspace_config.js)
+ * @param {function} [opts.getWorkspaceConfig] - optional getter for live workspace config
  * @param {function} opts.callAgent        - transport fn: ({ model, messages }) => Promise<string|{text:string,metadata?:object}>
  * @param {string}  [opts.defaultModel]    - fallback model name if agent profile has none
  * @param {function} opts.resolvePathFromBaseDirectory - workspace-safe path resolver
@@ -143,6 +148,7 @@ function normalizeAgentTransportResult(result) {
 export function createHostAdapter({
   workspaceDir,
   workspaceConfig,
+  getWorkspaceConfig = null,
   callAgent,
   defaultModel = '',
   slowAgentWarningMs = 15000,
@@ -158,8 +164,17 @@ export function createHostAdapter({
   buildAgentRetryPrompt = null,
   toolRuntime = null,
 }) {
+  const readWorkspaceConfig = () => {
+    if (typeof getWorkspaceConfig === 'function') {
+      const liveConfig = getWorkspaceConfig()
+      if (liveConfig && typeof liveConfig === 'object') return liveConfig
+    }
+    if (workspaceConfig && typeof workspaceConfig === 'object') return workspaceConfig
+    return {}
+  }
+
   function resolveToolName(toolNameRaw) {
-    const aliases = workspaceConfig?.tools?.aliases ?? {}
+    const aliases = readWorkspaceConfig()?.tools?.aliases ?? {}
     const fallbackName = String(toolNameRaw ?? '').trim()
     let current = fallbackName
     const visited = new Set()
@@ -176,7 +191,7 @@ export function createHostAdapter({
   }
 
   function resolveAgentProfile(agentName) {
-    const profiles = workspaceConfig?.agents?.profiles ?? {}
+    const profiles = readWorkspaceConfig()?.agents?.profiles ?? {}
     return profiles[agentName] ?? null
   }
 
@@ -188,9 +203,10 @@ export function createHostAdapter({
       return resolvedAgentConfigCache.get(agentName)
     }
 
-    const profiles = workspaceConfig?.agents?.profiles ?? {}
-    const modelsMap = workspaceConfig?.models?.map ?? {}
-    const transportsMap = workspaceConfig?.transports?.map ?? {}
+    const config = readWorkspaceConfig()
+    const profiles = config?.agents?.profiles ?? {}
+    const modelsMap = config?.models?.map ?? {}
+    const transportsMap = config?.transports?.map ?? {}
 
     const agent = agentName ? profiles[agentName] : null
     if (agentName && !agent) {
@@ -250,13 +266,17 @@ export function createHostAdapter({
   }
 
   const adapter = {
+    clearConfigCache: () => {
+      resolvedAgentConfigCache.clear()
+    },
+
     getAgentCapabilities: () => {
       // Prefer runtime-detected capabilities (e.g. set directly on callAgent function by host).
       if (callAgent && typeof callAgent === 'function' && callAgent.capabilities && typeof callAgent.capabilities === 'object') {
         return callAgent.capabilities
       }
       // Fall back to config-declared transport metadata when no runtime detection is present.
-      const transportsMap = workspaceConfig?.transports?.map ?? {}
+      const transportsMap = readWorkspaceConfig()?.transports?.map ?? {}
       if (Object.keys(transportsMap).length > 0) {
         return { source: 'config', transports: transportsMap }
       }
@@ -266,7 +286,7 @@ export function createHostAdapter({
     callTool: async ({ name, args, positional, state, event, locals, line, statement }) => {
       const toolNameRaw = String(name ?? '').trim()
       const toolName = resolveToolName(toolNameRaw)
-      const allowedTools = workspaceConfig?.tools?.allow ?? null
+      const allowedTools = readWorkspaceConfig()?.tools?.allow ?? null
       if (allowedTools && !allowedTools.has(toolName)) {
         throw new Error(`Tool "${toolNameRaw}" is not allowed by workspace tools policy.`)
       }
@@ -431,6 +451,15 @@ export function createHostAdapter({
             : (slowWarningEmitted ? { elapsedMs, slowWarningEmitted } : null)
         )
         if (returns != null) {
+          if (validate === 'none') {
+            let lateBindValue
+            try {
+              lateBindValue = normalizeAgentFormattedOutput(raw, 'json')
+            } catch {
+              lateBindValue = raw
+            }
+            return { value: lateBindValue, metadata: metadataWithTiming }
+          }
           let parsed
           try {
             parsed = normalizeAgentFormattedOutput(raw, 'json')
@@ -481,6 +510,7 @@ export function createHostAdapter({
                   expression: on_contract_violation,
                   violation: {
                     type: 'contract_violation',
+                    message: String(err?.message ?? ''),
                     field: String(err?.path ?? ''),
                     expected: String(err?.expected ?? ''),
                     actual: String(err?.actual ?? ''),
@@ -535,7 +565,7 @@ export function createHostAdapter({
         throw new Error('operator() requires a non-empty operator id.')
       }
 
-      const configuredPath = String(workspaceConfig.operators.map?.[operatorId]?.entrypointPath ?? '').trim()
+      const configuredPath = String(readWorkspaceConfig()?.operators?.map?.[operatorId]?.entrypointPath ?? '').trim()
       let selectedPath = configuredPath
       if (!selectedPath) {
         const nrvFallbackPath = `operators/${operatorId}/main.nrv`

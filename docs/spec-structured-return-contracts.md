@@ -568,6 +568,7 @@ light = agent(
 ```json
 {
   "type": "contract_violation",
+  "message": "...",
   "field": "area",
   "expected": "enum(garage|other)",
   "actual": "cellar"
@@ -615,6 +616,10 @@ Compatibility note:
 ---
 
 # Scope (MVP)
+
+Related draft:
+
+- See [spec-late-contract-binding.md](spec-late-contract-binding.md) for a proposed extension that separates generation guidance from runtime enforcement via `validate="none"` and `try_bind(...)`.
 
 Included:
 

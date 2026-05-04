@@ -24,6 +24,15 @@ function hasContractLikeNamedArg(args) {
   return false
 }
 
+function hasStaticValidateNoneArg(args) {
+  for (const arg of args ?? []) {
+    if (arg?.kind !== 'named') continue
+    if (String(arg.name ?? '').trim() !== 'validate') continue
+    if (arg.expr?.type === 'string' && String(arg.expr?.value ?? '').trim().toLowerCase() === 'none') return true
+  }
+  return false
+}
+
 function mergeProvenanceLabels(left, right) {
   if (!left) return right || null
   if (!right) return left
@@ -55,7 +64,13 @@ function inferExprProvenance(expr, labelsByPath) {
 
   if (expr.type === 'call') {
     if (expr.name === 'agent') {
-      return hasContractLikeNamedArg(expr.args) ? PROVENANCE_BOUNDED : PROVENANCE_UNBOUNDED
+      const hasContract = hasContractLikeNamedArg(expr.args)
+      const isUnbound = hasStaticValidateNoneArg(expr.args)
+      return (hasContract && !isUnbound) ? PROVENANCE_BOUNDED : PROVENANCE_UNBOUNDED
+    }
+
+    if (expr.name === 'try_bind') {
+      return PROVENANCE_BOUNDED
     }
 
     let merged = null
@@ -91,10 +106,15 @@ function collectHandlerControlEdges(ir, bodyStart, bodyEnd, eventType) {
     if (!instr || typeof instr !== 'object') continue
 
     if (instr.op === 'agent_call') {
-      const provenance = hasContractLikeNamedArg(instr.args)
-        ? PROVENANCE_BOUNDED
-        : PROVENANCE_UNBOUNDED
+      const provenance = instr.unbound === true
+        ? PROVENANCE_UNBOUNDED
+        : (hasContractLikeNamedArg(instr.args) ? PROVENANCE_BOUNDED : PROVENANCE_UNBOUNDED)
       setPathLabel(instr.dst, provenance)
+      continue
+    }
+
+    if (instr.op === 'call' && instr.name === 'try_bind') {
+      setPathLabel(instr.dst, PROVENANCE_BOUNDED)
       continue
     }
 
@@ -300,9 +320,7 @@ function collectTransitionSignals(instr, state) {
   const pushAgentName = (nameRaw) => {
     const name = String(nameRaw ?? '').trim()
     if (!name) return
-    if (!state.agents.includes(name)) {
-      state.agents.push(name)
-    }
+    state.agents.push(name)
   }
 
   const visitExpr = (expr) => {
@@ -341,7 +359,9 @@ function collectTransitionSignals(instr, state) {
 
   if (instr?.op === 'agent_call') {
     state.hasAgent = true
-    pushAgentName(getLiteralAgentName(instr.args))
+    const agentName = getLiteralAgentName(instr.args)
+    pushAgentName(agentName)
+    if (agentName) state.callOrder.push({ kind: 'agent', name: agentName })
   }
 
   if (instr?.op === 'tool_call') {
@@ -355,6 +375,7 @@ function collectTransitionSignals(instr, state) {
     if (metadata?.effectful === true) {
       state.hasEffect = true
     }
+    if (toolName) state.callOrder.push({ kind: 'tool', name: toolName })
   }
 
   if (instr?.op === 'emit') {
@@ -496,6 +517,7 @@ export function extractEventGraph(astOrIR, options = {}) {
       agents: [],
       tools: [],
       outputs: [],
+      callOrder: [],
     }
     let hasExternalComplexity = false
 
@@ -540,6 +562,7 @@ export function extractEventGraph(astOrIR, options = {}) {
       })
     }
 
+    const hasMixedCallOrder = transitionState.agents.length > 0 && transitionState.tools.length > 0
     transitions.push({
       eventType: sourceEvent,
       subscriptionKind,
@@ -548,6 +571,7 @@ export function extractEventGraph(astOrIR, options = {}) {
       ...(transitionState.hasParallelAgents ? { hasParallelAgents: true } : {}),
       tools: transitionState.tools,
       outputs: transitionState.outputs,
+      ...(hasMixedCallOrder ? { callOrder: transitionState.callOrder } : {}),
       warnings,
     })
   }

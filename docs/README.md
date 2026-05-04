@@ -21,6 +21,7 @@ This documentation is for **users building workflows with Nerveflow**.
 ## Specifications
 
 - [spec-structured-return-contracts.md](spec-structured-return-contracts.md)
+- [spec-late-contract-binding.md](spec-late-contract-binding.md)
 - [spec-bounded-control-flow-provenance.md](spec-bounded-control-flow-provenance.md)
 
 ## Example scripts

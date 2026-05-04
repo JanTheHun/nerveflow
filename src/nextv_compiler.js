@@ -6,6 +6,15 @@ function defaultErrorFactory(partial) {
   return err
 }
 
+function hasStaticValidateNoneArg(args) {
+  for (const arg of args ?? []) {
+    if (arg?.kind !== 'named') continue
+    if (String(arg.name ?? '').trim() !== 'validate') continue
+    if (arg.expr?.type === 'string' && String(arg.expr?.value ?? '').trim().toLowerCase() === 'none') return true
+  }
+  return false
+}
+
 function makeCallInstruction(callExpr, line, statement, dst) {
   const base = {
     args: callExpr.args,
@@ -18,7 +27,8 @@ function makeCallInstruction(callExpr, line, statement, dst) {
     return { op: 'tool_call', ...base }
   }
   if (callExpr.name === 'agent') {
-    return { op: 'agent_call', ...base }
+    const unbound = hasStaticValidateNoneArg(callExpr.args)
+    return unbound ? { op: 'agent_call', unbound: true, ...base } : { op: 'agent_call', ...base }
   }
   if (callExpr.name === 'script') {
     return { op: 'script_call', ...base }

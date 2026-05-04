@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { NEXTV_AGENT_OUTPUT_FORMATS } from './nextv_agent_output.js'
+import { NEXTV_AGENT_OUTPUT_FORMATS, validateAgentReturnContract, normalizeAgentFormattedOutput } from './nextv_agent_output.js'
 import { compileAST } from './nextv_compiler.js'
 import { extractEventGraph } from './nextv_event_graph.js'
 
@@ -2139,13 +2139,13 @@ function buildFunctions(options, runtimeContext) {
 
       const returns = normalizeAgentReturnsValue(named?.returns ?? null, context)
       const validateRaw = String(named?.validate ?? '').trim().toLowerCase()
-      if (validateRaw && validateRaw !== 'strict' && validateRaw !== 'coerce') {
+      if (validateRaw && validateRaw !== 'strict' && validateRaw !== 'coerce' && validateRaw !== 'none') {
         throw nextvError({
           line,
           kind: 'runtime',
           code: 'INVALID_AGENT_VALIDATE',
           statement,
-          message: `agent() validate must be "strict" or "coerce"; received "${validateRaw}".`,
+          message: `agent() validate must be "strict", "coerce", or "none"; received "${validateRaw}".`,
         })
       }
       const validate = returns != null ? (validateRaw || 'coerce') : validateRaw
@@ -2164,6 +2164,16 @@ function buildFunctions(options, runtimeContext) {
       }
 
       const onViolationExpr = named?.on_contract_violation
+
+      if (validate === 'none' && (retryCount > 0 || onViolationExpr != null)) {
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_CALL_CONFIG',
+          statement,
+          message: 'agent() validate="none" is incompatible with retry_on_contract_violation and on_contract_violation.',
+        })
+      }
 
       if (typeof options.callAgent !== 'function') {
         runtimeUnavailable('AGENT_CALL_UNAVAILABLE', `agent("${agentName}") is not available in this runtime.`)
@@ -2260,13 +2270,13 @@ function buildFunctions(options, runtimeContext) {
 
       const returns = normalizeAgentReturnsValue(named?.returns ?? null, context)
       const validateRaw = String(named?.validate ?? '').trim().toLowerCase()
-      if (validateRaw && validateRaw !== 'strict' && validateRaw !== 'coerce') {
+      if (validateRaw && validateRaw !== 'strict' && validateRaw !== 'coerce' && validateRaw !== 'none') {
         throw nextvError({
           line,
           kind: 'runtime',
           code: 'INVALID_MODEL_VALIDATE',
           statement,
-          message: `model() validate must be "strict" or "coerce"; received "${validateRaw}".`,
+          message: `model() validate must be "strict", "coerce", or "none"; received "${validateRaw}".`,
         })
       }
       const validate = returns != null ? (validateRaw || 'coerce') : validateRaw
@@ -2285,6 +2295,16 @@ function buildFunctions(options, runtimeContext) {
       }
 
       const onViolationExpr = named?.on_contract_violation
+
+      if (validate === 'none' && (retryCount > 0 || onViolationExpr != null)) {
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_CALL_CONFIG',
+          statement,
+          message: 'model() validate="none" is incompatible with retry_on_contract_violation and on_contract_violation.',
+        })
+      }
 
       if (typeof options.callAgent !== 'function') {
         runtimeUnavailable('AGENT_CALL_UNAVAILABLE', `model("${modelName}") is not available in this runtime.`)
@@ -2417,6 +2437,42 @@ function buildFunctions(options, runtimeContext) {
 
       return result?.returnValue ?? null
     },
+    try_bind: async ({ positional, named, line, statement }) => {
+      const value = positional[0] ?? named?.value
+      const contract = positional[1] ?? named?.contract
+      if (contract == null || typeof contract !== 'object' || Array.isArray(contract)) {
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_CALL_CONFIG',
+          statement,
+          message: 'try_bind() requires an object contract as second argument.',
+        })
+      }
+      let parsed = value
+      if (typeof value === 'string') {
+        try {
+          parsed = normalizeAgentFormattedOutput(value, 'json')
+        } catch (parseErr) {
+          return { ok: false, error: { type: 'json_parse_error', message: String(parseErr?.message ?? 'JSON parse error'), raw: value } }
+        }
+      }
+      try {
+        const validated = validateAgentReturnContract(parsed, contract, 'strict')
+        return { ok: true, value: validated }
+      } catch (err) {
+        return {
+          ok: false,
+          error: {
+            type: 'contract_violation',
+            message: String(err?.message ?? ''),
+            field: String(err?.path ?? ''),
+            expected: String(err?.expected ?? ''),
+            actual: String(err?.actual ?? ''),
+          },
+        }
+      }
+    },
     ...customFns,
   }
 }
@@ -2477,7 +2533,7 @@ function resolveDeclaredEffectChannel(channelName, effectChannelsRaw) {
 
 export async function runNextVScript(source, options = {}) {
   const runtimeOptions = normalizeRuntimeOptions(options)
-  const statements = parseNextVScript(source, { baseDir: runtimeOptions.baseDir })
+  const statements = parseNextVScript(source, { baseDir: runtimeOptions.baseDir, filePath: runtimeOptions.filePath })
   const instructions = compileAST(statements, {
     strict: runtimeOptions.strict === true,
     errorFactory: nextvError,
@@ -2902,7 +2958,7 @@ export async function runNextVScriptFromFile(filePath, options = {}) {
   const absolutePath = resolve(filePath)
   const source = readFileSync(absolutePath, 'utf8')
   const baseDir = options.baseDir ?? dirname(absolutePath)
-  return runNextVScript(source, { ...options, baseDir })
+  return runNextVScript(source, { ...options, baseDir, filePath: absolutePath })
 }
 
 export { NextVError }

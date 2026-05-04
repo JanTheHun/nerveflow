@@ -2894,3 +2894,134 @@ test('parallel passes returns contract to child agents', async () => {
   assert.deepEqual(result.locals.results[1], { type: 'ok', score: 1 })
 })
 
+// --- Late contract binding (validate="none" + try_bind) ---
+
+test('agent() accepts validate="none" and returns parsed JSON', async () => {
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { classifier: { model: 'test-model' } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => '{"intent":"search"}',
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions,
+    normalizeAgentFormattedOutput,
+    validateAgentReturnContract,
+    buildAgentReturnContractGuidance,
+  })
+  const result = await runNextVScript(
+    'result = agent("classifier", "route this", returns={ intent: "" }, validate="none")',
+    { hostAdapter: adapter },
+  )
+  assert.deepEqual(result.locals.result, { intent: 'search' })
+})
+
+test('agent() with validate="none" returns raw string when JSON parse fails', async () => {
+  const result = await runNextVScript(
+    'result = agent("classifier", "route this", returns={ intent: "" }, validate="none")',
+    {
+      callAgent: async () => 'not valid json',
+    },
+  )
+  assert.equal(result.locals.result, 'not valid json')
+})
+
+test('agent() rejects validate="none" combined with retry_on_contract_violation', async () => {
+  await assert.rejects(
+    () => runNextVScript(
+      'result = agent("classifier", "route this", returns={ intent: "" }, validate="none", retry_on_contract_violation=1)',
+      { callAgent: async () => '{"intent":"search"}' },
+    ),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_CALL_CONFIG')
+      assert.match(err.message, /validate="none"/)
+      return true
+    },
+  )
+})
+
+test('agent() rejects validate="none" combined with on_contract_violation', async () => {
+  await assert.rejects(
+    () => runNextVScript(
+      'result = agent("classifier", "route this", returns={ intent: "" }, validate="none", on_contract_violation=emit("v", violation))',
+      { callAgent: async () => '{"intent":"search"}' },
+    ),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_CALL_CONFIG')
+      return true
+    },
+  )
+})
+
+test('model() accepts validate="none" and returns parsed JSON', async () => {
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: {} },
+      operators: { map: {} },
+    },
+    callAgent: async () => '{"intent":"classify"}',
+    defaultModel: 'gpt-4',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions,
+    normalizeAgentFormattedOutput,
+    validateAgentReturnContract,
+    buildAgentReturnContractGuidance,
+  })
+  const result = await runNextVScript(
+    'result = model("gpt-4", "route this", returns={ intent: "" }, validate="none")',
+    { hostAdapter: adapter },
+  )
+  assert.deepEqual(result.locals.result, { intent: 'classify' })
+})
+
+test('try_bind() returns ok=true with validated value on success', async () => {
+  const result = await runNextVScript([
+    'bound = try_bind({ intent: "search", confidence: 0.9 }, { intent: "", confidence: 0 })',
+  ].join('\n'), {})
+  assert.equal(result.locals.bound.ok, true)
+  assert.deepEqual(result.locals.bound.value, { intent: 'search', confidence: 0.9 })
+})
+
+test('try_bind() returns ok=false with json_parse_error on invalid JSON string', async () => {
+  const result = await runNextVScript([
+    'raw = "not json at all"',
+    'bound = try_bind(raw, { intent: "" })',
+  ].join('\n'), {})
+  assert.equal(result.locals.bound.ok, false)
+  assert.equal(result.locals.bound.error.type, 'json_parse_error')
+})
+
+test('try_bind() returns ok=false with contract_violation on schema mismatch', async () => {
+  const result = await runNextVScript([
+    'bound = try_bind({ intent: "search" }, { intent: "", confidence: 0 })',
+  ].join('\n'), {})
+  assert.equal(result.locals.bound.ok, false)
+  assert.equal(result.locals.bound.error.type, 'contract_violation')
+  assert.equal(result.locals.bound.error.field, 'confidence')
+})
+
+test('try_bind() throws INVALID_CALL_CONFIG when contract is not an object', async () => {
+  await assert.rejects(
+    () => runNextVScript('bound = try_bind("data", "not-a-contract")', {}),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_CALL_CONFIG')
+      assert.match(err.message, /try_bind/)
+      return true
+    },
+  )
+})
+

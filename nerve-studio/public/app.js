@@ -1374,7 +1374,6 @@ function clearNextVGraphOutput() {
     window.clearInterval(nextVGraphState.runtimeAgentTickerId)
     nextVGraphState.runtimeAgentTickerId = null
   }
-  nextVGraphState.runtimeAgentCallTimersByNode.clear()
   nextVGraphState.agentTimerLabelElements.clear()
   nextVGraphState.detailPopoverEl = null
   nextVGraphState.canvasEl = null
@@ -2560,28 +2559,7 @@ function formatNextVGraphAgentElapsedMs(value) {
 }
 
 function syncNextVGraphAgentTicker() {
-  let hasActiveAgentCalls = false
-  for (const timerState of nextVGraphState.runtimeAgentCallTimersByNode.values()) {
-    if (timerState?.active === true) {
-      hasActiveAgentCalls = true
-      break
-    }
-  }
-
-  if (hasActiveAgentCalls) {
-    if (!nextVGraphState.runtimeAgentTickerId) {
-      nextVGraphState.runtimeAgentTickerId = window.setInterval(() => {
-        applyNextVGraphRuntimeVisuals()
-        syncNextVGraphAgentTicker()
-      }, 120)
-    }
-    return
-  }
-
-  if (nextVGraphState.runtimeAgentTickerId) {
-    window.clearInterval(nextVGraphState.runtimeAgentTickerId)
-    nextVGraphState.runtimeAgentTickerId = null
-  }
+  nextVGraphTimerApi.syncTicker(nextVGraphState, window, applyNextVGraphRuntimeVisuals)
 }
 
 function extractExecutionAgentElapsedMs(result) {
@@ -2596,36 +2574,13 @@ function extractExecutionAgentElapsedMs(result) {
 }
 
 function finalizeNextVGraphActiveAgentTimers(options = {}) {
-  const nowMs = Date.now()
-  const elapsedOverrideMs = Number(options.elapsedMs)
-  const hasElapsedOverride = Number.isFinite(elapsedOverrideMs) && elapsedOverrideMs >= 0
-  let changed = false
-  let finalizedCount = 0
-
-  for (const [nodeName, timerState] of nextVGraphState.runtimeAgentCallTimersByNode.entries()) {
-    if (timerState?.active !== true) continue
-
-    const startMs = Number(timerState?.startMs)
-    const computedElapsedMs = Math.max(0, nowMs - (Number.isFinite(startMs) ? startMs : nowMs))
-    const elapsedMs = hasElapsedOverride
-      ? Math.max(computedElapsedMs, elapsedOverrideMs)
-      : computedElapsedMs
-
-    nextVGraphState.runtimeAgentCallTimersByNode.set(nodeName, {
-      active: false,
-      startMs: Number.isFinite(startMs) ? startMs : Math.max(0, nowMs - elapsedMs),
-      elapsedMs,
-    })
-    changed = true
-    finalizedCount += 1
-  }
-
-  if (changed) {
-    syncNextVGraphAgentTicker()
-    applyNextVGraphRuntimeVisuals()
-  }
-
-  return finalizedCount
+  return nextVGraphTimerApi.finalizeActive(
+    nextVGraphState,
+    options,
+    Date.now,
+    window,
+    applyNextVGraphRuntimeVisuals,
+  )
 }
 
 function resetNextVGraphRuntimeState(options = {}) {
@@ -4765,6 +4720,7 @@ function renderNextVGraph(data = {}, options = {}) {
   applyNextVGraphZoom()
   setSelectedGraphNode(nextVGraphState.selectedNodeId)
   applyNextVGraphRuntimeVisuals()
+  syncNextVGraphAgentTicker()
   flushNextVGraphPendingTimerPulses()
   window.requestAnimationFrame(() => {
     if (!preserveViewport) {
@@ -7644,6 +7600,8 @@ function openNextVStream() {
   nextVEventSource.addEventListener('nextv_error', (evt) => {
     try {
       const payload = JSON.parse(evt.data)
+      finalizeNextVGraphActiveAgentTimers()
+      applyNextVGraphRuntimeVisuals()
       appendNextVErrorLog(payload)
       if (payload?.snapshot) renderNextVSnapshot(payload.snapshot)
       const { line, sourcePath } = getErrorMessageAndSource(payload)

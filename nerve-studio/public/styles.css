@@ -421,6 +421,27 @@ body.mode-nextv .open-file-tabs-row + .panel-editor-shell {
   line-height: 1;
 }
 
+.open-file-tab-graph-drop {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px dashed #3a5268;
+  border-radius: 4px;
+  background: transparent;
+  color: #4a647d;
+  font-size: 11px;
+  cursor: default;
+  white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.open-file-tab-graph-drop.drag-over {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(56, 139, 253, 0.08);
+}
+
 .panel-badge {
   display: inline-block;
   margin-left: 8px;

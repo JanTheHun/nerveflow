@@ -73,6 +73,7 @@
           <button type="button" id="nextv-run-btn" onclick="runNextVRuntime()" hidden>run</button>
           <button type="button" id="nextv-start-btn" onclick="startNextVRuntime()">start</button>
           <button type="button" id="nextv-stop-btn" onclick="stopNextVRuntime()" disabled>stop</button>
+          <button type="button" id="nextv-reload-config-btn" onclick="reloadNextVRuntimeConfig()" disabled>reload config</button>
           <button id="nextv-refresh-snapshot-btn" type="button" onclick="refreshNextVSnapshot()">snapshot</button>
         </div>
         <div id="nextv-ingress-controls-row" class="footer-row nextv-ingress-controls-row">
@@ -291,7 +292,6 @@
             </div>
             <div id="user-input-section" class="panel-section user-input-section">
               <div class="panel-header">
-                <span>input</span>
               </div>
               <div id="nextv-input-tabs" class="panel-tabs" role="tablist" aria-label="nextv input channels"></div>
               <div id="nextv-input-external-pane" class="nextv-input-pane" role="tabpanel">
@@ -325,7 +325,6 @@
             <div id="user-panel-splitter" class="panel-vsplitter" role="separator" aria-label="Split user input and output panes"></div>
             <div id="user-output-section" class="panel-section">
               <div class="panel-header">
-                <span>user output</span>
                 <div id="user-output-channel-filters" class="user-output-channel-filters" role="group" aria-label="user output channels">
                 </div>
                 <button type="button" class="panel-action" onclick="clearUserOutputPanel()">clear</button>
@@ -350,7 +349,8 @@
             <button id="nextv-tab-console" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="setNextVDevTab('console')">console</button>
           </div>
           <span id="output-header-badge" class="panel-badge badge-output">text</span>
-          <button type="button" class="panel-action" onclick="clearOutputPanel()">clear</button>
+          <button type="button" class="panel-action" onclick="clearOutputPanel()" style="margin-left:auto">clear</button>
+          <button type="button" class="panel-icon-btn" onclick="toggleNextVDevConsole()" title="close panel" aria-label="close panel">✕</button>
         </div>
         <div id="nextv-events-output" class="panel-scroll" role="tabpanel" aria-labelledby="nextv-tab-events"></div>
         <div id="trace-shell" class="trace-shell panel-scroll" role="tabpanel" aria-labelledby="nextv-tab-trace">
@@ -398,6 +398,7 @@
 
   <script src="dagre.min.js"></script>
   <script src="nextv_graph_mapping.js?v=20260429a"></script>
-  <script src="app.js?v=20260503a"></script>
+  <script src="nextv_graph_timer_api.js?v=20260503a"></script>
+  <script type="module" src="src-app/14_init.js?v=20260504a"></script>
 </body>
 </html>

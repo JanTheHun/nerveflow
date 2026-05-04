@@ -749,12 +749,21 @@ function resolvePathFromBaseDirectory(baseDirectoryAbsolutePath, inputPath, kind
   }
 }
 
-async function callOllamaAgent({ model, messages }) {
+async function callOllamaAgent({ model, messages, transport }) {
   const baseUrl = String(process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/+$/, '')
   const requestPayload = {
     model,
     messages,
     stream: false,
+  }
+
+  if (transport && typeof transport === 'object') {
+    if (typeof transport.keep_alive === 'string' && transport.keep_alive.trim()) {
+      requestPayload.keep_alive = transport.keep_alive.trim()
+    }
+    if (transport.options && typeof transport.options === 'object' && !Array.isArray(transport.options)) {
+      requestPayload.options = transport.options
+    }
   }
 
   appendOllamaDebugRecord({
@@ -1446,6 +1455,27 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true, snapshot })
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/nextv/reload-config') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (runtimeTarget === 'remote-observe') {
+      return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
+    }
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external') {
+      return sendJson(res, 405, { error: 'config reload is currently supported only in embedded runtime mode' })
+    }
+
+    if (!runtimeController.isActive()) {
+      return sendJson(res, 404, { error: 'nextV runtime not active' })
+    }
+
+    try {
+      const payload = runtimeController.reloadConfig()
+      return sendJson(res, 200, { ok: true, ...payload })
+    } catch (err) {
+      return sendJson(res, 400, { error: String(err?.message ?? err) })
+    }
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/nextv/event') {
     const runtimeTarget = resolveRuntimeTarget(url)
     if (runtimeTarget === 'remote-observe') {
@@ -1597,7 +1627,13 @@ async function handleApi(req, res, url) {
             ...buildRemoteModeMetadata(runtimeTarget),
           })
         }
-        return sendRemoteConnectionUnavailable(res, String(err?.message ?? err), runtimeTarget)
+        // Not connected yet (e.g. no runtime started) — not an error, just idle
+        return sendJson(res, 200, {
+          ok: true,
+          running: false,
+          snapshot: null,
+          ...buildRemoteModeMetadata(runtimeTarget),
+        })
       }
     }
 

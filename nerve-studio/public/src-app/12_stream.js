@@ -69,6 +69,7 @@ import {
 import {
   extractExecutionAgentElapsedMs,
   finalizeNextVGraphActiveAgentTimers,
+  reconcileNextVGraphAgentTimersFromExecution,
   resetNextVGraphRuntimeState,
   beginNextVGraphExecutionTrail,
   flashNextVGraphExternalEvent,
@@ -209,6 +210,7 @@ export function openNextVStream() {
         nextVGraphState.runtimeActiveNodes.add(eventType)
         nextVGraphState.runtimeActiveNodes.add(fallbackHandlerId)
       }
+      reconcileNextVGraphAgentTimersFromExecution(nextVGraphState.runtimeLastDispatchedNode, payload?.result)
       const fallbackFinalizedCount = finalizeNextVGraphActiveAgentTimers({ elapsedMs: extractExecutionAgentElapsedMs(payload?.result) })
       if (fallbackFinalizedCount > 0) {
         appendNextVLogRow(`[nextv:agent_timer] fallback finalizer closed ${fallbackFinalizedCount} active timer${fallbackFinalizedCount === 1 ? '' : 's'}`, 'step')

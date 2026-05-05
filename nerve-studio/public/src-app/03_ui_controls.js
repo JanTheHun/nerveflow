@@ -751,6 +751,7 @@ export function clearNextVGraphOutput() {
     window.clearInterval(nextVGraphState.runtimeAgentTickerId)
     nextVGraphState.runtimeAgentTickerId = null
   }
+  nextVGraphState.handlerLabelLineElements.clear()
   nextVGraphState.agentTimerLabelElements.clear()
   nextVGraphState.detailPopoverEl = null
   nextVGraphState.canvasEl = null

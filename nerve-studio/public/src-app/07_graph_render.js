@@ -41,6 +41,7 @@ import {
   buildNextVControlGraphArtifacts,
   formatTransitionClassification,
   getNextVGraphHandlerLabel,
+  getNextVGraphHandlerLabelLines,
   splitNextVGraphHandlerLabelLines,
   buildNextVGraphTransitionLookup,
   appendTransitionChip
@@ -193,6 +194,7 @@ export function renderNextVGraph(data = {}, options = {}) {
   nextVGraphState.nodeElements = new Map()
   nextVGraphState.edgeElements = new Map()
   nextVGraphState.stepLabelElements = new Map()
+  nextVGraphState.handlerLabelLineElements = new Map()
   nextVGraphState.agentTimerLabelElements = new Map()
 
   const nodeById = new Map(graphNodes.map((node) => [node.id, node]))
@@ -992,7 +994,7 @@ export function renderNextVGraph(data = {}, options = {}) {
           ? getNextVGraphHandlerLabel(nodeObj, transition)
           : (nodeObj.eventType ?? nodeId)
     const labelLines = isHandlerNode
-      ? splitNextVGraphHandlerLabelLines(label, { maxLineLength: 20, maxLines: 3 })
+      ? getNextVGraphHandlerLabelLines(nodeObj, transition)
       : [label]
     const visual = getNextVGraphNodeVisual(nodeObj, isEffectNode ? String(effectMeta?.label ?? '') : '')
     const titleParts = [label]
@@ -1038,17 +1040,20 @@ export function renderNextVGraph(data = {}, options = {}) {
     text.setAttribute('x', String(pos.x))
     text.setAttribute('y', String(pos.y))
     text.setAttribute('dominant-baseline', 'middle')
-    if (isHandlerNode && labelLines.length > 1) {
+    if (isHandlerNode) {
       text.textContent = ''
       const lineHeight = 12
       const startDy = -((labelLines.length - 1) * lineHeight) / 2
+      const tspans = []
       for (let idx = 0; idx < labelLines.length; idx++) {
         const tspan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan')
         tspan.setAttribute('x', String(pos.x))
         tspan.setAttribute('dy', String(idx === 0 ? startDy : lineHeight))
         tspan.textContent = String(labelLines[idx] ?? '')
         text.appendChild(tspan)
+        tspans.push(tspan)
       }
+      nextVGraphState.handlerLabelLineElements.set(nodeId, tspans)
     } else {
       text.textContent = label
     }
@@ -1108,13 +1113,7 @@ export function renderNextVGraph(data = {}, options = {}) {
       nextVGraphState.stepLabelElements.set(nodeId, stepTag)
 
       if (hasAgentCalls) {
-        const timerTag = document.createElementNS('http://www.w3.org/2000/svg', 'text')
-        timerTag.setAttribute('x', String(pos.x - visual.badgeOffsetX))
-        timerTag.setAttribute('y', String(pos.y + visual.badgeOffsetY - 2))
-        timerTag.setAttribute('class', 'nextv-graph-node-agent-timer')
-        timerTag.textContent = ''
-        group.appendChild(timerTag)
-        nextVGraphState.agentTimerLabelElements.set(nodeId, timerTag)
+        nextVGraphState.agentTimerLabelElements.set(nodeId, null)
       }
     }
 

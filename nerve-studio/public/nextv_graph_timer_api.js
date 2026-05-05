@@ -5,6 +5,22 @@
 ;(function (global) {
   'use strict'
 
+  function getTimerSlots(timerState) {
+    if (Array.isArray(timerState?.slots)) return timerState.slots
+    if (timerState && typeof timerState === 'object') return [timerState]
+    return []
+  }
+
+  function replaceTimerState(timerState, nextSlots) {
+    if (Array.isArray(timerState?.slots)) {
+      return {
+        ...timerState,
+        slots: nextSlots,
+      }
+    }
+    return nextSlots[0] ?? { active: false, startMs: 0, elapsedMs: 0 }
+  }
+
   /**
    * Syncs the recurring interval ticker based on whether any agent-call timer
    * in `state.runtimeAgentCallTimersByNode` is still active.
@@ -19,7 +35,8 @@
   function syncTicker(state, win, onUpdate) {
     let hasActiveAgentCalls = false
     for (const timerState of state.runtimeAgentCallTimersByNode.values()) {
-      if (timerState?.active === true) {
+      const slots = getTimerSlots(timerState)
+      if (slots.some((slot) => slot?.active === true)) {
         hasActiveAgentCalls = true
         break
       }
@@ -64,21 +81,30 @@
     let finalizedCount = 0
 
     for (const [nodeName, timerState] of state.runtimeAgentCallTimersByNode.entries()) {
-      if (timerState?.active !== true) continue
+      const slots = getTimerSlots(timerState)
+      let nodeChanged = false
+      const nextSlots = slots.map((slot) => {
+        if (slot?.active !== true) return slot
 
-      const startMs = Number(timerState?.startMs)
-      const computedElapsedMs = Math.max(0, nowMs - (Number.isFinite(startMs) ? startMs : nowMs))
-      const elapsedMs = hasElapsedOverride
-        ? Math.max(computedElapsedMs, elapsedOverrideMs)
-        : computedElapsedMs
+        const startMs = Number(slot?.startMs)
+        const computedElapsedMs = Math.max(0, nowMs - (Number.isFinite(startMs) ? startMs : nowMs))
+        const elapsedMs = hasElapsedOverride
+          ? Math.max(computedElapsedMs, elapsedOverrideMs)
+          : computedElapsedMs
 
-      state.runtimeAgentCallTimersByNode.set(nodeName, {
-        active: false,
-        startMs: Number.isFinite(startMs) ? startMs : Math.max(0, nowMs - elapsedMs),
-        elapsedMs,
+        nodeChanged = true
+        finalizedCount += 1
+        return {
+          active: false,
+          startMs: Number.isFinite(startMs) ? startMs : Math.max(0, nowMs - elapsedMs),
+          elapsedMs,
+        }
       })
+
+      if (!nodeChanged) continue
+
+      state.runtimeAgentCallTimersByNode.set(nodeName, replaceTimerState(timerState, nextSlots))
       changed = true
-      finalizedCount += 1
     }
 
     if (changed) {

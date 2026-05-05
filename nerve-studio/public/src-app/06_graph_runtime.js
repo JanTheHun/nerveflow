@@ -12,6 +12,7 @@ import {
   getNextVGraphRenderScale,
   getNextVGraphScaledPadding,
   clampNextVGraphZoom,
+  getNextVGraphHandlerLabelLines,
   splitNextVGraphHandlerLabelLines
 } from './05_graph_viewport.js'
 
@@ -54,6 +55,123 @@ export function extractExecutionAgentElapsedMs(result) {
     maxElapsedMs = maxElapsedMs == null ? elapsedMs : Math.max(maxElapsedMs, elapsedMs)
   }
   return maxElapsedMs
+}
+
+function getNextVGraphTransitionForHandlerNode(nodeId) {
+  const normalizedNodeId = String(nodeId ?? '').trim()
+  if (!normalizedNodeId.startsWith('handler:')) return null
+  const eventType = normalizedNodeId.slice('handler:'.length)
+  return (Array.isArray(nextVGraphState.transitions) ? nextVGraphState.transitions : []).find(
+    (transition) => String(transition?.eventType ?? '').trim() === eventType,
+  ) ?? null
+}
+
+function getNextVGraphAgentEntriesForHandlerNode(nodeId) {
+  const transition = getNextVGraphTransitionForHandlerNode(nodeId)
+  const entries = Array.isArray(transition?.agentEntries)
+    ? transition.agentEntries.filter((entry) => entry && typeof entry === 'object')
+    : []
+  if (entries.length > 0) return entries
+
+  const agents = Array.isArray(transition?.agents)
+    ? transition.agents.map((name) => ({ name: String(name ?? '').trim(), line: null })).filter((entry) => entry.name)
+    : []
+  return agents
+}
+
+function ensureNextVGraphAgentTimerRecord(nodeId) {
+  const entries = getNextVGraphAgentEntriesForHandlerNode(nodeId)
+  const slotCount = Math.max(1, entries.length || 0)
+  const existing = nextVGraphState.runtimeAgentCallTimersByNode.get(nodeId)
+  const slots = Array.isArray(existing?.slots) ? existing.slots.slice(0, slotCount) : []
+  while (slots.length < slotCount) {
+    slots.push({ active: false, startMs: 0, elapsedMs: 0 })
+  }
+  const record = {
+    slots,
+    nextStartIndex: Number.isInteger(existing?.nextStartIndex) ? existing.nextStartIndex : 0,
+  }
+  nextVGraphState.runtimeAgentCallTimersByNode.set(nodeId, record)
+  return record
+}
+
+function findNextVGraphAgentStartSlot(record) {
+  const slots = Array.isArray(record?.slots) ? record.slots : []
+  if (slots.length === 0) return 0
+
+  const startIndex = Number.isInteger(record?.nextStartIndex) ? record.nextStartIndex : 0
+  for (let offset = 0; offset < slots.length; offset += 1) {
+    const idx = (startIndex + offset) % slots.length
+    const slot = slots[idx]
+    if (slot?.active !== true && Math.max(0, Number(slot?.elapsedMs) || 0) === 0) {
+      return idx
+    }
+  }
+  for (let offset = 0; offset < slots.length; offset += 1) {
+    const idx = (startIndex + offset) % slots.length
+    const slot = slots[idx]
+    if (slot?.active !== true) return idx
+  }
+  return startIndex % slots.length
+}
+
+function findNextVGraphAgentFinishSlot(record) {
+  const slots = Array.isArray(record?.slots) ? record.slots : []
+  let bestIndex = -1
+  let bestStartMs = Number.POSITIVE_INFINITY
+  for (let idx = 0; idx < slots.length; idx += 1) {
+    const slot = slots[idx]
+    if (slot?.active !== true) continue
+    const startMs = Number(slot?.startMs)
+    const resolvedStart = Number.isFinite(startMs) ? startMs : 0
+    if (resolvedStart < bestStartMs) {
+      bestStartMs = resolvedStart
+      bestIndex = idx
+    }
+  }
+  return bestIndex >= 0 ? bestIndex : 0
+}
+
+export function reconcileNextVGraphAgentTimersFromExecution(nodeId, result) {
+  const normalizedNodeId = String(nodeId ?? '').trim()
+  if (!normalizedNodeId) return false
+
+  const calls = Array.isArray(result?.agentCalls) ? result.agentCalls : []
+  const entries = getNextVGraphAgentEntriesForHandlerNode(normalizedNodeId)
+  if (calls.length === 0 || entries.length === 0) return false
+
+  const indicesByLine = new Map()
+  for (let idx = 0; idx < entries.length; idx += 1) {
+    const line = Number(entries[idx]?.line)
+    if (!Number.isFinite(line)) continue
+    if (!indicesByLine.has(line)) indicesByLine.set(line, [])
+    indicesByLine.get(line).push(idx)
+  }
+
+  const slots = Array.from({ length: Math.max(1, entries.length) }, () => ({ active: false, startMs: 0, elapsedMs: 0 }))
+  let fallbackIndex = 0
+  for (const call of calls) {
+    const callLine = Number(call?.line)
+    let slotIndex = -1
+    if (Number.isFinite(callLine)) {
+      const lineIndices = indicesByLine.get(callLine)
+      if (Array.isArray(lineIndices) && lineIndices.length > 0) {
+        slotIndex = lineIndices.shift()
+      }
+    }
+    if (slotIndex < 0) {
+      slotIndex = Math.min(fallbackIndex, slots.length - 1)
+      fallbackIndex += 1
+    }
+    const elapsedMs = Math.max(0, Number(call?.metadata?.elapsedMs) || 0)
+    slots[slotIndex] = { active: false, startMs: 0, elapsedMs }
+  }
+
+  nextVGraphState.runtimeAgentCallTimersByNode.set(normalizedNodeId, {
+    slots,
+    nextStartIndex: Math.min(calls.length, slots.length - 1),
+  })
+  return true
 }
 
 export function finalizeNextVGraphActiveAgentTimers(options = {}) {
@@ -591,8 +709,8 @@ export function applyNextVGraphRuntimeVisuals() {
     const isTriggeredExternal = nextVGraphState.runtimeTriggeredExternalNodes.has(nodeName)
     const stepValue = nextVGraphState.runtimeStepByNode.get(nodeName)
     const stepLabel = nextVGraphState.stepLabelElements.get(nodeName)
-    const agentTimerLabel = nextVGraphState.agentTimerLabelElements.get(nodeName)
-    const agentTimerState = nextVGraphState.runtimeAgentCallTimersByNode.get(nodeName)
+    const handlerLineElements = nextVGraphState.handlerLabelLineElements.get(nodeName)
+    const agentTimerRecord = nextVGraphState.runtimeAgentCallTimersByNode.get(nodeName)
 
     nodeElement.classList.toggle('is-active', isActive)
     nodeElement.classList.toggle('is-runtime-warning', hasWarning)
@@ -611,21 +729,25 @@ export function applyNextVGraphRuntimeVisuals() {
       }
     }
 
-    if (agentTimerLabel) {
-      const startMs = Number(agentTimerState?.startMs)
-      const resolvedElapsedMs = (agentTimerState?.active === true)
-        ? Math.max(0, nowMs - (Number.isFinite(startMs) ? startMs : nowMs))
-        : Math.max(0, Number(agentTimerState?.elapsedMs) || 0)
-      const shouldShowTimer = agentTimerState?.active === true || resolvedElapsedMs > 0
-
-      if (shouldShowTimer) {
-        agentTimerLabel.textContent = formatNextVGraphAgentElapsedMs(resolvedElapsedMs)
-        agentTimerLabel.classList.add('visible')
-        agentTimerLabel.classList.toggle('running', agentTimerState?.active === true)
-      } else {
-        agentTimerLabel.textContent = ''
-        agentTimerLabel.classList.remove('visible')
-        agentTimerLabel.classList.remove('running')
+    if (Array.isArray(handlerLineElements) && nodeName.startsWith('handler:')) {
+      const transition = getNextVGraphTransitionForHandlerNode(nodeName)
+      const nodeObj = nextVGraphState.nodes.find((entry) => entry?.id === nodeName)
+      const timerSlots = Array.isArray(agentTimerRecord?.slots)
+        ? agentTimerRecord.slots.map((slot) => {
+          const startMs = Number(slot?.startMs)
+          const resolvedElapsedMs = slot?.active === true
+            ? Math.max(0, nowMs - (Number.isFinite(startMs) ? startMs : nowMs))
+            : Math.max(0, Number(slot?.elapsedMs) || 0)
+          return {
+            active: slot?.active === true,
+            startMs,
+            elapsedMs: resolvedElapsedMs,
+          }
+        })
+        : []
+      const displayLines = getNextVGraphHandlerLabelLines(nodeObj, transition, { timerSlots })
+      for (let idx = 0; idx < handlerLineElements.length; idx += 1) {
+        handlerLineElements[idx].textContent = String(displayLines[idx] ?? '')
       }
     }
   }
@@ -811,25 +933,31 @@ export function handleNextVGraphRuntimeEvent(runtimeEvent) {
     const runtimeEventTimestampMs = parseNextVGraphRuntimeEventTimestampMs(runtimeEvent)
 
     if (currentNode && toolName === 'agent') {
+      const timerRecord = ensureNextVGraphAgentTimerRecord(currentNode)
       if (runtimeEvent.type === 'tool_call') {
-        nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, {
+        const slotIndex = findNextVGraphAgentStartSlot(timerRecord)
+        timerRecord.slots[slotIndex] = {
           active: true,
           startMs: runtimeEventTimestampMs,
           elapsedMs: 0,
-        })
+        }
+        timerRecord.nextStartIndex = Math.min(slotIndex + 1, timerRecord.slots.length - 1)
+        nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, timerRecord)
       } else {
-        const currentTimerState = nextVGraphState.runtimeAgentCallTimersByNode.get(currentNode)
+        const slotIndex = findNextVGraphAgentFinishSlot(timerRecord)
+        const currentTimerState = timerRecord.slots[slotIndex]
         const metadataElapsedMs = Number(runtimeEvent?.result?.metadata?.elapsedMs)
         const startMs = Number(currentTimerState?.startMs)
         const elapsedMs = Number.isFinite(metadataElapsedMs)
           ? Math.max(0, metadataElapsedMs)
           : Math.max(0, runtimeEventTimestampMs - (Number.isFinite(startMs) ? startMs : runtimeEventTimestampMs))
 
-        nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, {
+        timerRecord.slots[slotIndex] = {
           active: false,
           startMs: Number.isFinite(startMs) ? startMs : Math.max(0, runtimeEventTimestampMs - elapsedMs),
           elapsedMs,
-        })
+        }
+        nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, timerRecord)
       }
 
       syncNextVGraphAgentTicker()
@@ -1108,4 +1236,4 @@ export function buildNextVGraphLayout(graphNodes, options = {}) {
 
   return { width, height, positions, containers, fileCount, nodeGroupById, edgeBendpoints }
 }
-
+

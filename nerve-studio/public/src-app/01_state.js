@@ -159,6 +159,7 @@ const nextVGraphState = {
   nodeElements: new Map(),
   edgeElements: new Map(),
   stepLabelElements: new Map(),
+  handlerLabelLineElements: new Map(),
   agentTimerLabelElements: new Map(),
   runtimeStepByNode: new Map(),
   runtimeAgentCallTimersByNode: new Map(),
@@ -405,4 +406,4 @@ const filetreeDeleteDesc = document.getElementById('filetree-delete-desc')
 const filetreeDeleteTimer = document.getElementById('filetree-delete-timer')
 const splitter = document.getElementById('panel-splitter')
 const workspace = document.getElementById('workspace')
-
+

@@ -404,6 +404,13 @@ export function getTransitionClassName(classification) {
   return 'unknown'
 }
 
+function formatInlineAgentElapsedMs(value) {
+  const elapsedMs = Math.max(0, Number(value) || 0)
+  if (elapsedMs >= 10000) return `${(elapsedMs / 1000).toFixed(1)}s`
+  if (elapsedMs >= 1000) return `${(elapsedMs / 1000).toFixed(2)}s`
+  return `${Math.round(elapsedMs)}ms`
+}
+
 export function getControlProvenanceClass(value) {
   if (typeof nextVGraphMappingApi?.getControlProvenanceClass === 'function') {
     return nextVGraphMappingApi.getControlProvenanceClass(value)
@@ -471,6 +478,10 @@ export function formatTransitionClassification(classification) {
 }
 
 export function getNextVGraphHandlerLabel(nodeObj, transition) {
+  return getNextVGraphHandlerLabelLines(nodeObj, transition).join('\n')
+}
+
+export function getNextVGraphHandlerLabelLines(nodeObj, transition, options = {}) {
   const eventLabel = String(nodeObj?.eventType ?? nodeObj?.id ?? '').trim()
   const agents = Array.isArray(transition?.agents)
     ? transition.agents.map((name) => String(name ?? '').trim()).filter(Boolean)
@@ -481,69 +492,58 @@ export function getNextVGraphHandlerLabel(nodeObj, transition) {
   const outputs = Array.isArray(transition?.outputs)
     ? transition.outputs.map((out) => String(out ?? '').trim()).filter(Boolean)
     : []
+  const timerSlots = Array.isArray(options?.timerSlots) ? options.timerSlots : []
 
   const isParallel = transition?.hasParallelAgents === true
   const parallelPrefix = isParallel ? '‖ ' : ''
 
-  // Determine display order: use callOrder when available to reflect source order.
   const callOrder = Array.isArray(transition?.callOrder) ? transition.callOrder : null
   const toolFirstInSource = callOrder !== null && callOrder.length > 0 &&
-    callOrder.findIndex((e) => e.kind === 'tool') < callOrder.findIndex((e) => e.kind === 'agent')
+    callOrder.findIndex((entry) => entry.kind === 'tool') < callOrder.findIndex((entry) => entry.kind === 'agent')
 
-  const buildAgentPart = () => {
-    if (agents.length === 1) return `${parallelPrefix}agent:${agents[0]}`
-    if (agents.length > 1) {
-      if (isParallel) return agents.map((name) => `‖ ${name}`).join('\n')
-      return `agents:${agents.length}`
-    }
-    return null
-  }
+  const agentLines = agents.map((name, index) => {
+    const slot = timerSlots[index]
+    const elapsedMs = Math.max(0, Number(slot?.elapsedMs) || 0)
+    const timerSuffix = (slot?.active === true || elapsedMs > 0)
+      ? `  ${formatInlineAgentElapsedMs(elapsedMs)}`
+      : ''
+    return `${parallelPrefix}agent:${name}${timerSuffix}`
+  })
+  const toolLines = tools.length === 1
+    ? [`tool:${tools[0]}`]
+    : tools.length > 1
+      ? [`tools:${tools.length}`]
+      : []
 
-  const buildToolPart = () => {
-    if (tools.length === 1) return `tool:${tools[0]}`
-    if (tools.length > 1) return `tools:${tools.length}`
-    return null
-  }
-
-  const parts = []
-  if (agents.length > 0 && tools.length > 0) {
-    // Both present — respect source order.
-    const agentPart = buildAgentPart()
-    const toolPart = buildToolPart()
+  const lines = []
+  if (agentLines.length > 0 && toolLines.length > 0) {
     if (toolFirstInSource) {
-      if (toolPart) parts.push(toolPart)
-      if (agentPart) parts.push(agentPart)
+      lines.push(...toolLines)
+      lines.push(...agentLines)
     } else {
-      if (agentPart) parts.push(agentPart)
-      if (toolPart) parts.push(toolPart)
+      lines.push(...agentLines)
+      lines.push(...toolLines)
     }
-  } else {
-    const agentPart = buildAgentPart()
-    const toolPart = buildToolPart()
-    if (agentPart) parts.push(agentPart)
-    if (toolPart) parts.push(toolPart)
+  } else if (agentLines.length > 0) {
+    lines.push(...agentLines)
+  } else if (toolLines.length > 0) {
+    lines.push(...toolLines)
   }
 
-  // Keep labels concise: include output only when there's no agent/tool summary.
-  if (parts.length === 0) {
-    if (outputs.length === 1) {
-      parts.push(`output:${outputs[0]}`)
-    } else if (outputs.length > 1) {
-      parts.push(`outputs:${outputs.length}`)
-    }
+  if (lines.length === 0) {
+    if (outputs.length === 1) return [`output:${outputs[0]}`]
+    if (outputs.length > 1) return [`outputs:${outputs.length}`]
+
+    const classification = getTransitionClassName(transition?.classification)
+    if (classification === 'pure') return ['logic']
+    if (classification === 'side_effect') return ['tool']
+    if (classification === 'declared_output') return ['output']
+    if (classification === 'mixed') return ['mixed']
+
+    return [eventLabel]
   }
 
-  if (parts.length > 0) {
-    return parts.join('+')
-  }
-
-  const classification = getTransitionClassName(transition?.classification)
-  if (classification === 'pure') return 'logic'
-  if (classification === 'side_effect') return 'tool'
-  if (classification === 'declared_output') return 'output'
-  if (classification === 'mixed') return 'mixed'
-
-  return eventLabel
+  return lines
 }
 
 export function splitNextVGraphHandlerLabelLines(label, options = {}) {

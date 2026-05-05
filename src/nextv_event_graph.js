@@ -317,10 +317,11 @@ function getLiteralAgentName(args) {
 }
 
 function collectTransitionSignals(instr, state) {
-  const pushAgentName = (nameRaw) => {
+  const pushAgentName = (nameRaw, lineRaw = null) => {
     const name = String(nameRaw ?? '').trim()
     if (!name) return
     state.agents.push(name)
+    state.agentEntries.push({ name, line: Number.isFinite(Number(lineRaw)) ? Number(lineRaw) : null })
   }
 
   const visitExpr = (expr) => {
@@ -337,7 +338,7 @@ function collectTransitionSignals(instr, state) {
 
       if (node.name === 'agent') {
         state.hasAgent = true
-        pushAgentName(getLiteralAgentName(node.args))
+        pushAgentName(getLiteralAgentName(node.args), node.line)
         return
       }
 
@@ -360,8 +361,8 @@ function collectTransitionSignals(instr, state) {
   if (instr?.op === 'agent_call') {
     state.hasAgent = true
     const agentName = getLiteralAgentName(instr.args)
-    pushAgentName(agentName)
-    if (agentName) state.callOrder.push({ kind: 'agent', name: agentName })
+    pushAgentName(agentName, instr.line)
+    if (agentName) state.callOrder.push({ kind: 'agent', name: agentName, line: Number.isFinite(Number(instr.line)) ? Number(instr.line) : null })
   }
 
   if (instr?.op === 'tool_call') {
@@ -515,6 +516,7 @@ export function extractEventGraph(astOrIR, options = {}) {
       hasDeclaredOutput: false,
       hasParallelAgents: false,
       agents: [],
+      agentEntries: [],
       tools: [],
       outputs: [],
       callOrder: [],
@@ -568,6 +570,7 @@ export function extractEventGraph(astOrIR, options = {}) {
       subscriptionKind,
       classification,
       ...(transitionState.agents.length > 0 ? { agents: transitionState.agents } : {}),
+      ...(transitionState.agentEntries.length > 0 ? { agentEntries: transitionState.agentEntries } : {}),
       ...(transitionState.hasParallelAgents ? { hasParallelAgents: true } : {}),
       tools: transitionState.tools,
       outputs: transitionState.outputs,

@@ -29,6 +29,16 @@
       "model": "intent-5-model",
       "tools": [],
       "instructions": "Classify user intent."
+    },
+    "groq": {
+      "model": "groq-model",
+      "tools": [],
+      "instructions": "Classify user intent."
+    },
+    "gemini": {
+      "model": "gemini-model",
+      "tools": [],
+      "instructions": "Classify user intent."
     }
   }
 }

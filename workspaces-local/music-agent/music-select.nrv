@@ -17,7 +17,7 @@ on "user_wants_music"
     to_json(relevant),
     to_json(file("music-select/music-select.instructions.md")),
     returns={
-	  type: ["author","album","song","unclear"],
+	  type: ["band","album","song","unclear"],
 	  index: 0,
 	  confidence: 0
 	},

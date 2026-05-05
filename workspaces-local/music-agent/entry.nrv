@@ -10,9 +10,28 @@ on external "user_message"
     intent: ["play", "unclear"]
   }
   
+  # result = agent(
+    # "intent-2",
+    # event.value,
+    # instructions,
+    # format="json"
+  # )
+
+  # output json result
+
+  # result2 = agent(
+    # "intent",
+    # event.value,
+    # instructions,
+    # format="json"
+  # )
+
+  # output json result2
+
+
   intent_results = parallel([
     agent(
-      "intent",
+      "intent-4",
       event.value,
       instructions,
       returns=intent_contract
@@ -28,4 +47,8 @@ on external "user_message"
   output json intent_results
   
   emit("user_wants_music", event.value)
+end
+
+on "violation"
+  output json event.value
 end

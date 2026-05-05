@@ -16,6 +16,16 @@
     "ollama": {
       "provider": "ollama",
       "keep_alive": "30m"
+    },
+    "groq": {
+      "provider": "openai_compat",
+      "baseUrl": "https://api.groq.com/openai",
+      "apiKey": "${env:GROQ_API_KEY}"
+    },
+    "gemini": {
+      "provider": "openai_compat",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "apiKey": "${env:GEMINI_API_KEY}"
     }
   },
   "models": {
@@ -42,6 +52,14 @@
     "intent-5-model": {
       "model": "gemma2:2b",
       "transport": "ollama"
+    },
+    "groq-model":{
+      "model": "openai/gpt-oss-20b",
+      "transport": "groq"
+    },
+    "gemini-model":{
+      "model": "gemini-2.5-flash-lite",
+      "transport": "gemini"
     }
   }
 }

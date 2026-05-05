@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createServer } from 'node:http'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import {
@@ -7,6 +8,8 @@ import {
   createOllamaFileDebugLogger,
   createLlamaCppTransport,
   createLlamaCppFileDebugLogger,
+  createOpenAICompatTransport,
+  createOpenAICompatFileDebugLogger,
 } from '../src/host_core/agent_transports/index.js'
 
 import {
@@ -82,9 +85,47 @@ function parseCliOptions(argv) {
   return options
 }
 
+function stripMatchingQuotes(value) {
+  const text = String(value ?? '')
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+    return text.slice(1, -1)
+  }
+  return text
+}
+
+function loadWorkspaceEnvFile(workspaceDirRaw) {
+  const workspaceDir = resolve(process.cwd(), String(workspaceDirRaw ?? ''))
+  const envPath = resolve(workspaceDir, '.env')
+  if (!existsSync(envPath)) return
+
+  let content = ''
+  try {
+    content = readFileSync(envPath, 'utf8')
+  } catch {
+    return
+  }
+
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = String(line ?? '').trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+
+    const cleaned = trimmed.startsWith('export ') ? trimmed.slice(7).trim() : trimmed
+    const eqIndex = cleaned.indexOf('=')
+    if (eqIndex <= 0) continue
+
+    const key = cleaned.slice(0, eqIndex).trim()
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue
+    if (Object.prototype.hasOwnProperty.call(process.env, key)) continue
+
+    const valueRaw = cleaned.slice(eqIndex + 1)
+    process.env[key] = stripMatchingQuotes(valueRaw)
+  }
+}
+
 let options
 try {
   options = parseCliOptions(process.argv.slice(2))
+  loadWorkspaceEnvFile(options.workspaceDir)
 } catch (err) {
   console.error(`nerve-runtime argument error: ${err?.message ?? err}`)
   process.exit(1)
@@ -129,6 +170,10 @@ const externalCallAgent = createOllamaTransport({
     : null,
 })
 
+const openAICompatCallAgent = createOpenAICompatTransport({
+  timeoutMs: AGENT_TRANSPORT_TIMEOUT_MS,
+})
+
 function parseModelRouteHint(modelRaw) {
   const model = String(modelRaw ?? '').trim()
   const localMatch = model.match(/^(?:local|llama(?:\.cpp)?):\s*(.+)$/i)
@@ -161,7 +206,15 @@ callAgent = async ({ model, messages, transport: callTransportConfig }) => {
     ? 'forced-transport'
     : (hint.route ? hint.strategy : 'default-route')
 
-  const transport = selectedRoute === 'local' ? localCallAgent : externalCallAgent
+  const provider = String(callTransportConfig?.provider ?? '').trim().toLowerCase()
+  let transport
+  if (provider === 'openai_compat') {
+    transport = openAICompatCallAgent
+  } else if (selectedRoute === 'local') {
+    transport = localCallAgent
+  } else {
+    transport = externalCallAgent
+  }
   const transportResult = await transport({ model: selectedModel, messages, transport: callTransportConfig })
 
   if (typeof transportResult === 'string') {

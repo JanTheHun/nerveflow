@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createLlamaCppTransport, createOllamaTransport } from '../src/host_core/agent_transports/index.js'
+import { createLlamaCppTransport, createOpenAICompatTransport, createOllamaTransport } from '../src/host_core/agent_transports/index.js'
 
 function withFetchMock(mockFn, run) {
   const originalFetch = globalThis.fetch
@@ -180,4 +180,105 @@ test('createOllamaTransport.load sends empty messages and returns ok', async () 
     assert.deepEqual(capturedBody.messages, [])
     assert.equal(capturedBody.model, 'llama3.2')
   })
+})
+
+// ── openai_compat transport ──────────────────────────────────────────────────
+
+const OPENAI_COMPAT_MOCK_RESPONSE = {
+  id: 'chatcmpl-abc',
+  object: 'chat.completion',
+  created: 1710000000,
+  model: 'gpt-4o',
+  choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'hello' } }],
+  usage: { prompt_tokens: 8, completion_tokens: 1, total_tokens: 9 },
+}
+
+test('createOpenAICompatTransport returns parsed text + metadata envelope', async () => {
+  await withFetchMock(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => OPENAI_COMPAT_MOCK_RESPONSE,
+    text: async () => '',
+  }), async () => {
+    const callAgent = createOpenAICompatTransport({ baseUrl: 'https://api.openai.com', apiKey: 'sk-test', timeoutMs: 5000 })
+    const result = await callAgent({ model: 'gpt-4o', messages: [{ role: 'user', content: 'hi' }] })
+
+    assert.equal(result.text, 'hello')
+    assert.equal(result.metadata.provider, 'openai_compat')
+    assert.equal(result.metadata.usage.promptTokens, 8)
+    assert.equal(result.metadata.usage.totalTokens, 9)
+    assert.equal(result.metadata.rawProvider.finishReason, 'stop')
+  })
+})
+
+test('createOpenAICompatTransport sends Authorization header when apiKey is set', async () => {
+  let capturedHeaders = null
+  await withFetchMock(async (_url, fetchOpts = {}) => {
+    capturedHeaders = fetchOpts.headers
+    return { ok: true, status: 200, json: async () => OPENAI_COMPAT_MOCK_RESPONSE, text: async () => '' }
+  }, async () => {
+    const callAgent = createOpenAICompatTransport({ apiKey: 'sk-secret', timeoutMs: 5000 })
+    await callAgent({ model: 'gpt-4o', messages: [{ role: 'user', content: 'hi' }] })
+
+    assert.equal(capturedHeaders?.['Authorization'], 'Bearer sk-secret')
+  })
+})
+
+test('createOpenAICompatTransport omits Authorization header when no apiKey', async () => {
+  let capturedHeaders = null
+  await withFetchMock(async (_url, fetchOpts = {}) => {
+    capturedHeaders = fetchOpts.headers
+    return { ok: true, status: 200, json: async () => OPENAI_COMPAT_MOCK_RESPONSE, text: async () => '' }
+  }, async () => {
+    const callAgent = createOpenAICompatTransport({ timeoutMs: 5000 })
+    await callAgent({ model: 'gpt-4o', messages: [{ role: 'user', content: 'hi' }] })
+
+    assert.equal(capturedHeaders?.['Authorization'], undefined)
+  })
+})
+
+test('createOpenAICompatTransport overrides apiKey and baseUrl from per-call transport config', async () => {
+  let capturedUrl = null
+  let capturedHeaders = null
+  await withFetchMock(async (url, fetchOpts = {}) => {
+    capturedUrl = url
+    capturedHeaders = fetchOpts.headers
+    return { ok: true, status: 200, json: async () => OPENAI_COMPAT_MOCK_RESPONSE, text: async () => '' }
+  }, async () => {
+    const callAgent = createOpenAICompatTransport({ apiKey: 'sk-static', timeoutMs: 5000 })
+    await callAgent({
+      model: 'mistral',
+      messages: [{ role: 'user', content: 'hi' }],
+      transport: { apiKey: 'sk-override', baseUrl: 'https://api.groq.com' },
+    })
+
+    assert.equal(capturedUrl, 'https://api.groq.com/v1/chat/completions')
+    assert.equal(capturedHeaders?.['Authorization'], 'Bearer sk-override')
+  })
+})
+
+test('createOpenAICompatTransport times out with AGENT_TRANSPORT_TIMEOUT', async () => {
+  await withFetchMock((_url, options = {}) => new Promise((resolve, reject) => {
+    options.signal?.addEventListener('abort', () => {
+      const err = new Error('aborted')
+      err.name = 'AbortError'
+      reject(err)
+    }, { once: true })
+  }), async () => {
+    const callAgent = createOpenAICompatTransport({ apiKey: 'sk-test', timeoutMs: 5 })
+
+    await assert.rejects(
+      () => callAgent({ model: 'gpt-4o', messages: [{ role: 'user', content: 'hi' }] }),
+      (err) => {
+        assert.equal(err.code, 'AGENT_TRANSPORT_TIMEOUT')
+        assert.match(err.message, /timed out/i)
+        return true
+      },
+    )
+  })
+})
+
+test('createOpenAICompatTransport exposes capabilities.supports_preload=false', () => {
+  const callAgent = createOpenAICompatTransport({})
+  assert.equal(callAgent.capabilities.supports_preload, false)
 })

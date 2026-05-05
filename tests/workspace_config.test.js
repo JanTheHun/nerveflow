@@ -708,3 +708,70 @@ test('getConfiguredRuntimePreload ignores invalid value', () => {
   }))
   assert.equal(getConfiguredRuntimePreload(config), 'none')
 })
+
+test('nextv.json supports env placeholders in transport fields', () => {
+  const previous = process.env.NEXTV_TEST_API_KEY
+  process.env.NEXTV_TEST_API_KEY = 'secret-value'
+
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      transports: {
+        groq: {
+          provider: 'openai_compat',
+          baseUrl: 'https://api.groq.com/openai',
+          apiKey: '${env:NEXTV_TEST_API_KEY}',
+        },
+      },
+      models: {
+        m: {
+          model: 'openai/gpt-oss-20b',
+          transport: 'groq',
+        },
+      },
+    }),
+  })
+
+  try {
+    const config = loadConfig(workspaceDir)
+    const transports = getConfiguredTransportsMap(config)
+    assert.equal(transports.groq.apiKey, 'secret-value')
+  } finally {
+    if (previous == null) {
+      delete process.env.NEXTV_TEST_API_KEY
+    } else {
+      process.env.NEXTV_TEST_API_KEY = previous
+    }
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})
+
+test('nextv.json env placeholder throws when variable is missing', () => {
+  const previous = process.env.NEXTV_TEST_MISSING
+  delete process.env.NEXTV_TEST_MISSING
+
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      transports: {
+        groq: {
+          provider: 'openai_compat',
+          baseUrl: 'https://api.groq.com/openai',
+          apiKey: '${env:NEXTV_TEST_MISSING}',
+        },
+      },
+    }),
+  })
+
+  try {
+    assert.throws(
+      () => loadConfig(workspaceDir),
+      /missing environment variable "NEXTV_TEST_MISSING"/,
+    )
+  } finally {
+    if (previous == null) {
+      delete process.env.NEXTV_TEST_MISSING
+    } else {
+      process.env.NEXTV_TEST_MISSING = previous
+    }
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})

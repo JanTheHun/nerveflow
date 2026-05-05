@@ -3,6 +3,38 @@ import { join } from 'node:path'
 
 const BUILTIN_OUTPUT_CHANNELS = new Set(['text', 'console', 'voice', 'visual', 'json', 'interaction'])
 
+function expandEnvPlaceholdersInString(raw, sourceLabel, valuePath) {
+  const text = String(raw ?? '')
+  return text.replace(/\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}/gi, (_match, name) => {
+    if (Object.prototype.hasOwnProperty.call(process.env, name)) {
+      return String(process.env[name] ?? '')
+    }
+    const location = valuePath ? `${sourceLabel}${valuePath}` : sourceLabel
+    throw new Error(`${location}: missing environment variable "${name}".`)
+  })
+}
+
+function resolveEnvPlaceholders(value, sourceLabel, valuePath = '') {
+  if (typeof value === 'string') {
+    return expandEnvPlaceholdersInString(value, sourceLabel, valuePath)
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry, index) => resolveEnvPlaceholders(entry, sourceLabel, `${valuePath}[${index}]`))
+  }
+
+  if (value && typeof value === 'object') {
+    const output = {}
+    for (const [key, entry] of Object.entries(value)) {
+      const nextPath = valuePath ? `${valuePath}.${key}` : `.${key}`
+      output[key] = resolveEnvPlaceholders(entry, sourceLabel, nextPath)
+    }
+    return output
+  }
+
+  return value
+}
+
 function parseProfilesMap(raw, sourceLabel) {
   const map = (raw && typeof raw === 'object' && !Array.isArray(raw) && raw.profiles && typeof raw.profiles === 'object' && !Array.isArray(raw.profiles))
     ? raw.profiles
@@ -403,7 +435,7 @@ export function loadWorkspaceNextVConfig({
   }
 
   if (existsSync(nextVPath)) {
-    config.nextv.config = readJsonObjectFile(nextVPath)
+    config.nextv.config = resolveEnvPlaceholders(readJsonObjectFile(nextVPath), 'nextv.json')
     config.nextv.status = 'loaded'
 
     if (Object.prototype.hasOwnProperty.call(config.nextv.config, 'effectsPolicy')) {
@@ -498,7 +530,7 @@ export function loadWorkspaceNextVConfig({
         throw new Error(`nextv.json#modelsConfig file not found: ${resolvedModels.relativePath}`)
       }
       const modelsRaw = readJsonObjectFile(resolvedModels.absolutePath)
-      config.models.map = parseModelsMap(modelsRaw, 'nextv.json#modelsConfig')
+      config.models.map = parseModelsMap(resolveEnvPlaceholders(modelsRaw, 'nextv.json#modelsConfig'), 'nextv.json#modelsConfig')
       config.models.status = 'loaded'
       config.models.source = toWorkspaceDisplayPath(resolvedModels.absolutePath)
     }
@@ -509,7 +541,7 @@ export function loadWorkspaceNextVConfig({
         throw new Error(`nextv.json#transportsConfig file not found: ${resolvedTransports.relativePath}`)
       }
       const transportsRaw = readJsonObjectFile(resolvedTransports.absolutePath)
-      config.transports.map = parseTransportsMap(transportsRaw, 'nextv.json#transportsConfig')
+      config.transports.map = parseTransportsMap(resolveEnvPlaceholders(transportsRaw, 'nextv.json#transportsConfig'), 'nextv.json#transportsConfig')
       config.transports.status = 'loaded'
       config.transports.source = toWorkspaceDisplayPath(resolvedTransports.absolutePath)
     }
@@ -520,7 +552,7 @@ export function loadWorkspaceNextVConfig({
         throw new Error(`nextv.json#agentsConfig file not found: ${resolvedAgents.relativePath}`)
       }
       const agentsRaw = readJsonObjectFile(resolvedAgents.absolutePath)
-      config.agents.profiles = parseProfilesMap(agentsRaw, 'nextv.json#agentsConfig')
+      config.agents.profiles = parseProfilesMap(resolveEnvPlaceholders(agentsRaw, 'nextv.json#agentsConfig'), 'nextv.json#agentsConfig')
       config.agents.status = 'loaded'
       config.agents.source = toWorkspaceDisplayPath(resolvedAgents.absolutePath)
     }
@@ -530,7 +562,7 @@ export function loadWorkspaceNextVConfig({
       if (!existsSync(resolvedTools.absolutePath)) {
         throw new Error(`nextv.json#toolsConfig file not found: ${resolvedTools.relativePath}`)
       }
-      const toolsRaw = JSON.parse(readFileSync(resolvedTools.absolutePath, 'utf8'))
+      const toolsRaw = resolveEnvPlaceholders(JSON.parse(readFileSync(resolvedTools.absolutePath, 'utf8')), 'nextv.json#toolsConfig')
       const parsed = parseWorkspaceToolsConfig(toolsRaw, 'nextv.json#toolsConfig')
       config.tools.allow = parsed.allow
       config.tools.aliases = parsed.aliases
@@ -544,35 +576,35 @@ export function loadWorkspaceNextVConfig({
         throw new Error(`nextv.json#operatorsConfig file not found: ${resolvedOperators.relativePath}`)
       }
       const operatorsRaw = readJsonObjectFile(resolvedOperators.absolutePath)
-      config.operators.map = parseOperatorsMap(operatorsRaw, 'nextv.json#operatorsConfig')
+      config.operators.map = parseOperatorsMap(resolveEnvPlaceholders(operatorsRaw, 'nextv.json#operatorsConfig'), 'nextv.json#operatorsConfig')
       config.operators.status = 'loaded'
       config.operators.source = toWorkspaceDisplayPath(resolvedOperators.absolutePath)
     }
   }
 
   if (config.models.status !== 'loaded' && existsSync(modelsPath)) {
-    const raw = readJsonObjectFile(modelsPath)
+    const raw = resolveEnvPlaceholders(readJsonObjectFile(modelsPath), 'models.json')
     config.models.map = parseModelsMap(raw, 'models.json')
     config.models.status = 'loaded'
     config.models.source = toWorkspaceDisplayPath(modelsPath)
   }
 
   if (config.transports.status !== 'loaded' && existsSync(transportsPath)) {
-    const raw = readJsonObjectFile(transportsPath)
+    const raw = resolveEnvPlaceholders(readJsonObjectFile(transportsPath), 'transports.json')
     config.transports.map = parseTransportsMap(raw, 'transports.json')
     config.transports.status = 'loaded'
     config.transports.source = toWorkspaceDisplayPath(transportsPath)
   }
 
   if (config.agents.status !== 'loaded' && existsSync(agentsPath)) {
-    const raw = readJsonObjectFile(agentsPath)
+    const raw = resolveEnvPlaceholders(readJsonObjectFile(agentsPath), 'agents.json')
     config.agents.profiles = parseProfilesMap(raw, 'agents.json')
     config.agents.status = 'loaded'
     config.agents.source = toWorkspaceDisplayPath(agentsPath)
   }
 
   if (config.tools.status !== 'loaded' && existsSync(toolsPath)) {
-    const raw = JSON.parse(readFileSync(toolsPath, 'utf8'))
+    const raw = resolveEnvPlaceholders(JSON.parse(readFileSync(toolsPath, 'utf8')), 'tools.json')
     const parsed = parseWorkspaceToolsConfig(raw, 'tools.json')
     config.tools.allow = parsed.allow
     config.tools.aliases = parsed.aliases
@@ -581,7 +613,7 @@ export function loadWorkspaceNextVConfig({
   }
 
   if (config.operators.status !== 'loaded' && existsSync(operatorsPath)) {
-    const raw = readJsonObjectFile(operatorsPath)
+    const raw = resolveEnvPlaceholders(readJsonObjectFile(operatorsPath), 'operators.json')
     config.operators.map = parseOperatorsMap(raw, 'operators.json')
     config.operators.status = 'loaded'
     config.operators.source = toWorkspaceDisplayPath(operatorsPath)

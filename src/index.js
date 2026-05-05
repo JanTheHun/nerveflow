@@ -2,12 +2,17 @@ export {
   appendAgentFormatInstructions,
   buildAgentReturnContractGuidance,
   buildAgentRetryPrompt,
+  buildDecideGuidance,
+  buildDecideRetryPrompt,
   extractCodeOutput,
   extractJsonOutput,
   extractTextOutput,
   NEXTV_AGENT_OUTPUT_FORMATS,
   normalizeAgentFormattedOutput,
+  normalizeDecideText,
+  assertValidDecideOptions,
   validateAgentReturnContract,
+  validateDecideOutput,
 } from './nextv_agent_output.js'
 
 export {

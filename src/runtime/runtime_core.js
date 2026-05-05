@@ -7,9 +7,12 @@ import {
   appendAgentFormatInstructions,
   buildAgentReturnContractGuidance,
   buildAgentRetryPrompt,
+  buildDecideGuidance,
+  buildDecideRetryPrompt,
   normalizeAgentFormattedOutput,
   runNextVScriptFromFile,
   validateAgentReturnContract,
+  validateDecideOutput,
   validateOutputContract,
 } from '../index.js'
 
@@ -183,6 +186,9 @@ export function createRuntimeCore({
     validateAgentReturnContract,
     buildAgentReturnContractGuidance,
     buildAgentRetryPrompt,
+    buildDecideGuidance,
+    buildDecideRetryPrompt,
+    validateDecideOutput,
     toolRuntime,
     ingressRuntime,
     effectRuntime,

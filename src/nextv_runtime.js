@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { NEXTV_AGENT_OUTPUT_FORMATS, validateAgentReturnContract, normalizeAgentFormattedOutput } from './nextv_agent_output.js'
+import { NEXTV_AGENT_OUTPUT_FORMATS, validateAgentReturnContract, normalizeAgentFormattedOutput, assertValidDecideOptions, validateDecideOutput } from './nextv_agent_output.js'
 import { compileAST } from './nextv_compiler.js'
 import { extractEventGraph } from './nextv_event_graph.js'
 
@@ -15,6 +15,7 @@ const AGENT_NAMED_ARG_ALLOWLIST = new Set([
   'format',
   'returns',
   'validate',
+  'decide',
   'retry_on_contract_violation',
   'on_contract_violation',
 ])
@@ -2110,7 +2111,7 @@ function buildFunctions(options, runtimeContext) {
           kind: 'runtime',
           code: 'INVALID_AGENT_ARGUMENT',
           statement,
-          message: `agent() received unsupported named argument "${key}". Use: agent, prompt, instructions, messages, format, returns, validate, retry_on_contract_violation, on_contract_violation.`,
+          message: `agent() received unsupported named argument "${key}". Use: agent, prompt, instructions, messages, format, returns, validate, decide, retry_on_contract_violation, on_contract_violation.`,
         })
       }
 
@@ -2138,6 +2139,40 @@ function buildFunctions(options, runtimeContext) {
       }
 
       const returns = normalizeAgentReturnsValue(named?.returns ?? null, context)
+      const decideOptions = named?.decide ?? null
+
+      if (decideOptions != null) {
+        if (returns != null) {
+          throw nextvError({
+            line,
+            kind: 'runtime',
+            code: 'INVALID_CALL_CONFIG',
+            statement,
+            message: 'agent() decide and returns are mutually exclusive.',
+          })
+        }
+        if (named?.validate != null) {
+          throw nextvError({
+            line,
+            kind: 'runtime',
+            code: 'INVALID_CALL_CONFIG',
+            statement,
+            message: 'agent() decide sets its own validation mode. validate must not be specified alongside decide.',
+          })
+        }
+        try {
+          assertValidDecideOptions(decideOptions)
+        } catch (err) {
+          throw nextvError({
+            line,
+            kind: 'runtime',
+            code: err.code ?? 'INVALID_CALL_CONFIG',
+            statement,
+            message: String(err.message ?? 'Invalid decide options.'),
+          })
+        }
+      }
+
       const validateRaw = String(named?.validate ?? '').trim().toLowerCase()
       if (validateRaw && validateRaw !== 'strict' && validateRaw !== 'coerce' && validateRaw !== 'none') {
         throw nextvError({
@@ -2187,6 +2222,7 @@ function buildFunctions(options, runtimeContext) {
         format: effectiveFormat,
         returns,
         validate,
+        decide: decideOptions,
         retry_on_contract_violation: retryCount,
         on_contract_violation: onViolationExpr,
         state,
@@ -2220,6 +2256,24 @@ function buildFunctions(options, runtimeContext) {
           ? callResult
           : { value: callResult, metadata: null }
       )
+
+      // When the callAgent implementation does not handle decide internally,
+      // apply decide validation at the runtime layer.
+      if (decideOptions != null && !(callResult && typeof callResult === 'object' && callResult.__nextv_decide_validated__)) {
+        const raw = normalizedCallResult.value
+        try {
+          return validateDecideOutput(raw, decideOptions)
+        } catch {
+          const decideErr = nextvError({
+            line,
+            kind: 'runtime',
+            code: 'AGENT_RETURN_CONTRACT_VIOLATION',
+            statement,
+            message: `decide contract violation: output "${String(raw ?? '').slice(0, 80)}" does not match any allowed value.`,
+          })
+          throw decideErr
+        }
+      }
 
       if (normalizedCallResult.metadata && Array.isArray(runtimeContext.agentCallMetadata)) {
         runtimeContext.agentCallMetadata.push({

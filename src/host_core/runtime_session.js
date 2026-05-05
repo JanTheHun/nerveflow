@@ -162,6 +162,9 @@ export function createHostAdapter({
   validateAgentReturnContract = null,
   buildAgentReturnContractGuidance = null,
   buildAgentRetryPrompt = null,
+  buildDecideGuidance = null,
+  buildDecideRetryPrompt = null,
+  validateDecideOutput = null,
   toolRuntime = null,
 }) {
   const readWorkspaceConfig = () => {
@@ -306,7 +309,7 @@ export function createHostAdapter({
       throw new Error(`Tool "${toolName}" is not available in this host yet.`)
     },
 
-    callAgent: async ({ agent, model: modelRaw, prompt, instructions, messages, format, returns, validate, retry_on_contract_violation, on_contract_violation, event, line, statement, sourcePath, sourceLine }) => {
+    callAgent: async ({ agent, model: modelRaw, prompt, instructions, messages, format, returns, validate, decide, retry_on_contract_violation, on_contract_violation, event, line, statement, sourcePath, sourceLine }) => {
       const agentName = String(agent ?? '').trim()
       const directModel = String(modelRaw ?? '').trim()
 
@@ -349,7 +352,9 @@ export function createHostAdapter({
       const baseInstructions = [profileInstructions, callInstructions].filter(Boolean).join('\n\n')
       const contractGuidance = (returns != null && typeof buildAgentReturnContractGuidance === 'function')
         ? buildAgentReturnContractGuidance(returns)
-        : ''
+        : (decide != null && typeof buildDecideGuidance === 'function')
+          ? buildDecideGuidance(decide)
+          : ''
       const baseSystemInstructions = [baseInstructions, contractGuidance].filter(Boolean).join('\n\n')
 
       const formattedPrompt = format ? appendAgentFormatInstructions(prompt, format) : String(prompt ?? '')
@@ -376,9 +381,14 @@ export function createHostAdapter({
         }
 
         let userPrompt = formattedPrompt.trim()
-        if (attemptNum > 0 && lastViolation != null && typeof buildAgentRetryPrompt === 'function') {
-          const retryGuidance = buildAgentRetryPrompt(lastViolation)
-          userPrompt = [userPrompt, retryGuidance].filter(Boolean).join('\n\n')
+        if (attemptNum > 0 && lastViolation != null) {
+          if (decide != null && typeof buildDecideRetryPrompt === 'function') {
+            const retryGuidance = buildDecideRetryPrompt(decide, lastViolation)
+            userPrompt = [userPrompt, retryGuidance].filter(Boolean).join('\n\n')
+          } else if (typeof buildAgentRetryPrompt === 'function') {
+            const retryGuidance = buildAgentRetryPrompt(lastViolation)
+            userPrompt = [userPrompt, retryGuidance].filter(Boolean).join('\n\n')
+          }
         }
 
         if (userPrompt) {
@@ -460,6 +470,7 @@ export function createHostAdapter({
             }
             return { value: lateBindValue, metadata: metadataWithTiming }
           }
+
           let parsed
           try {
             parsed = normalizeAgentFormattedOutput(raw, 'json')
@@ -525,6 +536,43 @@ export function createHostAdapter({
           }
           return { value: parsed, metadata: metadataWithTiming }
         }
+
+        // decide contract: plain-text enum validation, no JSON parsing
+        if (decide != null && typeof validateDecideOutput === 'function') {
+          try {
+            const matched = validateDecideOutput(raw, decide)
+            return { value: matched, metadata: metadataWithTiming }
+          } catch (err) {
+            lastViolation = String(raw ?? '')
+            const violationKey = `DECIDE_MISMATCH:${String(raw ?? '').slice(0, 80)}`
+            if (violationKey === previousViolationKey && attemptNum < retryLimit) {
+              previousViolationKey = violationKey
+              continue
+            }
+            previousViolationKey = violationKey
+            if (attemptNum < retryLimit) continue
+            if (on_contract_violation != null) {
+              return {
+                __nextv_contract_violation__: true,
+                expression: on_contract_violation,
+                violation: {
+                  type: 'contract_violation',
+                  subtype: 'decide_mismatch',
+                  message: String(err?.message ?? ''),
+                  field: '',
+                  expected: Array.isArray(decide) ? decide.join(', ') : String(decide),
+                  actual: String(raw ?? ''),
+                  source_event: cloneEventForViolation(event),
+                },
+              }
+            }
+            const decideErr = new Error(`decide contract violation: output "${String(raw ?? '').slice(0, 80)}" does not match any allowed value.`)
+            decideErr.code = 'AGENT_RETURN_CONTRACT_VIOLATION'
+            annotateRetryExhaustion(decideErr, retryLimit, attemptNum)
+            throw decideErr
+          }
+        }
+
         if (!format) return { value: raw, metadata: metadataWithTiming }
         return {
           value: normalizeAgentFormattedOutput(raw, format),

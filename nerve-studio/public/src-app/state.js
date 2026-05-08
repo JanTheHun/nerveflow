@@ -159,6 +159,7 @@ export const nextVGraphState = {
   nodeElements: new Map(),
   edgeElements: new Map(),
   stepLabelElements: new Map(),
+  handlerLabelLineElements: new Map(),
   agentTimerLabelElements: new Map(),
   runtimeStepByNode: new Map(),
   runtimeAgentCallTimersByNode: new Map(),

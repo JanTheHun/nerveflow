@@ -745,7 +745,7 @@ test('nextv.json supports env placeholders in transport fields', () => {
   }
 })
 
-test('nextv.json env placeholder throws when variable is missing', () => {
+test('nextv.json transport apiKey env placeholder falls back to empty when variable is missing', () => {
   const previous = process.env.NEXTV_TEST_MISSING
   delete process.env.NEXTV_TEST_MISSING
 
@@ -762,15 +762,44 @@ test('nextv.json env placeholder throws when variable is missing', () => {
   })
 
   try {
-    assert.throws(
-      () => loadConfig(workspaceDir),
-      /missing environment variable "NEXTV_TEST_MISSING"/,
-    )
+    const config = loadConfig(workspaceDir)
+    const transports = getConfiguredTransportsMap(config)
+    assert.equal(transports.groq.apiKey, '')
   } finally {
     if (previous == null) {
       delete process.env.NEXTV_TEST_MISSING
     } else {
       process.env.NEXTV_TEST_MISSING = previous
+    }
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})
+
+test('nextv.json non-transport env placeholder still throws when variable is missing', () => {
+  const previous = process.env.NEXTV_TEST_MISSING_MODEL
+  delete process.env.NEXTV_TEST_MISSING_MODEL
+
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      models: {
+        m: {
+          model: '${env:NEXTV_TEST_MISSING_MODEL}',
+          transport: 'ollama',
+        },
+      },
+    }),
+  })
+
+  try {
+    assert.throws(
+      () => loadConfig(workspaceDir),
+      /missing environment variable "NEXTV_TEST_MISSING_MODEL"/,
+    )
+  } finally {
+    if (previous == null) {
+      delete process.env.NEXTV_TEST_MISSING_MODEL
+    } else {
+      process.env.NEXTV_TEST_MISSING_MODEL = previous
     }
     rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
   }

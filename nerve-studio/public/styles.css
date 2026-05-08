@@ -2125,6 +2125,14 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
   color: #f2d7a2;
 }
 
+.nextv-graph-edge-value-flash {
+  transform: translate3d(-50%, calc(-50% + 6px), 0);
+}
+
+.nextv-graph-edge-value-flash.visible {
+  transform: translate3d(-50%, -50%, 0);
+}
+
 .nextv-graph-popover {
   --nextv-popover-pointer-top: 28px;
   --nextv-popover-pointer-left: 28px;

@@ -11,6 +11,7 @@
 
 export { loadHostModules } from './loader.js'
 export { loadHostModulesByRole } from './loader.js'
+export { loadHostModuleComposition } from './loader.js'
 export { createRuntimeBuiltinToolProvider } from './builtin/index.js'
 export { createPublicHostModuleProviders } from './public/index.js'
 export { createPollingIngressConnector } from './public/polling_ingress_connector.js'

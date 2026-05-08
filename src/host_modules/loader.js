@@ -14,6 +14,15 @@ function emptyRoleBuckets() {
   }
 }
 
+function createCompositionSource(name, options = {}) {
+  return {
+    name,
+    path: options.path || null,
+    warnings: [],
+    roles: emptyRoleBuckets(),
+  }
+}
+
 function normalizeProviderValue(value) {
   if (!value) return []
   if (Array.isArray(value)) return value.filter(Boolean)
@@ -92,14 +101,24 @@ async function resolveRoleEntry(entry, context, fallbackRole = 'tools') {
 }
 
 async function loadWorkspaceRoles(workspaceDir) {
+  const result = await loadWorkspaceRoleSource(workspaceDir)
+  return result.roles
+}
+
+async function loadWorkspaceRoleSource(workspaceDir) {
   const hostModulesDir = path.resolve(workspaceDir, 'host_modules')
-  if (!fs.existsSync(hostModulesDir)) return emptyRoleBuckets()
+  const source = createCompositionSource('workspace', { path: hostModulesDir })
+  if (!fs.existsSync(hostModulesDir)) {
+    source.warnings.push('host_modules directory not found; skipping workspace providers')
+    return source
+  }
 
   const indexPath = path.resolve(hostModulesDir, 'index.js')
   if (!fs.existsSync(indexPath)) {
-    console.warn('[host-modules] host_modules exists but no index.js found; skipping workspace providers')
-    return emptyRoleBuckets()
+    source.warnings.push('host_modules exists but no index.js found; skipping workspace providers')
+    return source
   }
+  source.path = indexPath
 
   try {
     const loaded = await import(pathToFileURL(indexPath).href)
@@ -118,7 +137,7 @@ async function loadWorkspaceRoles(workspaceDir) {
       'createEffectRealizers',
     ])
 
-    const roles = emptyRoleBuckets()
+    const roles = source.roles
 
     if (loaded.default != null) {
       mergeRoleBuckets(roles, await resolveRoleEntry(loaded.default, context, 'tools'))
@@ -165,10 +184,82 @@ async function loadWorkspaceRoles(workspaceDir) {
     roles.toolProviders = roles.toolProviders.filter(Boolean)
     roles.ingressConnectors = roles.ingressConnectors.filter(Boolean)
     roles.effectRealizers = roles.effectRealizers.filter(Boolean)
-    return roles
+    return source
   } catch (error) {
-    console.error('[host-modules] Failed to load workspace providers:', error.message)
-    return emptyRoleBuckets()
+    source.warnings.push(`failed to load workspace providers: ${error.message}`)
+    return source
+  }
+}
+
+function summarizeRoleBucket(roles) {
+  return {
+    toolProviders: roles.toolProviders.length,
+    ingressConnectors: roles.ingressConnectors.length,
+    effectRealizers: roles.effectRealizers.length,
+  }
+}
+
+/**
+ * Load host module sources and aggregate role buckets.
+ *
+ * Returns source-level details to power deterministic introspection CLIs.
+ */
+export async function loadHostModuleComposition(options = {}) {
+  const { workspaceDir, builtinOnly = false } = options
+  const sources = []
+
+  const builtinSource = createCompositionSource('builtin')
+  try {
+    const { createRuntimeBuiltinToolProvider } = await import('./builtin/index.js')
+    builtinSource.roles.toolProviders.push(createRuntimeBuiltinToolProvider())
+  } catch (error) {
+    const message = `failed to load builtin provider: ${error.message}`
+    builtinSource.warnings.push(message)
+    console.error(`[host-modules] ${message}`)
+  }
+  sources.push(builtinSource)
+
+  if (!builtinOnly) {
+    const publicSource = createCompositionSource('public')
+    try {
+      const { createPublicHostModuleProviders } = await import('./public/index.js')
+      const publicProviders = await resolveProviderEntry(createPublicHostModuleProviders, {
+        workspaceDir,
+        hostModulesDir: workspaceDir ? path.resolve(workspaceDir, 'host_modules') : undefined,
+      })
+      publicSource.roles.toolProviders.push(...publicProviders)
+    } catch (error) {
+      const message = `failed to load public providers: ${error.message}`
+      publicSource.warnings.push(message)
+      console.error(`[host-modules] ${message}`)
+    }
+    sources.push(publicSource)
+  }
+
+  if (!builtinOnly && workspaceDir) {
+    const workspaceSource = await loadWorkspaceRoleSource(workspaceDir)
+    for (const warning of workspaceSource.warnings) {
+      if (!warning.startsWith('host_modules directory not found')) {
+        console.warn(`[host-modules] ${warning}`)
+      }
+    }
+    sources.push(workspaceSource)
+  }
+
+  const roles = emptyRoleBuckets()
+  for (const source of sources) {
+    mergeRoleBuckets(roles, source.roles)
+  }
+
+  return {
+    roles,
+    sources: sources.map((source) => ({
+      name: source.name,
+      path: source.path,
+      warnings: [...source.warnings],
+      counts: summarizeRoleBucket(source.roles),
+    })),
+    totals: summarizeRoleBucket(roles),
   }
 }
 
@@ -181,38 +272,8 @@ async function loadWorkspaceRoles(workspaceDir) {
  * - effectRealizers: output/effect channel realizers
  */
 export async function loadHostModulesByRole(options = {}) {
-  const roles = emptyRoleBuckets()
-  const { workspaceDir, builtinOnly = false } = options
-
-  try {
-    const { createRuntimeBuiltinToolProvider } = await import('./builtin/index.js')
-    roles.toolProviders.push(createRuntimeBuiltinToolProvider())
-  } catch (error) {
-    console.error('[host-modules] Failed to load builtin provider:', error.message)
-  }
-
-  if (builtinOnly) {
-    return roles
-  }
-
-  try {
-    const { createPublicHostModuleProviders } = await import('./public/index.js')
-    const publicProviders = await resolveProviderEntry(createPublicHostModuleProviders, {
-      workspaceDir,
-      hostModulesDir: workspaceDir ? path.resolve(workspaceDir, 'host_modules') : undefined,
-    })
-    roles.toolProviders.push(...publicProviders)
-  } catch (error) {
-    console.error('[host-modules] Failed to load public providers:', error.message)
-  }
-
-  if (builtinOnly || !workspaceDir) {
-    return roles
-  }
-
-  const workspaceRoles = await loadWorkspaceRoles(workspaceDir)
-  mergeRoleBuckets(roles, workspaceRoles)
-  return roles
+  const composition = await loadHostModuleComposition(options)
+  return composition.roles
 }
 
 /**

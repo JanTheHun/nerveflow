@@ -15,6 +15,24 @@ Minimal example workspace for semantic memory backed by PostgreSQL + pgvector.
 - `entry.nrv`: workflow with store and recall routes
 - `host_modules/index.js`: opt-in registration for the memory provider
 
+## Compose Quickstart
+
+You can scaffold memory provider wiring into any workspace with compose:
+
+```powershell
+node bin/nerve-compose.js add memory-pgvector examples/memory-agent --json
+```
+
+Then check workspace composition and config diagnostics:
+
+```powershell
+node bin/nerve-compose.js modules examples/memory-agent --json
+node bin/nerve-compose.js doctor examples/memory-agent --json
+```
+
+`add memory-pgvector` is workspace-local. It scaffolds `host_modules/index.js`, appends missing `MEMORY_*` keys to `.env.example`, and updates `nextv.json` capability/module declarations when present.
+It does not provision PostgreSQL, pgvector, or embedding services.
+
 ## Required Environment
 
 Set these before starting the runtime:
@@ -27,6 +45,8 @@ Optional:
 
 - `MEMORY_POOL_MIN`
 - `MEMORY_POOL_MAX`
+
+Tip: runtime and compose commands load workspace `.env` before provider/config resolution.
 
 ## Database Notes
 

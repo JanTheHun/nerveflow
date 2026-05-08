@@ -1,0 +1,17 @@
+on external "user_message"
+  if state.total_messages == null
+    state.total_messages = 0
+  end
+
+  state.total_messages = state.total_messages + 1
+  state.last_message = event.value
+  state.processed_at = tool("get_time")
+
+  output json {
+    app: "docker-runtime-app",
+    status: "ready",
+    message: state.last_message,
+    total: state.total_messages,
+    processed_at: state.processed_at
+  }
+end

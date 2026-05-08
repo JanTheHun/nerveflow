@@ -3,36 +3,55 @@ import { join } from 'node:path'
 
 const BUILTIN_OUTPUT_CHANNELS = new Set(['text', 'console', 'voice', 'visual', 'json', 'interaction'])
 
-function expandEnvPlaceholdersInString(raw, sourceLabel, valuePath) {
+function expandEnvPlaceholdersInString(raw, sourceLabel, valuePath, options = {}) {
+  const { allowMissingEnv } = options
   const text = String(raw ?? '')
   return text.replace(/\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}/gi, (_match, name) => {
     if (Object.prototype.hasOwnProperty.call(process.env, name)) {
       return String(process.env[name] ?? '')
+    }
+    if (typeof allowMissingEnv === 'function' && allowMissingEnv({ sourceLabel, valuePath, name })) {
+      return ''
     }
     const location = valuePath ? `${sourceLabel}${valuePath}` : sourceLabel
     throw new Error(`${location}: missing environment variable "${name}".`)
   })
 }
 
-function resolveEnvPlaceholders(value, sourceLabel, valuePath = '') {
+function resolveEnvPlaceholders(value, sourceLabel, valuePath = '', options = {}) {
   if (typeof value === 'string') {
-    return expandEnvPlaceholdersInString(value, sourceLabel, valuePath)
+    return expandEnvPlaceholdersInString(value, sourceLabel, valuePath, options)
   }
 
   if (Array.isArray(value)) {
-    return value.map((entry, index) => resolveEnvPlaceholders(entry, sourceLabel, `${valuePath}[${index}]`))
+    return value.map((entry, index) => resolveEnvPlaceholders(entry, sourceLabel, `${valuePath}[${index}]`, options))
   }
 
   if (value && typeof value === 'object') {
     const output = {}
     for (const [key, entry] of Object.entries(value)) {
       const nextPath = valuePath ? `${valuePath}.${key}` : `.${key}`
-      output[key] = resolveEnvPlaceholders(entry, sourceLabel, nextPath)
+      output[key] = resolveEnvPlaceholders(entry, sourceLabel, nextPath, options)
     }
     return output
   }
 
   return value
+}
+
+function allowMissingTransportApiKeyEnv({ sourceLabel, valuePath }) {
+  const isApiKeyPath = /\.apiKey$/i.test(String(valuePath ?? ''))
+  if (!isApiKeyPath) return false
+
+  if (sourceLabel === 'nextv.json') {
+    return String(valuePath).startsWith('.transports.')
+  }
+
+  if (sourceLabel === 'nextv.json#transportsConfig' || sourceLabel === 'transports.json') {
+    return String(valuePath).startsWith('.transports.') || /^\.[^.]+\.apiKey$/i.test(String(valuePath))
+  }
+
+  return false
 }
 
 function parseProfilesMap(raw, sourceLabel) {
@@ -435,7 +454,9 @@ export function loadWorkspaceNextVConfig({
   }
 
   if (existsSync(nextVPath)) {
-    config.nextv.config = resolveEnvPlaceholders(readJsonObjectFile(nextVPath), 'nextv.json')
+    config.nextv.config = resolveEnvPlaceholders(readJsonObjectFile(nextVPath), 'nextv.json', '', {
+      allowMissingEnv: allowMissingTransportApiKeyEnv,
+    })
     config.nextv.status = 'loaded'
 
     if (Object.prototype.hasOwnProperty.call(config.nextv.config, 'effectsPolicy')) {
@@ -541,7 +562,9 @@ export function loadWorkspaceNextVConfig({
         throw new Error(`nextv.json#transportsConfig file not found: ${resolvedTransports.relativePath}`)
       }
       const transportsRaw = readJsonObjectFile(resolvedTransports.absolutePath)
-      config.transports.map = parseTransportsMap(resolveEnvPlaceholders(transportsRaw, 'nextv.json#transportsConfig'), 'nextv.json#transportsConfig')
+      config.transports.map = parseTransportsMap(resolveEnvPlaceholders(transportsRaw, 'nextv.json#transportsConfig', '', {
+        allowMissingEnv: allowMissingTransportApiKeyEnv,
+      }), 'nextv.json#transportsConfig')
       config.transports.status = 'loaded'
       config.transports.source = toWorkspaceDisplayPath(resolvedTransports.absolutePath)
     }
@@ -590,7 +613,9 @@ export function loadWorkspaceNextVConfig({
   }
 
   if (config.transports.status !== 'loaded' && existsSync(transportsPath)) {
-    const raw = resolveEnvPlaceholders(readJsonObjectFile(transportsPath), 'transports.json')
+    const raw = resolveEnvPlaceholders(readJsonObjectFile(transportsPath), 'transports.json', '', {
+      allowMissingEnv: allowMissingTransportApiKeyEnv,
+    })
     config.transports.map = parseTransportsMap(raw, 'transports.json')
     config.transports.status = 'loaded'
     config.transports.source = toWorkspaceDisplayPath(transportsPath)

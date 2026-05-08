@@ -1,0 +1,13 @@
+services:
+  workflow-app:
+    build:
+      context: .
+    image: nerveflow-workflow-app:local
+    ports:
+      - "4190:4190"
+    environment:
+      PORT: 4190
+      WORKSPACE_DIR: /workspace
+      ENTRYPOINT_PATH: workflow.nrv
+    volumes:
+      - ./examples/docker-runtime-app:/workspace

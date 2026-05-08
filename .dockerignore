@@ -1,0 +1,11 @@
+node_modules/
+npm-debug.log*
+logs/
+coverage/
+.git/
+.github/
+nerve-studio/workspaces-local/
+workspaces-local/
+*.tgz
+dist/
+build/

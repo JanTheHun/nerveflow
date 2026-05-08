@@ -10,11 +10,15 @@ All notable changes to this project are documented in this file.
 - Enum constraints are exact-literal only; wildcard/pattern semantics are explicitly unsupported.
 - Nerve Studio graph view now supports two floating source-code panels with per-panel save/close/drag interactions and a chooser dialog when both panel slots are occupied.
 - Floating and editor textareas now recognize `file("...")` references in addition to `file:...` references for hover/click navigation.
+- Packaged runtime smoke automation command (`npm run test:pack-smoke`) to validate packed artifact install, runtime boot, attach snapshot, and ingress endpoint behavior.
 
 ### Changed
 
 - Contract interpretation now treats multi-string arrays as scalar enums instead of collection schemas for those forms.
 - Editor gutter metrics now recalculate when pane content changes so line-number spacing stays aligned after loading files with different line counts.
+- npm publish contract now exposes `nerveflow/host-modules` as a supported subpath export.
+- WebSocket runtime dependency (`ws`) is now a runtime dependency so published runtime surfaces and attach CLI are self-contained.
+- Published CLI boundary now focuses on standalone runtime tools (`nerve-runtime`, `nerve-attach`, `nerve-model-check`); `nerve-dev-remote` remains repository-only.
 
 ### Notes
 

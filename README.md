@@ -181,6 +181,8 @@ console.log(result.state.count)
 - [Full documentation](./docs/)
 - [Language reference](./docs/03-language-reference.md)
 - [Host integration guide](./docs/04-host-integration.md)
+- [Production readiness checklist](./docs/11-production-readiness.md) (for maintainers and release planning)
+- [Docker deployment guide](./docs/12-docker-deployment.md)
 - [Runtime module notes](./src/runtime/README.md)
 - [Example workflows](./docs/examples/)
 
@@ -216,17 +218,13 @@ Start runtime and remote Studio together:
 node bin/nerve-dev-remote.js examples/mqtt-simple-host
 ```
 
-This launcher auto-opens Studio in your browser when it is ready.
-
-Short form via npm:
-
-```bash
-npm run dev:remote -- examples/mqtt-simple-host
-```
-
-Use `--no-open` to suppress browser auto-open.
+This launcher is a repository development utility and is not part of the published npm runtime artifact.
+Use it when working from a full repository checkout.
 
 See the host guide for full details and protocol semantics: [Host integration guide](./docs/04-host-integration.md).
+For workspace capability scaffolding and diagnostics (`modules`, `doctor`, `add memory-pgvector`), see the Compose CLI section in the host guide.
+
+Deploy one workflow workspace as a containerized app with the root [Dockerfile](./Dockerfile), [docker-compose.yml](./docker-compose.yml), and [Docker deployment guide](./docs/12-docker-deployment.md).
 
 ---
 
@@ -234,6 +232,12 @@ See the host guide for full details and protocol semantics: [Host integration gu
 
 ```bash
 npm test
+```
+
+Packaged runtime smoke validation:
+
+```bash
+npm run test:pack-smoke
 ```
 
 ---

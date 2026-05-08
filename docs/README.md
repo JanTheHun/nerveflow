@@ -23,6 +23,12 @@ This documentation is for **users building workflows with Nerveflow**.
 - [spec-structured-return-contracts.md](spec-structured-return-contracts.md)
 - [spec-late-contract-binding.md](spec-late-contract-binding.md)
 - [spec-bounded-control-flow-provenance.md](spec-bounded-control-flow-provenance.md)
+- [spec-parallel-group-evaluation.md](spec-parallel-group-evaluation.md)
+
+## Operational & Release
+
+- [11-production-readiness.md](11-production-readiness.md) — Production readiness gates and pre-publish checklist
+- [12-docker-deployment.md](12-docker-deployment.md) — Deploy one workflow workspace as a Dockerized app
 
 ## Example scripts
 

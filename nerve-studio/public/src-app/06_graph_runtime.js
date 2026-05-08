@@ -331,43 +331,146 @@ export function flashNextVGraphEventValue(eventType, value, options = {}) {
   nextVGraphState.runtimeTimers.add(timerId)
 }
 
-export function getNextVGraphEdgeFlashAnchor(edgeKey) {
+function getNextVGraphEdgePlacementCandidates(edgeKey) {
   const edgeElement = nextVGraphState.edgeElements.get(edgeKey)
-  if (!edgeElement) return null
+  if (!edgeElement) return []
 
-  let point = null
+  const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
+  const renderScale = getNextVGraphRenderScale(zoom)
+  const scaledPadding = getNextVGraphScaledPadding(zoom, getNextVGraphViewport())
+  const toCanvas = (point) => ({
+    x: scaledPadding.x + (Number(point.x) * renderScale),
+    y: scaledPadding.y + (Number(point.y) * renderScale),
+  })
+
+  const ratioSamples = [0.34, 0.42, 0.5, 0.58, 0.66]
+  const normalOffsets = [12, 18, 26, 34]
+  const candidates = []
+
+  const pushCandidates = (point, normal, ratio) => {
+    const base = toCanvas(point)
+    const nx = Number(normal?.x)
+    const ny = Number(normal?.y)
+    const normalLength = Math.hypot(nx, ny) || 1
+    const unitNormal = { x: nx / normalLength, y: ny / normalLength }
+    const ratioScore = 1 - Math.abs(0.5 - ratio)
+
+    for (const offset of normalOffsets) {
+      for (const sign of [1, -1]) {
+        candidates.push({
+          x: base.x + (unitNormal.x * offset * sign),
+          y: base.y + (unitNormal.y * offset * sign),
+          score: (ratioScore * 100) - offset,
+        })
+      }
+    }
+  }
+
   if (typeof edgeElement.getTotalLength === 'function' && typeof edgeElement.getPointAtLength === 'function') {
     try {
       const totalLength = Number(edgeElement.getTotalLength())
       if (Number.isFinite(totalLength) && totalLength > 0) {
-        point = edgeElement.getPointAtLength(totalLength * 0.62)
+        for (const ratio of ratioSamples) {
+          const edgeLen = totalLength * ratio
+          const point = edgeElement.getPointAtLength(edgeLen)
+          const span = Math.max(8, totalLength * 0.06)
+          const before = edgeElement.getPointAtLength(Math.max(0, edgeLen - span))
+          const after = edgeElement.getPointAtLength(Math.min(totalLength, edgeLen + span))
+          const tx = Number(after.x) - Number(before.x)
+          const ty = Number(after.y) - Number(before.y)
+          const tangentLength = Math.hypot(tx, ty) || 1
+          pushCandidates(point, { x: -(ty / tangentLength), y: tx / tangentLength }, ratio)
+        }
       }
     } catch {
-      // Fall back to data attributes below.
+      // Fall through to straight-line fallback below.
     }
   }
 
-  if (!point) {
+  if (candidates.length === 0) {
     const x1 = Number(edgeElement.getAttribute('x1'))
     const y1 = Number(edgeElement.getAttribute('y1'))
     const x2 = Number(edgeElement.getAttribute('x2'))
     const y2 = Number(edgeElement.getAttribute('y2'))
     if ([x1, y1, x2, y2].every(Number.isFinite)) {
-      point = {
-        x: x1 + ((x2 - x1) * 0.62),
-        y: y1 + ((y2 - y1) * 0.62),
+      const tx = x2 - x1
+      const ty = y2 - y1
+      const tangentLength = Math.hypot(tx, ty) || 1
+      const normal = { x: -(ty / tangentLength), y: tx / tangentLength }
+      for (const ratio of ratioSamples) {
+        pushCandidates(
+          {
+            x: x1 + ((x2 - x1) * ratio),
+            y: y1 + ((y2 - y1) * ratio),
+          },
+          normal,
+          ratio,
+        )
       }
     }
   }
 
-  if (!point) return null
+  return candidates.sort((a, b) => b.score - a.score)
+}
 
-  const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
-  const renderScale = getNextVGraphRenderScale(zoom)
-  const scaledPadding = getNextVGraphScaledPadding(zoom, getNextVGraphViewport())
-  return {
-    x: scaledPadding.x + (point.x * renderScale),
-    y: scaledPadding.y + (point.y * renderScale),
+function rectsIntersect(a, b) {
+  return !(
+    a.right <= b.left
+    || a.left >= b.right
+    || a.bottom <= b.top
+    || a.top >= b.bottom
+  )
+}
+
+function rectOverlapArea(a, b) {
+  const overlapWidth = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left))
+  const overlapHeight = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top))
+  return overlapWidth * overlapHeight
+}
+
+function badgeOverlapsAnyNodeShape(badgeRect, nodeShapeRects) {
+  const margin = 4
+  const expanded = {
+    left: badgeRect.left - margin,
+    right: badgeRect.right + margin,
+    top: badgeRect.top - margin,
+    bottom: badgeRect.bottom + margin,
+  }
+  for (const rect of nodeShapeRects) {
+    if (rectsIntersect(expanded, rect)) return true
+  }
+  return false
+}
+
+function positionNextVGraphEdgeBadge(badge, edgeKey, canvas) {
+  const nodeShapeRects = Array.from(canvas.querySelectorAll('.nextv-graph-node-shape')).map((el) => el.getBoundingClientRect())
+  const candidates = getNextVGraphEdgePlacementCandidates(edgeKey)
+  if (candidates.length === 0) return
+
+  let bestCandidate = null
+  let bestOverlap = Number.POSITIVE_INFINITY
+  for (const candidate of candidates) {
+    badge.style.left = `${Math.round(candidate.x)}px`
+    badge.style.top = `${Math.round(candidate.y)}px`
+    const rect = badge.getBoundingClientRect()
+    if (!badgeOverlapsAnyNodeShape(rect, nodeShapeRects)) {
+      return
+    }
+
+    let overlapArea = 0
+    for (const nodeRect of nodeShapeRects) {
+      overlapArea += rectOverlapArea(rect, nodeRect)
+    }
+    if (overlapArea < bestOverlap) {
+      bestOverlap = overlapArea
+      bestCandidate = candidate
+    }
+  }
+
+  // Fallback to the lowest-overlap candidate when all positions collide.
+  if (bestCandidate) {
+    badge.style.left = `${Math.round(bestCandidate.x)}px`
+    badge.style.top = `${Math.round(bestCandidate.y)}px`
   }
 }
 
@@ -375,18 +478,14 @@ export function flashNextVGraphEdgeValue(edgeKey, value) {
   const formatted = formatNextVGraphEventValue(value)
   if (!formatted) return
 
-  const anchor = getNextVGraphEdgeFlashAnchor(edgeKey)
-  if (!anchor) return
-
   const canvas = nextVGraphState.canvasEl ?? getNextVGraphCanvas()
   if (!canvas) return
 
   const badge = document.createElement('div')
-  badge.className = 'nextv-graph-emit-value-flash nextv-graph-effect-value-flash'
+  badge.className = 'nextv-graph-emit-value-flash nextv-graph-effect-value-flash nextv-graph-edge-value-flash'
   badge.textContent = formatted
-  badge.style.left = `${Math.round(anchor.x + 10)}px`
-  badge.style.top = `${Math.round(anchor.y - 14)}px`
   canvas.appendChild(badge)
+  positionNextVGraphEdgeBadge(badge, edgeKey, canvas)
 
   window.requestAnimationFrame(() => {
     badge.classList.add('visible')
@@ -909,7 +1008,18 @@ export function handleNextVGraphRuntimeEvent(runtimeEvent) {
 
     nextVGraphState.runtimeLastDispatchedNode = handlerId
     applyNextVGraphRuntimeVisuals()
-    flashNextVGraphEventValue(signalType, runtimeEvent.value, { nodeId: handlerId })
+    const emitEdgeKey = previousNode ? getNextVGraphEdgeKey(previousNode, signalType) : ''
+    const collapsedEmitEdgeKey = previousNode ? getNextVGraphEdgeKey(previousNode, handlerId) : ''
+    const payloadEdgeKey = (emitEdgeKey && nextVGraphState.edgeElements.has(emitEdgeKey))
+      ? emitEdgeKey
+      : (collapsedEmitEdgeKey && nextVGraphState.edgeElements.has(collapsedEmitEdgeKey))
+        ? collapsedEmitEdgeKey
+      : (subscriptionKey && nextVGraphState.edgeElements.has(subscriptionKey) ? subscriptionKey : '')
+    if (payloadEdgeKey) {
+      flashNextVGraphEdgeValue(payloadEdgeKey, runtimeEvent.value)
+    } else {
+      flashNextVGraphEventValue(signalType, runtimeEvent.value, { nodeId: handlerId })
+    }
     if (nextVGraphState.autoFollowEnabled && typeof nextVGraphState.setSelectedGraphNodeFn === 'function') {
       nextVGraphState.setSelectedGraphNodeFn(handlerId)
     }

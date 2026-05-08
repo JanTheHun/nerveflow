@@ -783,17 +783,18 @@ export function renderNextVGraph(data = {}, options = {}) {
       return String(edge.from ?? '').trim()
     }
 
-    // Place label near the arrowhead: at parameter t along the final segment, offset to the side.
-    const appendEdgeLabelAt = (ax, ay, bx, by, t = 0.78) => {
+    // Place label near the center of the edge segment, offset to the side.
+    const appendEdgeLabelAt = (ax, ay, bx, by, t = 0.5) => {
       const labelText = getSubscriptionEdgeLabelText()
       if (!labelText) return
-      const lx = ax + (bx - ax) * t
-      const ly = ay + (by - ay) * t
+      const clampedT = Math.max(0.2, Math.min(0.8, Number(t) || 0.5))
+      const lx = ax + (bx - ax) * clampedT
+      const ly = ay + (by - ay) * clampedT
       // Perpendicular offset so label doesn't sit on the line.
       const len = Math.hypot(bx - ax, by - ay) || 1
       const nx = -(by - ay) / len
       const ny = (bx - ax) / len
-      const offset = 11
+      const offset = Math.max(9, Math.min(15, len * 0.15))
       const edgeLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text')
       edgeLabel.setAttribute('class', 'nextv-graph-edge-label subscription')
       edgeLabel.setAttribute('x', String(Math.round(lx + nx * offset)))
@@ -860,8 +861,8 @@ export function renderNextVGraph(data = {}, options = {}) {
         pathEl.appendChild(title)
         nextVGraphState.edgeElements.set(edgeKey, pathEl)
         svg.appendChild(pathEl)
-        // Label on the second half of the curve, near the arrowhead.
-        appendEdgeLabelAt(waypoint.x, waypoint.y, ex, ey, 0.55)
+        // Label near the geometric center of the collapsed edge route.
+        appendEdgeLabelAt(sx, sy, ex, ey, 0.5)
         continue
       }
     }
@@ -883,10 +884,16 @@ export function renderNextVGraph(data = {}, options = {}) {
       nextVGraphState.edgeElements.set(edgeKey, pathEl)
       svg.appendChild(pathEl)
 
-      // Label near the arrowhead: use the segment from the second-to-last to the last bendpoint.
-      const lastIdx = bendpoints.length - 1
-      const secondLastIdx = Math.max(0, lastIdx - 1)
-      appendEdgeLabelAt(bendpoints[secondLastIdx].x, bendpoints[secondLastIdx].y, bendpoints[lastIdx].x, bendpoints[lastIdx].y)
+      // Label near the middle of the routed path for better readability.
+      const midStartIdx = Math.max(0, Math.floor((bendpoints.length - 2) / 2))
+      const midEndIdx = Math.min(bendpoints.length - 1, midStartIdx + 1)
+      appendEdgeLabelAt(
+        bendpoints[midStartIdx].x,
+        bendpoints[midStartIdx].y,
+        bendpoints[midEndIdx].x,
+        bendpoints[midEndIdx].y,
+        0.5,
+      )
       continue
     }
 
@@ -914,7 +921,7 @@ export function renderNextVGraph(data = {}, options = {}) {
     line.appendChild(title)
     nextVGraphState.edgeElements.set(edgeKey, line)
     svg.appendChild(line)
-    appendEdgeLabelAt(x1, y1, x2, y2)
+    appendEdgeLabelAt(x1, y1, x2, y2, 0.5)
   }
 
   for (const nodeObj of graphNodes) {

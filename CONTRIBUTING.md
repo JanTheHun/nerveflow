@@ -35,7 +35,30 @@ See `docs/examples/multi-surface-attachment-pattern.md` for architecture pattern
 
 ## Release Checklist
 
-- Update `CHANGELOG.md`.
-- Bump version in `package.json`.
-- Run `npm test`.
-- Verify package contents with `npm pack --dry-run`.
+Before publishing to npm, all production readiness gates must **pass**. See [docs/11-production-readiness.md](docs/11-production-readiness.md) for the complete checklist with measurable criteria.
+
+In summary:
+
+1. **Language Stability Gate** — Verify DSL features are documented and stable
+2. **Runtime Determinism Gate** — All runtime tests pass; no hidden agent loops
+3. **Safety Enforcement Gate** — Policy, auth, and failure-handling tests pass
+4. **Packaging Contract Gate** — Export map, dependencies, and CLI boundary are correct
+5. **Packed Artifact Smoke Gate** — Tarball installs and boots standalone
+6. **CI Gate** — GitHub Actions publish-gate workflow passes on main
+7. **Docs and Positioning Gate** — All user-facing docs are accurate and complete
+
+**Quick validation:**
+```bash
+npm test                       # All tests pass
+npm run test:pack-smoke        # Artifact smoke test passes
+grep -n "Unreleased" CHANGELOG.md  # CHANGELOG.md updated
+```
+
+**Publish sequence:**
+```bash
+npm version <patch|minor|major>  # Updates version and CHANGELOG
+npm publish --dry-run            # Verify contents
+npm publish                       # Publish to npm
+```
+
+See [docs/11-production-readiness.md](docs/11-production-readiness.md) for the full pre-publish checklist including version bumping and registry verification.

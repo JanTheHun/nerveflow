@@ -9,3 +9,6 @@ examples/memory-agent/.env
 workspaces-local/music-agent/.env
 workspaces-local/music-agent/exports/
 workspaces-local/music-agent/memory-export-*.jsonl
+workspaces-local/music-agent-compose-test/.env
+workspaces-local/music-agent-compose-test/exports/
+workspaces-local/music-agent-compose-test/memory-export-*.jsonl

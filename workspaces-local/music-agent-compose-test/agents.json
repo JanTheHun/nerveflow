@@ -1,0 +1,44 @@
+{
+  "profiles": {
+    "chat": {
+      "model": "chat-model",
+      "tools": [],
+      "instructions": ""
+    },
+    "intent": {
+      "model": "intent-model",
+      "tools": [],
+      "instructions": "Classify user intent."
+    },
+    "intent-2": {
+      "model": "intent-2-model",
+      "tools": [],
+      "instructions": "Classify user intent."
+    },
+    "intent-3": {
+      "model": "intent-3-model",
+      "tools": [],
+      "instructions": "Classify user intent."
+    },
+    "intent-4": {
+      "model": "intent-4-model",
+      "tools": [],
+      "instructions": "Classify user intent."
+    },
+    "intent-5": {
+      "model": "intent-5-model",
+      "tools": [],
+      "instructions": "Classify user intent."
+    },
+    "groq": {
+      "model": "groq-model",
+      "tools": [],
+      "instructions": "Classify user intent."
+    },
+    "gemini": {
+      "model": "gemini-model",
+      "tools": [],
+      "instructions": "Classify user intent."
+    }
+  }
+}

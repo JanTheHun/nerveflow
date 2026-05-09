@@ -222,7 +222,7 @@ This launcher is a repository development utility and is not part of the publish
 Use it when working from a full repository checkout.
 
 See the host guide for full details and protocol semantics: [Host integration guide](./docs/04-host-integration.md).
-For workspace capability scaffolding and diagnostics (`modules`, `doctor`, `add memory-pgvector`), see the Compose CLI section in the host guide.
+For workspace capability scaffolding and diagnostics (`modules`, `doctor`, `add memory-pgvector`, `add speech`), see the Compose CLI section in the host guide.
 
 Deploy one workflow workspace as a containerized app with the root [Dockerfile](./Dockerfile), [docker-compose.yml](./docker-compose.yml), and [Docker deployment guide](./docs/12-docker-deployment.md).
 

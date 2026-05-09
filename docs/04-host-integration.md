@@ -156,6 +156,7 @@ Current commands:
 - `node bin/nerve-compose.js modules [workspaceDir] [--json] [--builtin-only]`
 - `node bin/nerve-compose.js doctor [workspaceDir] [--json] [--strict]`
 - `node bin/nerve-compose.js add memory-pgvector [workspaceDir] [--json]`
+- `node bin/nerve-compose.js add speech [workspaceDir] [--json]`
 
 `add memory-pgvector` scaffolds workspace wiring using the existing host-modules loading path:
 
@@ -163,11 +164,18 @@ Current commands:
 - creates or updates `.env.example` with `MEMORY_*` placeholders
 - updates `nextv.json` `requires.memory` and `modules.memory` when `nextv.json` exists
 
+`add speech` scaffolds a reference speech ingress surface from the voice-spa template:
+
+- creates or updates `.env.example` with `VOICE_*`, `WHISPER_*`, `PIPER_*`, and runtime endpoint placeholders
+- updates `nextv.json` `requires.speech` and `modules.speech` when `nextv.json` exists
+- creates `speech-surface/` with record/stop SPA assets and a bridge server (`/api/voice-command`, `/api/output/stream`)
+
 Behavior and boundaries:
 
 - compose commands are workspace-local and deterministic
 - runtime behavior remains unchanged; startup still loads builtin/public/workspace providers through existing loader order
 - external prerequisites remain explicit (PostgreSQL + pgvector and embedding service are not provisioned by compose)
+- external speech prerequisites remain explicit (Whisper/Piper binaries/models and runtime endpoint availability are not provisioned by compose)
 - if `host_modules/index.js` already exists and is not compose-generated, `add` reports a manual-merge skip instead of rewriting user code
 
 ## Host protocol utilities (v1)

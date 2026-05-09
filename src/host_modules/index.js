@@ -15,6 +15,17 @@ export { loadHostModuleComposition } from './loader.js'
 export { createRuntimeBuiltinToolProvider } from './builtin/index.js'
 export { createPublicHostModuleProviders } from './public/index.js'
 export { createPollingIngressConnector } from './public/polling_ingress_connector.js'
+export { createWhisperIngressConnector } from './public/whisper_ingress_connector.js'
+export { createPiperEffectRealizer } from './public/piper_effect_realizer.js'
+export {
+	buildPiperLaunchConfig,
+	buildWhisperLaunchConfig,
+	executeSpeechProcess,
+	extractOutputText,
+	extractTranscript,
+	pickAudioExtension,
+	splitCommandArgs,
+} from './public/speech_process.js'
 export {
 	buildSyntheticRssItem,
 	fetchRssCandidatesByFeed,

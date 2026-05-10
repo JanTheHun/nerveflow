@@ -87,6 +87,49 @@ function isPlainObject(value) {
   return value != null && typeof value === 'object' && !Array.isArray(value)
 }
 
+function describeRuntimeValueType(value) {
+  if (value === null) return 'null'
+  if (Array.isArray(value)) return 'array'
+  return typeof value
+}
+
+function previewRuntimeValue(value, maxLength = 120) {
+  if (value === undefined) return 'undefined'
+  if (value === null) return 'null'
+
+  if (typeof value === 'string') {
+    const compact = value.replace(/\s+/g, ' ').trim()
+    const sliced = compact.length > maxLength ? `${compact.slice(0, maxLength)}...` : compact
+    return `"${sliced}"`
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value)
+  }
+
+  if (typeof value === 'function') {
+    return '[function]'
+  }
+
+  if (Array.isArray(value)) {
+    return `array(len=${value.length})`
+  }
+
+  if (isPlainObject(value)) {
+    const keys = Object.keys(value)
+    const previewKeys = keys.slice(0, 5).join(', ')
+    const suffix = keys.length > 5 ? ', ...' : ''
+    return `object(keys=${previewKeys}${suffix})`
+  }
+
+  try {
+    const text = String(value)
+    return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text
+  } catch {
+    return '[unprintable value]'
+  }
+}
+
 function createDelimiterState() {
   return {
     paren: 0,
@@ -1288,15 +1331,20 @@ function resolvePath(path, locals, state, event, context) {
     cursor = locals[root]
   }
 
-  for (const segment of rest) {
+  for (let index = 0; index < rest.length; index++) {
+    const segment = rest[index]
     if (!isPlainObject(cursor) && !Array.isArray(cursor)) {
       if (allowUndefinedPath) return undefined
+      const resolvedPath = path.slice(0, index + 1).join('.')
+      const attemptedPath = path.slice(0, index + 2).join('.')
+      const valueType = describeRuntimeValueType(cursor)
+      const valuePreview = previewRuntimeValue(cursor)
       throw nextvError({
         line: context.line,
         kind: 'runtime',
         code: 'UNDEFINED_VARIABLE',
         statement: context.statement,
-        message: `Cannot access "${segment}" on non-object value.`,
+        message: `Cannot access "${segment}" on ${valueType} value while resolving "${attemptedPath}". Resolved "${resolvedPath}" to ${valueType}: ${valuePreview}.`,
       })
     }
     if (!(segment in cursor)) {

@@ -2138,6 +2138,22 @@ test('missing dotted path outside condition still raises runtime error', async (
   )
 })
 
+test('non-object property access error includes attempted path and value context', async () => {
+  await assert.rejects(
+    () => runNextVScript([
+      'response = "oops"',
+      'x = response.metadata',
+    ].join('\n')),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'UNDEFINED_VARIABLE')
+      assert.match(err.message, /while resolving "response\.metadata"/)
+      assert.match(err.message, /Resolved "response" to string: "oops"/)
+      return true
+    },
+  )
+})
+
 test('else if after else is rejected', async () => {
   await assert.rejects(
     () => runNextVScript([

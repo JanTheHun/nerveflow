@@ -12,6 +12,10 @@ import {
   _setNextVLastKnownState,
   _setNextVManagedProcessRunning,
   _setNextVRuntimeRunning,
+  _setNextVExecutionGroups,
+  _setNextVExecutionCounter,
+  _setNextVEventsLiveMode,
+  _setNextVEventsPausedBuffer,
   _setRemoteTransport,
   activeVerticalResize,
   fileTreePane,
@@ -43,6 +47,11 @@ import {
   nextVRuntimeRunning,
   nextVRuntimeTargetState,
   nextVWorkspaceDirInput,
+  nextVExecutionGroups,
+  nextVExecutionCounter,
+  nextVEventsLiveMode,
+  nextVEventsPausedBuffer,
+  nextVEventsOutput,
   outputSection,
   remoteTransport,
   scriptSection,
@@ -67,8 +76,11 @@ import {
   clearNextVConsoleOutput
 } from './03_ui_controls.js'
 import {
-  extractExecutionAgentElapsedMs,
-  finalizeNextVGraphActiveAgentTimers,
+  buildExecutionGroup,
+  renderExecutionGroups,
+  setNextVEventsLiveMode
+} from './02_user_output.js'
+import {
   reconcileNextVGraphAgentTimersFromExecution,
   resetNextVGraphRuntimeState,
   beginNextVGraphExecutionTrail,
@@ -217,12 +229,31 @@ export function openNextVStream() {
       }
       applyNextVGraphRuntimeVisuals()
       fadeNextVGraphActiveHighlights(760)
-      const executionSummary = summarizeExecutionAgentCalls(payload?.result)
-      appendNextVLogRow(`[nextv:execution] type=${eventType} source=${source} steps=${Number(payload?.result?.steps ?? 0)} ${executionSummary}`, 'result')
-      const executionDetails = summarizeExecutionAgentCallDetails(payload?.result)
-      if (executionDetails) {
-        appendNextVLogRow(executionDetails, 'result')
+
+      // Build and render execution group (newest-first)
+      nextVExecutionCounter += 1
+      const group = buildExecutionGroup(payload, nextVExecutionCounter)
+
+      if (nextVEventsLiveMode) {
+        // Live mode: prepend to groups and render
+        const updated = [group, ...nextVExecutionGroups]
+        const capped = updated.slice(0, 50)
+        _setNextVExecutionGroups(capped)
+        renderExecutionGroups()
+      } else {
+        // Paused mode: buffer the group
+        const buffered = [group, ...nextVEventsPausedBuffer]
+        const cappedBuffer = buffered.slice(0, 50)
+        _setNextVEventsPausedBuffer(cappedBuffer)
+
+        // Update badge
+        const badge = document.getElementById('nextv-events-buffer-count')
+        if (badge) {
+          badge.textContent = `${cappedBuffer.length} new`
+          badge.hidden = false
+        }
       }
+
       const diffBefore = nextVLastKnownState ?? {}
       const diffAfter = payload?.snapshot?.state ?? {}
       appendNextVStateDiffEntry(eventType, buildStateDiff(diffBefore, diffAfter))

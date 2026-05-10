@@ -412,10 +412,17 @@ const workspace = document.getElementById('workspace')
 import {
   DEFAULT_USER_OUTPUT_CHANNELS,
   _setVisualOutputWindow,
+  _setNextVExecutionGroups,
+  _setNextVEventsLiveMode,
+  _setNextVEventsPausedBuffer,
   activeScriptAbortController,
   cancelScriptBtn,
   nextVEventSource,
   nextVRuntimeRunning,
+  nextVExecutionGroups,
+  nextVEventsLiveMode,
+  nextVEventsPausedBuffer,
+  nextVEventsOutput,
   storageKeys,
   userInputText,
   userOutput,
@@ -754,6 +761,176 @@ export async function sendNextVUserText() {
   } catch (err) {
     appendNextVErrorLog(err)
     setStatus('failed to send ui text', 'responding')
+  }
+}
+
+// --- Execution Groups (newest-first log view) ---
+
+export function buildExecutionGroup(payload, groupId) {
+  const event = payload?.event ?? {}
+  const result = payload?.result ?? {}
+  const events = Array.isArray(payload?.events) ? payload.events : []
+
+  // Determine outcome
+  let outcome = 'completed'
+  if (result.stopped) {
+    outcome = 'stopped'
+  } else {
+    // Check for contract violations or warnings in events
+    for (const evt of events) {
+      if (evt.type === 'warning' && evt.code?.startsWith('contract')) {
+        outcome = 'contract-violated'
+        break
+      }
+      if (evt.type === 'warning') {
+        outcome = 'warning'
+      }
+    }
+  }
+
+  // Extract timestamps from events
+  let startTs = null
+  let endTs = null
+  if (events.length > 0) {
+    startTs = events[0].timestamp || null
+    endTs = events[events.length - 1].timestamp || startTs
+  }
+
+  return {
+    id: groupId,
+    ingressType: String(event.type ?? ''),
+    source: String(event.source ?? ''),
+    result,
+    events,
+    startTs,
+    endTs,
+    outcome,
+    expanded: false,
+  }
+}
+
+export function renderExecutionGroups() {
+  if (!nextVEventsOutput) return
+
+  nextVEventsOutput.innerHTML = ''
+
+  if (nextVExecutionGroups.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'nextv-events-empty'
+    empty.textContent = 'No executions yet.'
+    nextVEventsOutput.appendChild(empty)
+    return
+  }
+
+  for (const group of nextVExecutionGroups) {
+    const groupEl = document.createElement('div')
+    groupEl.className = 'exec-group'
+    groupEl.setAttribute('data-group-id', group.id)
+
+    // Calculate duration
+    const duration = group.startTs && group.endTs
+      ? ((new Date(group.endTs) - new Date(group.startTs)) / 1000).toFixed(3)
+      : '0.000'
+
+    // Build summary line
+    const summaryEl = document.createElement('div')
+    summaryEl.className = 'exec-group-summary'
+    summaryEl.innerHTML = `
+      <span class="exec-toggle">${group.expanded ? '▼' : '▶'}</span>
+      <span class="exec-id">#${group.id}</span>
+      <span class="exec-type">type=${group.ingressType}</span>
+      <span class="exec-outcome exec-outcome-${group.outcome}">${group.outcome}</span>
+      <span class="exec-duration">${duration}s</span>
+      <span class="exec-count">${group.events.length} events</span>
+    `
+    summaryEl.onclick = () => {
+      group.expanded = !group.expanded
+      renderExecutionGroups()
+    }
+    groupEl.appendChild(summaryEl)
+
+    // Build body (collapsed by default)
+    if (group.expanded) {
+      const bodyEl = document.createElement('div')
+      bodyEl.className = 'exec-group-body'
+
+      for (const event of group.events) {
+        const eventEl = document.createElement('div')
+        eventEl.className = `exec-event exec-event-${event.type}`
+        eventEl.innerHTML = `
+          <span class="exec-event-ts">${event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '—'}</span>
+          <span class="exec-event-type">${event.type}</span>
+          <span class="exec-event-content">${formatExecutionEventContent(event)}</span>
+        `
+        bodyEl.appendChild(eventEl)
+      }
+
+      groupEl.appendChild(bodyEl)
+    }
+
+    nextVEventsOutput.appendChild(groupEl)
+  }
+}
+
+function formatExecutionEventContent(event) {
+  const type = event.type
+  if (type === 'output') {
+    const format = event.format || 'text'
+    const content = event.content || ''
+    const snippet = content.length > 60 ? content.slice(0, 60) + '…' : content
+    return `${format}: ${snippet}`
+  }
+  if (type === 'tool_call') {
+    const tool = event.tool || 'unknown'
+    return `call: ${tool}`
+  }
+  if (type === 'tool_result') {
+    const tool = event.tool || 'unknown'
+    return `result: ${tool}`
+  }
+  if (type === 'state_update') {
+    return 'state updated'
+  }
+  if (type === 'warning') {
+    return event.message || event.code || 'warning'
+  }
+  return ''
+}
+
+export function setNextVEventsLiveMode(live) {
+  _setNextVEventsLiveMode(live)
+
+  const btn = document.getElementById('nextv-events-live-btn')
+  const badge = document.getElementById('nextv-events-buffer-count')
+
+  if (!btn) return
+
+  if (live) {
+    // Resume: flush buffer and snap back to top
+    const buffered = nextVEventsPausedBuffer.slice()
+    _setNextVEventsPausedBuffer([])
+
+    if (buffered.length > 0) {
+      const newGroups = [...buffered.reverse(), ...nextVExecutionGroups]
+      const capped = newGroups.slice(0, 50)
+      _setNextVExecutionGroups(capped)
+    }
+
+    btn.textContent = 'Live'
+    btn.classList.remove('paused')
+    if (badge) {
+      badge.textContent = ''
+      badge.hidden = true
+    }
+    renderExecutionGroups()
+    // Snap to top
+    if (nextVEventsOutput) {
+      nextVEventsOutput.scrollTop = 0
+    }
+  } else {
+    // Pause: no action needed, state will be updated by handler
+    btn.textContent = 'Paused'
+    btn.classList.add('paused')
   }
 }
 
@@ -1564,7 +1741,8 @@ import {
   getPaneState,
   getPaneTextarea,
   renderPaneTitles,
-  renderScriptMirrorForPane
+  renderScriptMirrorForPane,
+  getCurrentNextVEditorTabSize
 } from './09_editor.js'
 import {
   pathBasename
@@ -2032,6 +2210,8 @@ export function bindFloatingGraphCodePanelEvents() {
 
       if (event.key === 'Tab') {
         event.preventDefault()
+        const indentWidth = getCurrentNextVEditorTabSize()
+        const indentSpaces = ' '.repeat(indentWidth)
         const value = textarea.value
         const start = Number(textarea.selectionStart)
         const end = Number(textarea.selectionEnd)
@@ -2056,9 +2236,9 @@ export function bindFloatingGraphCodePanelEvents() {
                 if (index === 0 && start > lineStart) removedBeforeCaret = 1
                 return line.slice(1)
               }
-              if (line.startsWith('  ')) {
-                if (index === 0 && start > lineStart) removedBeforeCaret = Math.min(2, start - lineStart)
-                return line.slice(2)
+              if (line.startsWith(indentSpaces)) {
+                if (index === 0 && start > lineStart) removedBeforeCaret = Math.min(indentWidth, start - lineStart)
+                return line.slice(indentWidth)
               }
               return line
             })
@@ -2126,6 +2306,7 @@ export function bindFloatingGraphCodePanelEvents() {
     })
   }
 }
+
 
 // --- Imports (auto-generated by gen-es-modules.js) ---
 import {
@@ -3096,43 +3277,146 @@ export function flashNextVGraphEventValue(eventType, value, options = {}) {
   nextVGraphState.runtimeTimers.add(timerId)
 }
 
-export function getNextVGraphEdgeFlashAnchor(edgeKey) {
+function getNextVGraphEdgePlacementCandidates(edgeKey) {
   const edgeElement = nextVGraphState.edgeElements.get(edgeKey)
-  if (!edgeElement) return null
+  if (!edgeElement) return []
 
-  let point = null
+  const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
+  const renderScale = getNextVGraphRenderScale(zoom)
+  const scaledPadding = getNextVGraphScaledPadding(zoom, getNextVGraphViewport())
+  const toCanvas = (point) => ({
+    x: scaledPadding.x + (Number(point.x) * renderScale),
+    y: scaledPadding.y + (Number(point.y) * renderScale),
+  })
+
+  const ratioSamples = [0.34, 0.42, 0.5, 0.58, 0.66]
+  const normalOffsets = [12, 18, 26, 34]
+  const candidates = []
+
+  const pushCandidates = (point, normal, ratio) => {
+    const base = toCanvas(point)
+    const nx = Number(normal?.x)
+    const ny = Number(normal?.y)
+    const normalLength = Math.hypot(nx, ny) || 1
+    const unitNormal = { x: nx / normalLength, y: ny / normalLength }
+    const ratioScore = 1 - Math.abs(0.5 - ratio)
+
+    for (const offset of normalOffsets) {
+      for (const sign of [1, -1]) {
+        candidates.push({
+          x: base.x + (unitNormal.x * offset * sign),
+          y: base.y + (unitNormal.y * offset * sign),
+          score: (ratioScore * 100) - offset,
+        })
+      }
+    }
+  }
+
   if (typeof edgeElement.getTotalLength === 'function' && typeof edgeElement.getPointAtLength === 'function') {
     try {
       const totalLength = Number(edgeElement.getTotalLength())
       if (Number.isFinite(totalLength) && totalLength > 0) {
-        point = edgeElement.getPointAtLength(totalLength * 0.62)
+        for (const ratio of ratioSamples) {
+          const edgeLen = totalLength * ratio
+          const point = edgeElement.getPointAtLength(edgeLen)
+          const span = Math.max(8, totalLength * 0.06)
+          const before = edgeElement.getPointAtLength(Math.max(0, edgeLen - span))
+          const after = edgeElement.getPointAtLength(Math.min(totalLength, edgeLen + span))
+          const tx = Number(after.x) - Number(before.x)
+          const ty = Number(after.y) - Number(before.y)
+          const tangentLength = Math.hypot(tx, ty) || 1
+          pushCandidates(point, { x: -(ty / tangentLength), y: tx / tangentLength }, ratio)
+        }
       }
     } catch {
-      // Fall back to data attributes below.
+      // Fall through to straight-line fallback below.
     }
   }
 
-  if (!point) {
+  if (candidates.length === 0) {
     const x1 = Number(edgeElement.getAttribute('x1'))
     const y1 = Number(edgeElement.getAttribute('y1'))
     const x2 = Number(edgeElement.getAttribute('x2'))
     const y2 = Number(edgeElement.getAttribute('y2'))
     if ([x1, y1, x2, y2].every(Number.isFinite)) {
-      point = {
-        x: x1 + ((x2 - x1) * 0.62),
-        y: y1 + ((y2 - y1) * 0.62),
+      const tx = x2 - x1
+      const ty = y2 - y1
+      const tangentLength = Math.hypot(tx, ty) || 1
+      const normal = { x: -(ty / tangentLength), y: tx / tangentLength }
+      for (const ratio of ratioSamples) {
+        pushCandidates(
+          {
+            x: x1 + ((x2 - x1) * ratio),
+            y: y1 + ((y2 - y1) * ratio),
+          },
+          normal,
+          ratio,
+        )
       }
     }
   }
 
-  if (!point) return null
+  return candidates.sort((a, b) => b.score - a.score)
+}
 
-  const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
-  const renderScale = getNextVGraphRenderScale(zoom)
-  const scaledPadding = getNextVGraphScaledPadding(zoom, getNextVGraphViewport())
-  return {
-    x: scaledPadding.x + (point.x * renderScale),
-    y: scaledPadding.y + (point.y * renderScale),
+function rectsIntersect(a, b) {
+  return !(
+    a.right <= b.left
+    || a.left >= b.right
+    || a.bottom <= b.top
+    || a.top >= b.bottom
+  )
+}
+
+function rectOverlapArea(a, b) {
+  const overlapWidth = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left))
+  const overlapHeight = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top))
+  return overlapWidth * overlapHeight
+}
+
+function badgeOverlapsAnyNodeShape(badgeRect, nodeShapeRects) {
+  const margin = 4
+  const expanded = {
+    left: badgeRect.left - margin,
+    right: badgeRect.right + margin,
+    top: badgeRect.top - margin,
+    bottom: badgeRect.bottom + margin,
+  }
+  for (const rect of nodeShapeRects) {
+    if (rectsIntersect(expanded, rect)) return true
+  }
+  return false
+}
+
+function positionNextVGraphEdgeBadge(badge, edgeKey, canvas) {
+  const nodeShapeRects = Array.from(canvas.querySelectorAll('.nextv-graph-node-shape')).map((el) => el.getBoundingClientRect())
+  const candidates = getNextVGraphEdgePlacementCandidates(edgeKey)
+  if (candidates.length === 0) return
+
+  let bestCandidate = null
+  let bestOverlap = Number.POSITIVE_INFINITY
+  for (const candidate of candidates) {
+    badge.style.left = `${Math.round(candidate.x)}px`
+    badge.style.top = `${Math.round(candidate.y)}px`
+    const rect = badge.getBoundingClientRect()
+    if (!badgeOverlapsAnyNodeShape(rect, nodeShapeRects)) {
+      return
+    }
+
+    let overlapArea = 0
+    for (const nodeRect of nodeShapeRects) {
+      overlapArea += rectOverlapArea(rect, nodeRect)
+    }
+    if (overlapArea < bestOverlap) {
+      bestOverlap = overlapArea
+      bestCandidate = candidate
+    }
+  }
+
+  // Fallback to the lowest-overlap candidate when all positions collide.
+  if (bestCandidate) {
+    badge.style.left = `${Math.round(bestCandidate.x)}px`
+    badge.style.top = `${Math.round(bestCandidate.y)}px`
   }
 }
 
@@ -3140,18 +3424,14 @@ export function flashNextVGraphEdgeValue(edgeKey, value) {
   const formatted = formatNextVGraphEventValue(value)
   if (!formatted) return
 
-  const anchor = getNextVGraphEdgeFlashAnchor(edgeKey)
-  if (!anchor) return
-
   const canvas = nextVGraphState.canvasEl ?? getNextVGraphCanvas()
   if (!canvas) return
 
   const badge = document.createElement('div')
-  badge.className = 'nextv-graph-emit-value-flash nextv-graph-effect-value-flash'
+  badge.className = 'nextv-graph-emit-value-flash nextv-graph-effect-value-flash nextv-graph-edge-value-flash'
   badge.textContent = formatted
-  badge.style.left = `${Math.round(anchor.x + 10)}px`
-  badge.style.top = `${Math.round(anchor.y - 14)}px`
   canvas.appendChild(badge)
+  positionNextVGraphEdgeBadge(badge, edgeKey, canvas)
 
   window.requestAnimationFrame(() => {
     badge.classList.add('visible')
@@ -3674,7 +3954,18 @@ export function handleNextVGraphRuntimeEvent(runtimeEvent) {
 
     nextVGraphState.runtimeLastDispatchedNode = handlerId
     applyNextVGraphRuntimeVisuals()
-    flashNextVGraphEventValue(signalType, runtimeEvent.value, { nodeId: handlerId })
+    const emitEdgeKey = previousNode ? getNextVGraphEdgeKey(previousNode, signalType) : ''
+    const collapsedEmitEdgeKey = previousNode ? getNextVGraphEdgeKey(previousNode, handlerId) : ''
+    const payloadEdgeKey = (emitEdgeKey && nextVGraphState.edgeElements.has(emitEdgeKey))
+      ? emitEdgeKey
+      : (collapsedEmitEdgeKey && nextVGraphState.edgeElements.has(collapsedEmitEdgeKey))
+        ? collapsedEmitEdgeKey
+      : (subscriptionKey && nextVGraphState.edgeElements.has(subscriptionKey) ? subscriptionKey : '')
+    if (payloadEdgeKey) {
+      flashNextVGraphEdgeValue(payloadEdgeKey, runtimeEvent.value)
+    } else {
+      flashNextVGraphEventValue(signalType, runtimeEvent.value, { nodeId: handlerId })
+    }
     if (nextVGraphState.autoFollowEnabled && typeof nextVGraphState.setSelectedGraphNodeFn === 'function') {
       nextVGraphState.setSelectedGraphNodeFn(handlerId)
     }
@@ -4788,17 +5079,18 @@ export function renderNextVGraph(data = {}, options = {}) {
       return String(edge.from ?? '').trim()
     }
 
-    // Place label near the arrowhead: at parameter t along the final segment, offset to the side.
-    const appendEdgeLabelAt = (ax, ay, bx, by, t = 0.78) => {
+    // Place label near the center of the edge segment, offset to the side.
+    const appendEdgeLabelAt = (ax, ay, bx, by, t = 0.5) => {
       const labelText = getSubscriptionEdgeLabelText()
       if (!labelText) return
-      const lx = ax + (bx - ax) * t
-      const ly = ay + (by - ay) * t
+      const clampedT = Math.max(0.2, Math.min(0.8, Number(t) || 0.5))
+      const lx = ax + (bx - ax) * clampedT
+      const ly = ay + (by - ay) * clampedT
       // Perpendicular offset so label doesn't sit on the line.
       const len = Math.hypot(bx - ax, by - ay) || 1
       const nx = -(by - ay) / len
       const ny = (bx - ax) / len
-      const offset = 11
+      const offset = Math.max(9, Math.min(15, len * 0.15))
       const edgeLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text')
       edgeLabel.setAttribute('class', 'nextv-graph-edge-label subscription')
       edgeLabel.setAttribute('x', String(Math.round(lx + nx * offset)))
@@ -4865,8 +5157,8 @@ export function renderNextVGraph(data = {}, options = {}) {
         pathEl.appendChild(title)
         nextVGraphState.edgeElements.set(edgeKey, pathEl)
         svg.appendChild(pathEl)
-        // Label on the second half of the curve, near the arrowhead.
-        appendEdgeLabelAt(waypoint.x, waypoint.y, ex, ey, 0.55)
+        // Label near the geometric center of the collapsed edge route.
+        appendEdgeLabelAt(sx, sy, ex, ey, 0.5)
         continue
       }
     }
@@ -4888,10 +5180,16 @@ export function renderNextVGraph(data = {}, options = {}) {
       nextVGraphState.edgeElements.set(edgeKey, pathEl)
       svg.appendChild(pathEl)
 
-      // Label near the arrowhead: use the segment from the second-to-last to the last bendpoint.
-      const lastIdx = bendpoints.length - 1
-      const secondLastIdx = Math.max(0, lastIdx - 1)
-      appendEdgeLabelAt(bendpoints[secondLastIdx].x, bendpoints[secondLastIdx].y, bendpoints[lastIdx].x, bendpoints[lastIdx].y)
+      // Label near the middle of the routed path for better readability.
+      const midStartIdx = Math.max(0, Math.floor((bendpoints.length - 2) / 2))
+      const midEndIdx = Math.min(bendpoints.length - 1, midStartIdx + 1)
+      appendEdgeLabelAt(
+        bendpoints[midStartIdx].x,
+        bendpoints[midStartIdx].y,
+        bendpoints[midEndIdx].x,
+        bendpoints[midEndIdx].y,
+        0.5,
+      )
       continue
     }
 
@@ -4919,7 +5217,7 @@ export function renderNextVGraph(data = {}, options = {}) {
     line.appendChild(title)
     nextVGraphState.edgeElements.set(edgeKey, line)
     svg.appendChild(line)
-    appendEdgeLabelAt(x1, y1, x2, y2)
+    appendEdgeLabelAt(x1, y1, x2, y2, 0.5)
   }
 
   for (const nodeObj of graphNodes) {
@@ -5500,6 +5798,7 @@ import {
   filetreeDeleteTimer,
   inputPanelState,
   nextVAutoSaveInput,
+  nextVEditorTabSizeInput,
   nextVEntrypointInput,
   nextVFileState,
   nextVGraphState,
@@ -5556,6 +5855,50 @@ export function updateOpenFileLabel(filePath = '') {
   const normalized = normalizeRelativePath(filePath)
   scriptOpenFileLabel.textContent = normalized || 'no file open'
   scriptOpenFileLabel.title = normalized || 'no file open'
+}
+
+const NEXTV_EDITOR_TAB_SIZE_OPTIONS = new Set([2, 4, 8])
+
+export function normalizeNextVEditorTabSize(value) {
+  const parsed = Number(value)
+  if (NEXTV_EDITOR_TAB_SIZE_OPTIONS.has(parsed)) return parsed
+  return 4
+}
+
+export function getCurrentNextVEditorTabSize() {
+  return normalizeNextVEditorTabSize(
+    nextVEditorTabSizeInput?.value
+      ?? localStorage.getItem(storageKeys.nextVEditorTabSize)
+      ?? '4'
+  )
+}
+
+export function applyNextVEditorTabSize(tabSize, options = {}) {
+  const { persist = true } = options
+  const normalized = normalizeNextVEditorTabSize(tabSize)
+
+  if (nextVEditorTabSizeInput) {
+    nextVEditorTabSizeInput.value = String(normalized)
+  }
+
+  for (const descriptor of editorPaneDescriptors.values()) {
+    const textarea = descriptor?.textarea
+    if (!textarea) continue
+    textarea.style.tabSize = String(normalized)
+    textarea.style.MozTabSize = String(normalized)
+  }
+
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVEditorTabSize, String(normalized))
+  }
+
+  return normalized
+}
+
+export function setNextVEditorTabSize(value) {
+  const normalized = applyNextVEditorTabSize(value)
+  persistNextVConfig()
+  return normalized
 }
 
 export function ensureOpenFileTab(filePath) {
@@ -7067,12 +7410,14 @@ export function persistNextVConfig() {
   const autoSaveEnabled = nextVAutoSaveInput?.checked !== false
   const runtimeTarget = getNextVRuntimeTarget()
   const graphDirection = normalizeNextVGraphDirection(nextVGraphState.layoutDirection)
+  const editorTabSize = getCurrentNextVEditorTabSize()
 
   localStorage.setItem(storageKeys.nextVWorkspaceDir, workspaceDir)
   localStorage.setItem(storageKeys.nextVEntrypoint, entrypointPath)
   localStorage.setItem(storageKeys.nextVAutoSave, autoSaveEnabled ? '1' : '0')
   localStorage.setItem(storageKeys.nextVRuntimeTarget, runtimeTarget)
   localStorage.setItem(storageKeys.nextVGraphDirection, graphDirection)
+  localStorage.setItem(storageKeys.nextVEditorTabSize, String(editorTabSize))
 }
 
 export function restoreNextVConfig() {
@@ -7092,6 +7437,7 @@ export function restoreNextVConfig() {
   const showControlBranches = localStorage.getItem(storageKeys.nextVShowControlBranches) === '1'
   const storedEditorLayout = String(localStorage.getItem(storageKeys.nextVEditorLayout) ?? '').trim()
   const editorLayoutMode = storedEditorLayout === 'grid-2x2' ? 'grid-2x2' : 'split-2'
+  const editorTabSize = normalizeNextVEditorTabSize(localStorage.getItem(storageKeys.nextVEditorTabSize) ?? '4')
 
   if (nextVWorkspaceDirInput) nextVWorkspaceDirInput.value = workspaceDir
   if (nextVEntrypointInput) nextVEntrypointInput.value = entrypointPath
@@ -7107,6 +7453,7 @@ export function restoreNextVConfig() {
   nextVGraphState.showControlBranches = showControlBranches
   editorLayoutState.layoutMode = editorLayoutMode
   editorLayoutState.paneOrder = editorLayoutMode === 'grid-2x2' ? ['A', 'B', 'C', 'D'] : ['A', 'B']
+  applyNextVEditorTabSize(editorTabSize, { persist: false })
 }
 
 
@@ -8140,6 +8487,10 @@ import {
   _setNextVLastKnownState,
   _setNextVManagedProcessRunning,
   _setNextVRuntimeRunning,
+  _setNextVExecutionGroups,
+  _setNextVExecutionCounter,
+  _setNextVEventsLiveMode,
+  _setNextVEventsPausedBuffer,
   _setRemoteTransport,
   activeVerticalResize,
   fileTreePane,
@@ -8171,6 +8522,11 @@ import {
   nextVRuntimeRunning,
   nextVRuntimeTargetState,
   nextVWorkspaceDirInput,
+  nextVExecutionGroups,
+  nextVExecutionCounter,
+  nextVEventsLiveMode,
+  nextVEventsPausedBuffer,
+  nextVEventsOutput,
   outputSection,
   remoteTransport,
   scriptSection,
@@ -8195,8 +8551,11 @@ import {
   clearNextVConsoleOutput
 } from './03_ui_controls.js'
 import {
-  extractExecutionAgentElapsedMs,
-  finalizeNextVGraphActiveAgentTimers,
+  buildExecutionGroup,
+  renderExecutionGroups,
+  setNextVEventsLiveMode
+} from './02_user_output.js'
+import {
   reconcileNextVGraphAgentTimersFromExecution,
   resetNextVGraphRuntimeState,
   beginNextVGraphExecutionTrail,
@@ -8345,12 +8704,31 @@ export function openNextVStream() {
       }
       applyNextVGraphRuntimeVisuals()
       fadeNextVGraphActiveHighlights(760)
-      const executionSummary = summarizeExecutionAgentCalls(payload?.result)
-      appendNextVLogRow(`[nextv:execution] type=${eventType} source=${source} steps=${Number(payload?.result?.steps ?? 0)} ${executionSummary}`, 'result')
-      const executionDetails = summarizeExecutionAgentCallDetails(payload?.result)
-      if (executionDetails) {
-        appendNextVLogRow(executionDetails, 'result')
+
+      // Build and render execution group (newest-first)
+      nextVExecutionCounter += 1
+      const group = buildExecutionGroup(payload, nextVExecutionCounter)
+
+      if (nextVEventsLiveMode) {
+        // Live mode: prepend to groups and render
+        const updated = [group, ...nextVExecutionGroups]
+        const capped = updated.slice(0, 50)
+        _setNextVExecutionGroups(capped)
+        renderExecutionGroups()
+      } else {
+        // Paused mode: buffer the group
+        const buffered = [group, ...nextVEventsPausedBuffer]
+        const cappedBuffer = buffered.slice(0, 50)
+        _setNextVEventsPausedBuffer(cappedBuffer)
+
+        // Update badge
+        const badge = document.getElementById('nextv-events-buffer-count')
+        if (badge) {
+          badge.textContent = `${cappedBuffer.length} new`
+          badge.hidden = false
+        }
       }
+
       const diffBefore = nextVLastKnownState ?? {}
       const diffAfter = payload?.snapshot?.state ?? {}
       appendNextVStateDiffEntry(eventType, buildStateDiff(diffBefore, diffAfter))
@@ -9268,7 +9646,8 @@ import {
   restorePaneAssignments,
   scheduleNextVAutoSave,
   openWorkspaceEditorFile,
-  persistNextVConfig
+  persistNextVConfig,
+  getCurrentNextVEditorTabSize
 } from './09_editor.js'
 import {
   pathBasename
@@ -10689,6 +11068,8 @@ export function bindEditorPaneEvents(paneId) {
     if (e.key !== 'Tab') return
 
     e.preventDefault()
+    const indentWidth = getCurrentNextVEditorTabSize()
+    const indentSpaces = ' '.repeat(indentWidth)
 
     const value = textarea.value
     const start = Number(textarea.selectionStart)
@@ -10719,9 +11100,9 @@ export function bindEditorPaneEvents(paneId) {
           if (index === 0 && start > lineStart) removedBeforeCaret = 1
           return line.slice(1)
         }
-        if (line.startsWith('  ')) {
-          if (index === 0 && start > lineStart) removedBeforeCaret = Math.min(2, start - lineStart)
-          return line.slice(2)
+        if (line.startsWith(indentSpaces)) {
+          if (index === 0 && start > lineStart) removedBeforeCaret = Math.min(indentWidth, start - lineStart)
+          return line.slice(indentWidth)
         }
         return line
       })
@@ -10866,6 +11247,7 @@ window.addEventListener('beforeunload', () => {
 })
 
 // --- Init ---
+
 // --- Imports (auto-generated by gen-es-modules.js) ---
 import {
   storageKeys,
@@ -10915,6 +11297,9 @@ import {
   appendNextVErrorLog
 } from './07_graph_render.js'
 import {
+  setNextVEventsLiveMode
+} from './02_user_output.js'
+import {
   closeFloatingGraphCodePanel,
   saveFloatingGraphCodePanel
 } from './04_floating_panels.js'
@@ -10925,6 +11310,7 @@ import {
   updateOpenFileLabel,
   initFileTreeCtxMenu,
   setEditorLayout,
+  setNextVEditorTabSize,
   restoreNextVConfig,
   ctxMenuDelete,
   ctxMenuNewFile,
@@ -11052,6 +11438,31 @@ export function initLayoutState() {
   }
 }
 
+export function setupNextVEventsScrollListener() {
+  const nextVEventsOutput = document.getElementById('nextv-events-output')
+  if (!nextVEventsOutput) return
+
+  let scrollTimeout = null
+  nextVEventsOutput.addEventListener('scroll', () => {
+    if (scrollTimeout) clearTimeout(scrollTimeout)
+
+    scrollTimeout = setTimeout(() => {
+      // Import state directly at call time
+      import('./state.js').then(({ nextVEventsLiveMode }) => {
+        if (nextVEventsLiveMode === false) return
+
+        const firstGroup = nextVEventsOutput.querySelector('.exec-group')
+        if (!firstGroup) return
+
+        const firstGroupBottom = firstGroup.offsetHeight
+        if (nextVEventsOutput.scrollTop > firstGroupBottom) {
+          setNextVEventsLiveMode(false)
+        }
+      })
+    }, 50)
+  })
+}
+
 setupSplitter()
 setupFileTreeSplitter()
 setupNextVStateDiffSplitter()
@@ -11059,6 +11470,7 @@ setupNextVUserIOSplitter()
 setupNextVImageDropzone()
 updateNextVEventImageUI()
 setupVerticalSplitters()
+setupNextVEventsScrollListener()
 initLayoutState()
 initFileTreeCtxMenu()
 updateScriptRunControls()
@@ -11073,6 +11485,7 @@ loadSession()
 Object.assign(window, {
   // 02_user_output.js
   clearUserOutputPanel,
+  setNextVEventsLiveMode,
   // 03_ui_controls.js
   setNextVPrimaryView,
   setNextVDevTab,
@@ -11097,6 +11510,7 @@ Object.assign(window, {
   refreshNextVWorkspaceTree,
   saveAllNextVFiles,
   setEditorLayout,
+  setNextVEditorTabSize,
   // 10_file_tree.js
   clearNextVStateDiff,
   setNextVStateCollapseAll,

@@ -3414,3 +3414,199 @@ header label { color: var(--dim); display: flex; align-items: center; gap: 4px; 
     flex: 1 1 100%;
   }
 }
+
+/* Execution Groups (newest-first log view) */
+
+.nextv-events-empty {
+  color: var(--dim);
+  padding: 12px;
+  font-style: italic;
+}
+
+.exec-group {
+  border: 1px solid #3a4a5a;
+  border-radius: 4px;
+  background: #0f1520;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.exec-group-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #151f2a;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 500;
+  border-bottom: 1px solid #3a4a5a;
+}
+
+.exec-group-summary:hover {
+  background: #1a2837;
+}
+
+.exec-toggle {
+  color: var(--dim);
+  min-width: 16px;
+  display: inline-block;
+}
+
+.exec-id {
+  color: var(--accent);
+  font-weight: 600;
+  min-width: 50px;
+}
+
+.exec-type {
+  color: #9cdcfe;
+  flex: 0 0 auto;
+}
+
+.exec-outcome {
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.exec-outcome-completed {
+  background: rgba(78, 201, 176, 0.2);
+  color: #4ec9b0;
+  border: 1px solid rgba(78, 201, 176, 0.4);
+}
+
+.exec-outcome-stopped {
+  background: rgba(244, 71, 71, 0.2);
+  color: #ff8787;
+  border: 1px solid rgba(244, 71, 71, 0.4);
+}
+
+.exec-outcome-contract-violated {
+  background: rgba(206, 145, 120, 0.2);
+  color: #dcdcaa;
+  border: 1px solid rgba(206, 145, 120, 0.4);
+}
+
+.exec-outcome-warning {
+  background: rgba(220, 220, 170, 0.15);
+  color: #f5d547;
+  border: 1px solid rgba(220, 220, 170, 0.3);
+}
+
+.exec-duration {
+  color: var(--dim);
+  flex: 0 0 auto;
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+}
+
+.exec-count {
+  color: var(--dim);
+  flex: 0 0 auto;
+  font-size: 11px;
+  margin-left: auto;
+}
+
+.exec-group-body {
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.exec-event {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #1f2a35;
+  font-size: 12px;
+}
+
+.exec-event:last-child {
+  border-bottom: none;
+}
+
+.exec-event.exec-event-output {
+  background: rgba(159, 199, 243, 0.04);
+}
+
+.exec-event.exec-event-tool_call {
+  background: rgba(156, 220, 254, 0.04);
+}
+
+.exec-event.exec-event-tool_result {
+  background: rgba(74, 158, 255, 0.04);
+}
+
+.exec-event.exec-event-warning {
+  background: rgba(220, 220, 170, 0.08);
+}
+
+.exec-event.exec-event-state_update {
+  background: rgba(78, 201, 176, 0.04);
+}
+
+.exec-event-ts {
+  color: var(--dim);
+  flex: 0 0 auto;
+  min-width: 50px;
+  font-size: 11px;
+  font-family: monospace;
+}
+
+.exec-event-type {
+  color: #9cdcfe;
+  flex: 0 0 auto;
+  min-width: 90px;
+  font-weight: 500;
+}
+
+.exec-event-content {
+  color: #c8c8c8;
+  flex: 1;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+#nextv-events-live-btn {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-color: #3a8f78;
+  color: #91ddca;
+}
+
+#nextv-events-live-btn:hover {
+  border-color: #4ec9b0;
+  color: #baf0e3;
+}
+
+#nextv-events-live-btn.paused {
+  border-color: #8f5a4a;
+  color: #e8b8a8;
+}
+
+#nextv-events-live-btn.paused:hover {
+  border-color: #f0754a;
+  color: #ffcba4;
+}
+
+#nextv-events-buffer-count {
+  color: var(--yellow);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  background: rgba(220, 220, 170, 0.1);
+  border: 1px solid rgba(220, 220, 170, 0.3);
+  border-radius: 3px;
+  min-width: 35px;
+  text-align: center;
+}
+
+#nextv-events-buffer-count[hidden] {
+  display: none;
+}

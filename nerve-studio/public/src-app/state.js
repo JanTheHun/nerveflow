@@ -25,6 +25,10 @@ export let visualOutputWindow = null
 export let traceRowCounter = 0
 export let nextVLastKnownState = null
 export let nextVStateFilterQuery = ''
+export let nextVExecutionGroups = []
+export let nextVExecutionCounter = 0
+export let nextVEventsLiveMode = true
+export let nextVEventsPausedBuffer = []
 export let deleteConfirmTimeoutId = null
 export let deleteConfirmTickerId = null
 export let pendingDeleteConfirmResolver = null
@@ -64,6 +68,7 @@ export const storageKeys = {
   nextVShowControlBranches: 'local-agent.nextv.showControlBranches',
   nextVEditorGridSplit: 'local-agent.nextv.editorGridSplit',
   nextVEditorLayout: 'local-agent.nextv.editorLayout',
+  nextVEditorTabSize: 'local-agent.nextv.editorTabSize',
 }
 
 export const MIN_LEFT_PANEL_SECTION_HEIGHT = 90
@@ -370,6 +375,7 @@ export const nextVRunBtn = document.getElementById('nextv-run-btn')
 export const nextVStopBtn = document.getElementById('nextv-stop-btn')
 export const nextVReloadConfigBtn = document.getElementById('nextv-reload-config-btn')
 export const nextVRuntimeTargetInput = document.getElementById('nextv-runtime-target')
+export const nextVEditorTabSizeInput = document.getElementById('nextv-editor-tab-size')
 export const remoteModeBadge = document.getElementById('remote-mode-badge')
 export const userOutput = document.getElementById('user-output')
 export const userOutputChannelFilters = document.getElementById('user-output-channel-filters')
@@ -433,6 +439,10 @@ export function _setVisualOutputWindow(v) { visualOutputWindow = v }
 export function _setTraceRowCounter(v) { traceRowCounter = v }
 export function _setNextVLastKnownState(v) { nextVLastKnownState = v }
 export function _setNextVStateFilterQuery(v) { nextVStateFilterQuery = v }
+export function _setNextVExecutionGroups(v) { nextVExecutionGroups = v }
+export function _setNextVExecutionCounter(v) { nextVExecutionCounter = v }
+export function _setNextVEventsLiveMode(v) { nextVEventsLiveMode = v }
+export function _setNextVEventsPausedBuffer(v) { nextVEventsPausedBuffer = v }
 export function _setDeleteConfirmTimeoutId(v) { deleteConfirmTimeoutId = v }
 export function _setDeleteConfirmTickerId(v) { deleteConfirmTickerId = v }
 export function _setPendingDeleteConfirmResolver(v) { pendingDeleteConfirmResolver = v }

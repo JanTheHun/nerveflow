@@ -47,6 +47,9 @@ import {
   appendNextVErrorLog
 } from './07_graph_render.js'
 import {
+  setNextVEventsLiveMode
+} from './02_user_output.js'
+import {
   closeFloatingGraphCodePanel,
   saveFloatingGraphCodePanel
 } from './04_floating_panels.js'
@@ -57,6 +60,7 @@ import {
   updateOpenFileLabel,
   initFileTreeCtxMenu,
   setEditorLayout,
+  setNextVEditorTabSize,
   restoreNextVConfig,
   ctxMenuDelete,
   ctxMenuNewFile,
@@ -184,6 +188,31 @@ export function initLayoutState() {
   }
 }
 
+export function setupNextVEventsScrollListener() {
+  const nextVEventsOutput = document.getElementById('nextv-events-output')
+  if (!nextVEventsOutput) return
+
+  let scrollTimeout = null
+  nextVEventsOutput.addEventListener('scroll', () => {
+    if (scrollTimeout) clearTimeout(scrollTimeout)
+
+    scrollTimeout = setTimeout(() => {
+      // Import state directly at call time
+      import('./state.js').then(({ nextVEventsLiveMode }) => {
+        if (nextVEventsLiveMode === false) return
+
+        const firstGroup = nextVEventsOutput.querySelector('.exec-group')
+        if (!firstGroup) return
+
+        const firstGroupBottom = firstGroup.offsetHeight
+        if (nextVEventsOutput.scrollTop > firstGroupBottom) {
+          setNextVEventsLiveMode(false)
+        }
+      })
+    }, 50)
+  })
+}
+
 setupSplitter()
 setupFileTreeSplitter()
 setupNextVStateDiffSplitter()
@@ -191,6 +220,7 @@ setupNextVUserIOSplitter()
 setupNextVImageDropzone()
 updateNextVEventImageUI()
 setupVerticalSplitters()
+setupNextVEventsScrollListener()
 initLayoutState()
 initFileTreeCtxMenu()
 updateScriptRunControls()
@@ -205,6 +235,7 @@ loadSession()
 Object.assign(window, {
   // 02_user_output.js
   clearUserOutputPanel,
+  setNextVEventsLiveMode,
   // 03_ui_controls.js
   setNextVPrimaryView,
   setNextVDevTab,
@@ -229,6 +260,7 @@ Object.assign(window, {
   refreshNextVWorkspaceTree,
   saveAllNextVFiles,
   setEditorLayout,
+  setNextVEditorTabSize,
   // 10_file_tree.js
   clearNextVStateDiff,
   setNextVStateCollapseAll,

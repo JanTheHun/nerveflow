@@ -2,10 +2,17 @@
 import {
   DEFAULT_USER_OUTPUT_CHANNELS,
   _setVisualOutputWindow,
+  _setNextVExecutionGroups,
+  _setNextVEventsLiveMode,
+  _setNextVEventsPausedBuffer,
   activeScriptAbortController,
   cancelScriptBtn,
   nextVEventSource,
   nextVRuntimeRunning,
+  nextVExecutionGroups,
+  nextVEventsLiveMode,
+  nextVEventsPausedBuffer,
+  nextVEventsOutput,
   storageKeys,
   userInputText,
   userOutput,
@@ -344,6 +351,176 @@ export async function sendNextVUserText() {
   } catch (err) {
     appendNextVErrorLog(err)
     setStatus('failed to send ui text', 'responding')
+  }
+}
+
+// --- Execution Groups (newest-first log view) ---
+
+export function buildExecutionGroup(payload, groupId) {
+  const event = payload?.event ?? {}
+  const result = payload?.result ?? {}
+  const events = Array.isArray(payload?.events) ? payload.events : []
+
+  // Determine outcome
+  let outcome = 'completed'
+  if (result.stopped) {
+    outcome = 'stopped'
+  } else {
+    // Check for contract violations or warnings in events
+    for (const evt of events) {
+      if (evt.type === 'warning' && evt.code?.startsWith('contract')) {
+        outcome = 'contract-violated'
+        break
+      }
+      if (evt.type === 'warning') {
+        outcome = 'warning'
+      }
+    }
+  }
+
+  // Extract timestamps from events
+  let startTs = null
+  let endTs = null
+  if (events.length > 0) {
+    startTs = events[0].timestamp || null
+    endTs = events[events.length - 1].timestamp || startTs
+  }
+
+  return {
+    id: groupId,
+    ingressType: String(event.type ?? ''),
+    source: String(event.source ?? ''),
+    result,
+    events,
+    startTs,
+    endTs,
+    outcome,
+    expanded: false,
+  }
+}
+
+export function renderExecutionGroups() {
+  if (!nextVEventsOutput) return
+
+  nextVEventsOutput.innerHTML = ''
+
+  if (nextVExecutionGroups.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'nextv-events-empty'
+    empty.textContent = 'No executions yet.'
+    nextVEventsOutput.appendChild(empty)
+    return
+  }
+
+  for (const group of nextVExecutionGroups) {
+    const groupEl = document.createElement('div')
+    groupEl.className = 'exec-group'
+    groupEl.setAttribute('data-group-id', group.id)
+
+    // Calculate duration
+    const duration = group.startTs && group.endTs
+      ? ((new Date(group.endTs) - new Date(group.startTs)) / 1000).toFixed(3)
+      : '0.000'
+
+    // Build summary line
+    const summaryEl = document.createElement('div')
+    summaryEl.className = 'exec-group-summary'
+    summaryEl.innerHTML = `
+      <span class="exec-toggle">${group.expanded ? '▼' : '▶'}</span>
+      <span class="exec-id">#${group.id}</span>
+      <span class="exec-type">type=${group.ingressType}</span>
+      <span class="exec-outcome exec-outcome-${group.outcome}">${group.outcome}</span>
+      <span class="exec-duration">${duration}s</span>
+      <span class="exec-count">${group.events.length} events</span>
+    `
+    summaryEl.onclick = () => {
+      group.expanded = !group.expanded
+      renderExecutionGroups()
+    }
+    groupEl.appendChild(summaryEl)
+
+    // Build body (collapsed by default)
+    if (group.expanded) {
+      const bodyEl = document.createElement('div')
+      bodyEl.className = 'exec-group-body'
+
+      for (const event of group.events) {
+        const eventEl = document.createElement('div')
+        eventEl.className = `exec-event exec-event-${event.type}`
+        eventEl.innerHTML = `
+          <span class="exec-event-ts">${event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '—'}</span>
+          <span class="exec-event-type">${event.type}</span>
+          <span class="exec-event-content">${formatExecutionEventContent(event)}</span>
+        `
+        bodyEl.appendChild(eventEl)
+      }
+
+      groupEl.appendChild(bodyEl)
+    }
+
+    nextVEventsOutput.appendChild(groupEl)
+  }
+}
+
+function formatExecutionEventContent(event) {
+  const type = event.type
+  if (type === 'output') {
+    const format = event.format || 'text'
+    const content = event.content || ''
+    const snippet = content.length > 60 ? content.slice(0, 60) + '…' : content
+    return `${format}: ${snippet}`
+  }
+  if (type === 'tool_call') {
+    const tool = event.tool || 'unknown'
+    return `call: ${tool}`
+  }
+  if (type === 'tool_result') {
+    const tool = event.tool || 'unknown'
+    return `result: ${tool}`
+  }
+  if (type === 'state_update') {
+    return 'state updated'
+  }
+  if (type === 'warning') {
+    return event.message || event.code || 'warning'
+  }
+  return ''
+}
+
+export function setNextVEventsLiveMode(live) {
+  _setNextVEventsLiveMode(live)
+
+  const btn = document.getElementById('nextv-events-live-btn')
+  const badge = document.getElementById('nextv-events-buffer-count')
+
+  if (!btn) return
+
+  if (live) {
+    // Resume: flush buffer and snap back to top
+    const buffered = nextVEventsPausedBuffer.slice()
+    _setNextVEventsPausedBuffer([])
+
+    if (buffered.length > 0) {
+      const newGroups = [...buffered.reverse(), ...nextVExecutionGroups]
+      const capped = newGroups.slice(0, 50)
+      _setNextVExecutionGroups(capped)
+    }
+
+    btn.textContent = 'Live'
+    btn.classList.remove('paused')
+    if (badge) {
+      badge.textContent = ''
+      badge.hidden = true
+    }
+    renderExecutionGroups()
+    // Snap to top
+    if (nextVEventsOutput) {
+      nextVEventsOutput.scrollTop = 0
+    }
+  } else {
+    // Pause: no action needed, state will be updated by handler
+    btn.textContent = 'Paused'
+    btn.classList.add('paused')
   }
 }
 

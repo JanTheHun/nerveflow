@@ -42,7 +42,8 @@ import {
   getPaneState,
   getPaneTextarea,
   renderPaneTitles,
-  renderScriptMirrorForPane
+  renderScriptMirrorForPane,
+  getCurrentNextVEditorTabSize
 } from './09_editor.js'
 import {
   pathBasename
@@ -510,6 +511,8 @@ export function bindFloatingGraphCodePanelEvents() {
 
       if (event.key === 'Tab') {
         event.preventDefault()
+        const indentWidth = getCurrentNextVEditorTabSize()
+        const indentSpaces = ' '.repeat(indentWidth)
         const value = textarea.value
         const start = Number(textarea.selectionStart)
         const end = Number(textarea.selectionEnd)
@@ -534,9 +537,9 @@ export function bindFloatingGraphCodePanelEvents() {
                 if (index === 0 && start > lineStart) removedBeforeCaret = 1
                 return line.slice(1)
               }
-              if (line.startsWith('  ')) {
-                if (index === 0 && start > lineStart) removedBeforeCaret = Math.min(2, start - lineStart)
-                return line.slice(2)
+              if (line.startsWith(indentSpaces)) {
+                if (index === 0 && start > lineStart) removedBeforeCaret = Math.min(indentWidth, start - lineStart)
+                return line.slice(indentWidth)
               }
               return line
             })
@@ -604,4 +607,4 @@ export function bindFloatingGraphCodePanelEvents() {
     })
   }
 }
-
+

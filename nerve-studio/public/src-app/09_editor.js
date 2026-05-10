@@ -28,6 +28,7 @@ import {
   filetreeDeleteTimer,
   inputPanelState,
   nextVAutoSaveInput,
+  nextVEditorTabSizeInput,
   nextVEntrypointInput,
   nextVFileState,
   nextVGraphState,
@@ -84,6 +85,50 @@ export function updateOpenFileLabel(filePath = '') {
   const normalized = normalizeRelativePath(filePath)
   scriptOpenFileLabel.textContent = normalized || 'no file open'
   scriptOpenFileLabel.title = normalized || 'no file open'
+}
+
+const NEXTV_EDITOR_TAB_SIZE_OPTIONS = new Set([2, 4, 8])
+
+export function normalizeNextVEditorTabSize(value) {
+  const parsed = Number(value)
+  if (NEXTV_EDITOR_TAB_SIZE_OPTIONS.has(parsed)) return parsed
+  return 4
+}
+
+export function getCurrentNextVEditorTabSize() {
+  return normalizeNextVEditorTabSize(
+    nextVEditorTabSizeInput?.value
+      ?? localStorage.getItem(storageKeys.nextVEditorTabSize)
+      ?? '4'
+  )
+}
+
+export function applyNextVEditorTabSize(tabSize, options = {}) {
+  const { persist = true } = options
+  const normalized = normalizeNextVEditorTabSize(tabSize)
+
+  if (nextVEditorTabSizeInput) {
+    nextVEditorTabSizeInput.value = String(normalized)
+  }
+
+  for (const descriptor of editorPaneDescriptors.values()) {
+    const textarea = descriptor?.textarea
+    if (!textarea) continue
+    textarea.style.tabSize = String(normalized)
+    textarea.style.MozTabSize = String(normalized)
+  }
+
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVEditorTabSize, String(normalized))
+  }
+
+  return normalized
+}
+
+export function setNextVEditorTabSize(value) {
+  const normalized = applyNextVEditorTabSize(value)
+  persistNextVConfig()
+  return normalized
 }
 
 export function ensureOpenFileTab(filePath) {
@@ -1595,12 +1640,14 @@ export function persistNextVConfig() {
   const autoSaveEnabled = nextVAutoSaveInput?.checked !== false
   const runtimeTarget = getNextVRuntimeTarget()
   const graphDirection = normalizeNextVGraphDirection(nextVGraphState.layoutDirection)
+  const editorTabSize = getCurrentNextVEditorTabSize()
 
   localStorage.setItem(storageKeys.nextVWorkspaceDir, workspaceDir)
   localStorage.setItem(storageKeys.nextVEntrypoint, entrypointPath)
   localStorage.setItem(storageKeys.nextVAutoSave, autoSaveEnabled ? '1' : '0')
   localStorage.setItem(storageKeys.nextVRuntimeTarget, runtimeTarget)
   localStorage.setItem(storageKeys.nextVGraphDirection, graphDirection)
+  localStorage.setItem(storageKeys.nextVEditorTabSize, String(editorTabSize))
 }
 
 export function restoreNextVConfig() {
@@ -1620,6 +1667,7 @@ export function restoreNextVConfig() {
   const showControlBranches = localStorage.getItem(storageKeys.nextVShowControlBranches) === '1'
   const storedEditorLayout = String(localStorage.getItem(storageKeys.nextVEditorLayout) ?? '').trim()
   const editorLayoutMode = storedEditorLayout === 'grid-2x2' ? 'grid-2x2' : 'split-2'
+  const editorTabSize = normalizeNextVEditorTabSize(localStorage.getItem(storageKeys.nextVEditorTabSize) ?? '4')
 
   if (nextVWorkspaceDirInput) nextVWorkspaceDirInput.value = workspaceDir
   if (nextVEntrypointInput) nextVEntrypointInput.value = entrypointPath
@@ -1635,5 +1683,6 @@ export function restoreNextVConfig() {
   nextVGraphState.showControlBranches = showControlBranches
   editorLayoutState.layoutMode = editorLayoutMode
   editorLayoutState.paneOrder = editorLayoutMode === 'grid-2x2' ? ['A', 'B', 'C', 'D'] : ['A', 'B']
+  applyNextVEditorTabSize(editorTabSize, { persist: false })
 }
 

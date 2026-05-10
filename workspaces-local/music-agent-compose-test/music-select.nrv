@@ -12,6 +12,7 @@ on "user_wants_music"
   limit = 0.6
 
   relevant = cut(results.items, "similarity", ">=", limit)
+	output json relevant
   music = agent(
     "intent-4",
     to_json(relevant),
@@ -25,5 +26,5 @@ on "user_wants_music"
     retry_on_contract_violation=2
     )
   winner = pick(relevant, music.index)
-  output json winner.metadata
+  output json { target: winner.metadata, confidence: music.confidence }
 end

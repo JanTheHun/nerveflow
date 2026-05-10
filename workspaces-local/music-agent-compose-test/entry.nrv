@@ -5,9 +5,13 @@ include "user-wants-music.nrv"
 
 on external "user_message"
   # Classify user intent in parallel using both intent models
-  instructions = file("entry-instructions.md")
+  intent_instructions = file("entry-instructions.md")
   intent_contract = {
     intent: ["play", "unclear"]
+  }
+  target_instructions = file("target-instructions.md")
+  target_contract = {
+    target: ""
   }
   
   # result = agent(
@@ -31,16 +35,16 @@ on external "user_message"
 
   intent_results = parallel([
     agent(
-      "groq",
+      "intent-4",
       event.value,
-      instructions,
+      intent_instructions,
       returns=intent_contract
     ),
     agent(
-      "gemini",
+      "intent-4",
       event.value,
-      instructions,
-      returns=intent_contract
+      target_instructions,
+      returns=target_contract
     )
   ])
   

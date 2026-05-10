@@ -12,6 +12,36 @@ function withFetchMock(mockFn, run) {
     })
 }
 
+function createAbortableBodyReader(signal, readValue) {
+  return () => new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      const err = new Error('aborted')
+      err.name = 'AbortError'
+      reject(err)
+      return
+    }
+
+    const onAbort = () => {
+      const err = new Error('aborted')
+      err.name = 'AbortError'
+      reject(err)
+    }
+
+    signal?.addEventListener('abort', onAbort, { once: true })
+
+    Promise.resolve()
+      .then(readValue)
+      .then((value) => {
+        signal?.removeEventListener?.('abort', onAbort)
+        resolve(value)
+      })
+      .catch((err) => {
+        signal?.removeEventListener?.('abort', onAbort)
+        reject(err)
+      })
+  })
+}
+
 test('createLlamaCppTransport returns parsed text + metadata envelope', async () => {
   await withFetchMock(async () => ({
     ok: true,
@@ -136,6 +166,26 @@ test('createOllamaTransport times out with AGENT_TRANSPORT_TIMEOUT', async () =>
       err.name = 'AbortError'
       reject(err)
     }, { once: true })
+  }), async () => {
+    const callAgent = createOllamaTransport({ timeoutMs: 5 })
+
+    await assert.rejects(
+      () => callAgent({ model: 'llama3.2', messages: [{ role: 'user', content: 'ping' }] }),
+      (err) => {
+        assert.equal(err.code, 'AGENT_TRANSPORT_TIMEOUT')
+        assert.match(err.message, /timed out/i)
+        return true
+      },
+    )
+  })
+})
+
+test('createOllamaTransport times out when response body hangs after headers', async () => {
+  await withFetchMock(async (_url, options = {}) => ({
+    ok: true,
+    status: 200,
+    json: createAbortableBodyReader(options.signal, async () => new Promise(() => {})),
+    text: createAbortableBodyReader(options.signal, async () => ''),
   }), async () => {
     const callAgent = createOllamaTransport({ timeoutMs: 5 })
 

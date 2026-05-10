@@ -66,6 +66,7 @@ import {
 import {
   loadHostModulesByRole,
 } from '../src/host_modules/index.js'
+import { createOllamaTransport } from '../src/host_core/agent_transports/ollama.js'
 import { createMqttRemoteBridge } from './mqtt-remote-bridge.js'
 import { createWsRemoteBridge } from './ws-remote-bridge.js'
 import { connect as mqttConnect } from 'mqtt'
@@ -156,6 +157,29 @@ const MANAGED_RUNTIME_PORT = Number(process.env.NERVE_STUDIO_MANAGED_RUNTIME_POR
 const MANAGED_RUNTIME_WS_PATH = String(process.env.NERVE_STUDIO_MANAGED_RUNTIME_WS_PATH || '/api/runtime/ws').trim() || '/api/runtime/ws'
 const MANAGED_RUNTIME_WS_URL = String(process.env.NERVE_STUDIO_MANAGED_RUNTIME_WS_URL || `ws://127.0.0.1:${MANAGED_RUNTIME_PORT}${MANAGED_RUNTIME_WS_PATH}`).trim()
 const MANAGED_RUNTIME_START_TIMEOUT_MS = Number(process.env.NERVE_STUDIO_MANAGED_RUNTIME_START_TIMEOUT_MS || 12000)
+
+// Warn if the managed runtime port is already in use when Studio starts,
+// which indicates a stale nerve-runtime process from a previous session.
+// The bridge will reconnect to it, but it may be running old code.
+if (!isRemoteMode) {
+  const { createConnection } = await import('node:net')
+  await new Promise((resolve) => {
+    const probe = createConnection({ port: MANAGED_RUNTIME_PORT, host: '127.0.0.1' })
+    probe.on('connect', () => {
+      probe.destroy()
+      console.warn(
+        `[nerve-studio] WARNING: something is already listening on the managed runtime port ${MANAGED_RUNTIME_PORT}.` +
+        ` A stale nerve-runtime process may be running from a previous session.` +
+        ` Kill it manually (e.g. Stop-Process -Name node) or it will be reused instead of a fresh process being started.`
+      )
+      resolve()
+    })
+    probe.on('error', () => {
+      probe.destroy()
+      resolve()
+    })
+  })
+}
 
 const eventBus = createEventBus()
 const TIMER_PULSE_REPLAY_WINDOW_MS = 30_000
@@ -337,9 +361,15 @@ async function ensureManagedRuntimeProcess(workspaceDirRaw) {
       '--no-autostart',
     ]
 
+    const childEnv = {
+      ...process.env,
+      OLLAMA_DEBUG_LOG: String(process.env.OLLAMA_DEBUG_LOG ?? '1'),
+      OLLAMA_DEBUG_SUMMARY: String(process.env.OLLAMA_DEBUG_SUMMARY ?? '1'),
+    }
+
     const child = spawn(process.execPath, childArgs, {
       cwd: REPO_ROOT,
-      env: process.env,
+      env: childEnv,
       stdio: 'inherit',
       windowsHide: false,
     })
@@ -749,110 +779,10 @@ function resolvePathFromBaseDirectory(baseDirectoryAbsolutePath, inputPath, kind
   }
 }
 
-async function callOllamaAgent({ model, messages, transport }) {
-  const baseUrl = String(process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/+$/, '')
-  const requestPayload = {
-    model,
-    messages,
-    stream: false,
-  }
-
-  if (transport && typeof transport === 'object') {
-    if (typeof transport.keep_alive === 'string' && transport.keep_alive.trim()) {
-      requestPayload.keep_alive = transport.keep_alive.trim()
-    }
-    if (transport.options && typeof transport.options === 'object' && !Array.isArray(transport.options)) {
-      requestPayload.options = transport.options
-    }
-  }
-
-  appendOllamaDebugRecord({
-    source: 'preview-server',
-    phase: 'request',
-    url: `${baseUrl}/api/chat`,
-    payload: requestPayload,
-  })
-
-  let response
-  try {
-    response = await fetch(`${baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestPayload),
-    })
-  } catch (err) {
-    appendOllamaDebugRecord({
-      source: 'preview-server',
-      phase: 'fetch_error',
-      url: `${baseUrl}/api/chat`,
-      error: String(err?.message ?? err),
-    })
-    throw err
-  }
-
-  if (!response.ok) {
-    const bodyText = await response.text().catch(() => '')
-    appendOllamaDebugRecord({
-      source: 'preview-server',
-      phase: 'response',
-      ok: false,
-      status: response.status,
-      statusText: response.statusText,
-      bodyText,
-    })
-    throw new Error(`Ollama chat failed (${response.status}): ${bodyText || response.statusText}`)
-  }
-
-  const payload = await response.json()
-  appendOllamaDebugRecord({
-    source: 'preview-server',
-    phase: 'response',
-    ok: true,
-    status: response.status,
-    payload,
-  })
-
-  const promptTokens = Number.isFinite(Number(payload?.prompt_eval_count))
-    ? Number(payload.prompt_eval_count)
-    : null
-  const completionTokens = Number.isFinite(Number(payload?.eval_count))
-    ? Number(payload.eval_count)
-    : null
-  const totalTokens = (
-    Number.isFinite(promptTokens) && Number.isFinite(completionTokens)
-      ? promptTokens + completionTokens
-      : null
-  )
-
-  return {
-    text: String(payload?.message?.content ?? payload?.response ?? '').trim(),
-    metadata: {
-      provider: 'ollama',
-      model: String(model ?? payload?.model ?? '').trim(),
-      usage: {
-        promptTokens,
-        completionTokens,
-        totalTokens,
-      },
-      timings: {
-        totalDurationNs: Number.isFinite(Number(payload?.total_duration)) ? Number(payload.total_duration) : null,
-        loadDurationNs: Number.isFinite(Number(payload?.load_duration)) ? Number(payload.load_duration) : null,
-        promptEvalDurationNs: Number.isFinite(Number(payload?.prompt_eval_duration)) ? Number(payload.prompt_eval_duration) : null,
-        evalDurationNs: Number.isFinite(Number(payload?.eval_duration)) ? Number(payload.eval_duration) : null,
-      },
-      rawProvider: {
-        createdAt: String(payload?.created_at ?? ''),
-        doneReason: String(payload?.done_reason ?? ''),
-        prompt_eval_count: Number.isFinite(Number(payload?.prompt_eval_count)) ? Number(payload.prompt_eval_count) : null,
-        eval_count: Number.isFinite(Number(payload?.eval_count)) ? Number(payload.eval_count) : null,
-        prompt_eval_duration: Number.isFinite(Number(payload?.prompt_eval_duration)) ? Number(payload.prompt_eval_duration) : null,
-        eval_duration: Number.isFinite(Number(payload?.eval_duration)) ? Number(payload.eval_duration) : null,
-        total_duration: Number.isFinite(Number(payload?.total_duration)) ? Number(payload.total_duration) : null,
-        load_duration: Number.isFinite(Number(payload?.load_duration)) ? Number(payload.load_duration) : null,
-      },
-    },
-  }
-}
+const ollamaTransport = createOllamaTransport({
+  baseUrl: String(process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434'),
+  onDebugRecord: (record) => appendOllamaDebugRecord({ source: 'preview-server', ...record }),
+})
 
 function previewDebugText(value, maxLength = 240) {
   const text = String(value ?? '')
@@ -996,7 +926,7 @@ const runtimeController = createNextVRuntimeController({
   toolRuntime: dynamicToolRuntime,
   ingressRuntime: dynamicIngressRuntime,
   effectRuntime: dynamicEffectRuntime,
-  callAgent: callOllamaAgent,
+  callAgent: ollamaTransport,
   defaultModel: process.env.OLLAMA_MODEL ?? '',
 })
 

@@ -33,7 +33,6 @@ export function createLlamaCppTransport(opts = {}) {
 
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), timeoutMs)
-    if (typeof timeout?.unref === 'function') timeout.unref()
 
     let response
     try {
@@ -54,15 +53,45 @@ export function createLlamaCppTransport(opts = {}) {
       debug({ phase: 'fetch_error', url, error: String(err?.message ?? err) })
       throw err
     }
-    clearTimeout(timeout)
+
+    debug({ phase: 'headers', url, ok: response.ok, status: response.status })
 
     if (!response.ok) {
-      const bodyText = await response.text().catch(() => '')
+      let bodyText = ''
+      debug({ phase: 'body_read_start', url, mode: 'text', status: response.status })
+      try {
+        bodyText = await response.text()
+      } catch (bodyErr) {
+        clearTimeout(timeout)
+        if (bodyErr?.name === 'AbortError') {
+          const timeoutErr = new Error(`llama.cpp chat timed out after ${timeoutMs}ms`)
+          timeoutErr.code = 'AGENT_TRANSPORT_TIMEOUT'
+          debug({ phase: 'timeout', url, timeoutMs, stage: 'body_text' })
+          throw timeoutErr
+        }
+      }
+      clearTimeout(timeout)
+      debug({ phase: 'body_read_complete', url, mode: 'text', status: response.status })
       debug({ phase: 'response', ok: false, status: response.status, statusText: response.statusText, bodyText })
       throw new Error(`llama.cpp chat failed (${response.status}): ${bodyText || response.statusText}`)
     }
 
-    const payload = await response.json()
+    let payload
+    debug({ phase: 'body_read_start', url, mode: 'json', status: response.status })
+    try {
+      payload = await response.json()
+    } catch (bodyErr) {
+      clearTimeout(timeout)
+      if (bodyErr?.name === 'AbortError') {
+        const timeoutErr = new Error(`llama.cpp chat timed out after ${timeoutMs}ms`)
+        timeoutErr.code = 'AGENT_TRANSPORT_TIMEOUT'
+        debug({ phase: 'timeout', url, timeoutMs, stage: 'body_json' })
+        throw timeoutErr
+      }
+      throw bodyErr
+    }
+    clearTimeout(timeout)
+    debug({ phase: 'body_read_complete', url, mode: 'json', status: response.status })
     debug({ phase: 'response', ok: true, status: response.status, payload })
 
     const choice = payload?.choices?.[0]

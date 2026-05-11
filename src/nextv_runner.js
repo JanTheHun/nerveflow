@@ -195,10 +195,9 @@ export class NextVEventRunner {
       if (!this.running || event === null) break
 
       this.busy = true
+      const executionEvents = []
       try {
         this._loadPersistedState()
-
-        const executionEvents = []
         const shouldEmitInit = this.initPending
         this.initPending = false
 
@@ -244,8 +243,21 @@ export class NextVEventRunner {
           this.running = false
         }
       } catch (err) {
-        this.failedExecutionCount += 1
-        this.lastError = {
+        const partialAgentCallMetadata = executionEvents
+          .filter((runtimeEvent) => String(runtimeEvent?.type ?? '').trim() === 'agent_result')
+          .map((runtimeEvent) => ({
+            agent: String(runtimeEvent?.agent ?? '').trim(),
+            line: Number.isFinite(Number(runtimeEvent?.line)) ? Number(runtimeEvent.line) : null,
+            sourcePath: String(runtimeEvent?.sourcePath ?? '').trim(),
+            sourceLine: Number.isFinite(Number(runtimeEvent?.sourceLine)) ? Number(runtimeEvent.sourceLine) : null,
+            statement: String(runtimeEvent?.statement ?? '').trim(),
+            metadata: runtimeEvent?.metadata && typeof runtimeEvent.metadata === 'object'
+              ? runtimeEvent.metadata
+              : null,
+          }))
+          .filter((call) => call.agent && call.metadata)
+
+        const errorPayload = {
           message: String(err?.message ?? err ?? 'Unknown runner error'),
           line: Number.isFinite(Number(err?.line)) ? Number(err.line) : null,
           sourcePath: String(err?.sourcePath ?? ''),
@@ -254,9 +266,23 @@ export class NextVEventRunner {
           code: String(err?.code ?? ''),
           statement: String(err?.statement ?? ''),
           event,
+          events: executionEvents,
+          agentCallMetadata: partialAgentCallMetadata,
+        }
+
+        this.failedExecutionCount += 1
+        this.lastError = {
+          ...errorPayload,
+        }
+        this.lastExecution = {
+          event,
+          stopped: false,
+          failed: true,
+          steps: null,
+          agentCalls: partialAgentCallMetadata,
         }
         if (this.onError) {
-          this.onError(err)
+          this.onError(errorPayload)
         }
         if (this.haltOnError) {
           this.running = false

@@ -676,6 +676,43 @@ test('callAgent emits slow-call warning metadata when transport exceeds threshol
   assert.equal(result.metadata.elapsedMs >= 20, true)
 })
 
+test('callAgent includes request payload metadata when captureAgentRequestPayload is enabled', async () => {
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { chat: { model: 'llama3', instructions: 'profile instructions' } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => ({ text: 'ok', metadata: { provider: 'test' } }),
+    defaultModel: 'test-model',
+    captureAgentRequestPayload: true,
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  const result = await adapter.callAgent({
+    agent: 'chat',
+    prompt: 'play Nirvana',
+    instructions: 'call instructions',
+    event: { type: 'user_message', source: 'external' },
+  })
+
+  assert.equal(result.value, 'ok')
+  assert.equal(result.metadata.provider, 'test')
+  assert.equal(result.metadata.request.model, 'llama3')
+  assert.equal(result.metadata.request.messageCount, 2)
+  assert.equal(Array.isArray(result.metadata.request.messages), true)
+  assert.equal(result.metadata.request.messages[0].role, 'system')
+  assert.match(result.metadata.request.messages[0].content, /profile instructions/)
+  assert.equal(result.metadata.request.messages[1].role, 'user')
+  assert.equal(result.metadata.request.messages[1].content, 'play Nirvana')
+})
+
 // --- Phase 3: Resolution pipeline (agents.profiles → models.map → transports.map) ---
 
 test('callAgent resolves transport config from transports.map and passes it to callAgent', async () => {

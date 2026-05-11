@@ -165,6 +165,7 @@ export function createHostAdapter({
   buildDecideGuidance = null,
   buildDecideRetryPrompt = null,
   validateDecideOutput = null,
+  captureAgentRequestPayload = false,
   toolRuntime = null,
 }) {
   const readWorkspaceConfig = () => {
@@ -404,6 +405,23 @@ export function createHostAdapter({
           throw new Error(`${callLabel} has no prompt/messages to send.`)
         }
 
+        const requestDebugPayload = captureAgentRequestPayload === true
+          ? {
+              model: resolvedModel,
+              attempt: attemptNum + 1,
+              retryLimit,
+              messageCount: chatMessages.length,
+              systemInstructions: baseSystemInstructions,
+              contractGuidance,
+              messages: chatMessages,
+              wirePayload: {
+                model: resolvedModel,
+                messages: chatMessages,
+                ...(resolvedTransportConfig !== null ? { transport: resolvedTransportConfig } : {}),
+              },
+            }
+          : null
+
         const callStartedAt = Date.now()
         let slowWarningEmitted = false
         let slowWarningTimer = null
@@ -460,6 +478,12 @@ export function createHostAdapter({
             ? { ...metadata, elapsedMs, slowWarningEmitted }
             : (slowWarningEmitted ? { elapsedMs, slowWarningEmitted } : null)
         )
+        const metadataWithDebug = requestDebugPayload
+          ? {
+              ...(metadataWithTiming && typeof metadataWithTiming === 'object' ? metadataWithTiming : {}),
+              request: requestDebugPayload,
+            }
+          : metadataWithTiming
         if (returns != null) {
           if (validate === 'none') {
             let lateBindValue
@@ -468,7 +492,7 @@ export function createHostAdapter({
             } catch {
               lateBindValue = raw
             }
-            return { value: lateBindValue, metadata: metadataWithTiming }
+            return { value: lateBindValue, metadata: metadataWithDebug }
           }
 
           let parsed
@@ -502,7 +526,7 @@ export function createHostAdapter({
             try {
               return {
                 value: validateAgentReturnContract(parsed, returns, mode),
-                metadata: metadataWithTiming,
+                metadata: metadataWithDebug,
               }
             } catch (err) {
               lastViolation = err
@@ -534,14 +558,14 @@ export function createHostAdapter({
               throw err
             }
           }
-          return { value: parsed, metadata: metadataWithTiming }
+          return { value: parsed, metadata: metadataWithDebug }
         }
 
         // decide contract: plain-text enum validation, no JSON parsing
         if (decide != null && typeof validateDecideOutput === 'function') {
           try {
             const matched = validateDecideOutput(raw, decide)
-            return { value: matched, metadata: metadataWithTiming }
+            return { value: matched, metadata: metadataWithDebug }
           } catch (err) {
             lastViolation = String(raw ?? '')
             const violationKey = `DECIDE_MISMATCH:${String(raw ?? '').slice(0, 80)}`
@@ -573,10 +597,10 @@ export function createHostAdapter({
           }
         }
 
-        if (!format) return { value: raw, metadata: metadataWithTiming }
+        if (!format) return { value: raw, metadata: metadataWithDebug }
         return {
           value: normalizeAgentFormattedOutput(raw, format),
-          metadata: metadataWithTiming,
+          metadata: metadataWithDebug,
         }
       }
     },

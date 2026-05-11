@@ -1647,6 +1647,10 @@ async function executeFunctionCall(name, args, context, origin) {
         positional,
         named,
       },
+    }, {
+      line: context.line,
+      sourcePath: context.sourcePath,
+      sourceLine: context.sourceLine,
     })
   }
 
@@ -1683,6 +1687,10 @@ async function executeFunctionCall(name, args, context, origin) {
       type: 'tool_result',
       tool: name,
       result,
+    }, {
+      line: context.line,
+      sourcePath: context.sourcePath,
+      sourceLine: context.sourceLine,
     })
   }
 
@@ -2234,6 +2242,12 @@ function buildFunctions(options, runtimeContext) {
       const validate = returns != null ? (validateRaw || 'coerce') : validateRaw
       const effectiveFormat = returns != null ? '' : format
 
+      let finalInstructions = instructions
+      if (decideOptions != null && typeof options.buildDecideGuidance === 'function') {
+        const decideGuidance = options.buildDecideGuidance(decideOptions)
+        finalInstructions = finalInstructions ? `${finalInstructions}\n\n${decideGuidance}` : decideGuidance
+      }
+
       const retryCountRaw = named?.retry_on_contract_violation
       const retryCount = Number.isInteger(retryCountRaw) ? retryCountRaw : 0
       if (retryCount < 0) {
@@ -2262,10 +2276,31 @@ function buildFunctions(options, runtimeContext) {
         runtimeUnavailable('AGENT_CALL_UNAVAILABLE', `agent("${agentName}") is not available in this runtime.`)
       }
 
+      await runtimeContext.emitEvent({
+        type: 'agent_call',
+        agent: agentName,
+        line,
+        statement,
+        args: {
+          prompt,
+          instructions: finalInstructions,
+          messages,
+          format: effectiveFormat,
+          returns,
+          validate,
+          decide: decideOptions,
+          retry_on_contract_violation: retryCount,
+        },
+      }, {
+        line,
+        sourcePath,
+        sourceLine,
+      })
+
       const callResult = await options.callAgent({
         agent: agentName,
         prompt,
-        instructions,
+        instructions: finalInstructions,
         messages,
         format: effectiveFormat,
         returns,
@@ -2305,6 +2340,18 @@ function buildFunctions(options, runtimeContext) {
           : { value: callResult, metadata: null }
       )
 
+      await runtimeContext.emitEvent({
+        type: 'agent_result',
+        agent: agentName,
+        line,
+        statement,
+        metadata: normalizedCallResult.metadata ?? null,
+      }, {
+        line,
+        sourcePath,
+        sourceLine,
+      })
+
       // When the callAgent implementation does not handle decide internally,
       // apply decide validation at the runtime layer.
       if (decideOptions != null && !(callResult && typeof callResult === 'object' && callResult.__nextv_decide_validated__)) {
@@ -2317,6 +2364,8 @@ function buildFunctions(options, runtimeContext) {
             kind: 'runtime',
             code: 'AGENT_RETURN_CONTRACT_VIOLATION',
             statement,
+            sourcePath,
+            sourceLine,
             message: `decide contract violation: output "${String(raw ?? '').slice(0, 80)}" does not match any allowed value.`,
           })
           throw decideErr
@@ -2327,6 +2376,8 @@ function buildFunctions(options, runtimeContext) {
         runtimeContext.agentCallMetadata.push({
           agent: agentName,
           line,
+          sourcePath,
+          sourceLine,
           statement,
           metadata: normalizedCallResult.metadata,
         })
@@ -2412,6 +2463,26 @@ function buildFunctions(options, runtimeContext) {
         runtimeUnavailable('AGENT_CALL_UNAVAILABLE', `model("${modelName}") is not available in this runtime.`)
       }
 
+      await runtimeContext.emitEvent({
+        type: 'agent_call',
+        agent: `model:${modelName}`,
+        line,
+        statement,
+        args: {
+          prompt,
+          instructions,
+          messages,
+          format: effectiveFormat,
+          returns,
+          validate,
+          retry_on_contract_violation: retryCount,
+        },
+      }, {
+        line,
+        sourcePath,
+        sourceLine,
+      })
+
       const callResult = await options.callAgent({
         model: modelName,
         prompt,
@@ -2454,10 +2525,24 @@ function buildFunctions(options, runtimeContext) {
           : { value: callResult, metadata: null }
       )
 
+      await runtimeContext.emitEvent({
+        type: 'agent_result',
+        agent: `model:${modelName}`,
+        line,
+        statement,
+        metadata: normalizedCallResult.metadata ?? null,
+      }, {
+        line,
+        sourcePath,
+        sourceLine,
+      })
+
       if (normalizedCallResult.metadata && Array.isArray(runtimeContext.agentCallMetadata)) {
         runtimeContext.agentCallMetadata.push({
           agent: `model:${modelName}`,
           line,
+          sourcePath,
+          sourceLine,
           statement,
           metadata: normalizedCallResult.metadata,
         })
@@ -2686,6 +2771,8 @@ export async function runNextVScript(source, options = {}) {
       timestamp: payload.timestamp ?? isoNow(),
       step: meta.step,
       line: meta.line,
+      sourcePath: meta.sourcePath,
+      sourceLine: meta.sourceLine,
       sequence: eventSequence,
     }
     emittedEvents.push(eventRecord)
@@ -2781,8 +2868,18 @@ export async function runNextVScript(source, options = {}) {
         parallelMaxConcurrency: runtimeOptions.parallelMaxConcurrency,
         agentCallMetadata,
         emitStateUpdates: runtimeOptions.emitStateUpdates === true,
-        emitEvent: (payload) => emitEvent(payload, { step: steps, line: instr.line }),
-        emitWarning: (payload) => emitEvent({ type: 'warning', severity: 'warning', ...payload }, { step: steps, line: instr.line }),
+        emitEvent: (payload) => emitEvent(payload, {
+          step: steps,
+          line: instr.line,
+          sourcePath: instr.sourcePath,
+          sourceLine: instr.sourceLine,
+        }),
+        emitWarning: (payload) => emitEvent({ type: 'warning', severity: 'warning', ...payload }, {
+          step: steps,
+          line: instr.line,
+          sourcePath: instr.sourcePath,
+          sourceLine: instr.sourceLine,
+        }),
         enqueueSignal,
         emitTraceCall: async (payload) => {
           if (runtimeOptions.emitTrace !== true) return

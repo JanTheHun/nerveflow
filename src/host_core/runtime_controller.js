@@ -45,6 +45,9 @@ export function createNextVRuntimeController({
   validateAgentReturnContract = null,
   buildAgentReturnContractGuidance = null,
   buildAgentRetryPrompt = null,
+  buildDecideGuidance = null,
+  buildDecideRetryPrompt = null,
+  validateDecideOutput = null,
   toolRuntime = null,
   ingressRuntime = null,
   effectRuntime = null,
@@ -60,6 +63,27 @@ export function createNextVRuntimeController({
   let nextVWorkspaceDirResolved = null
   let nextVWorkspaceConfig = null
   let nextVRuntimeCallHooks = null
+
+  function normalizeRuntimeEventSourcePath(pathValue) {
+    const raw = String(pathValue ?? '').trim()
+    if (!raw) return ''
+    if (raw.startsWith('(')) return raw
+    try {
+      return toWorkspaceDisplayPath(raw)
+    } catch {
+      return raw.replace(/\\/g, '/')
+    }
+  }
+
+  function normalizeRuntimeEventForStudio(runtimeEvent) {
+    if (!runtimeEvent || typeof runtimeEvent !== 'object') return runtimeEvent
+    const normalizedSourcePath = normalizeRuntimeEventSourcePath(runtimeEvent.sourcePath)
+    if (!normalizedSourcePath || normalizedSourcePath === runtimeEvent.sourcePath) return runtimeEvent
+    return {
+      ...runtimeEvent,
+      sourcePath: normalizedSourcePath,
+    }
+  }
 
   function clearNextVTimers() {
     nextVTimerHandles = clearTimerHandles(nextVTimerHandles)
@@ -266,6 +290,7 @@ export function createNextVRuntimeController({
       getWorkspaceConfig: () => nextVWorkspaceConfig,
       callAgent,
       defaultModel,
+      captureAgentRequestPayload: true,
       slowAgentWarningMs,
       onSlowAgentCallWarning: (payload) => {
         eventBus.publish('nextv_warning', {
@@ -283,6 +308,9 @@ export function createNextVRuntimeController({
       validateAgentReturnContract,
       buildAgentReturnContractGuidance,
       buildAgentRetryPrompt,
+      buildDecideGuidance,
+      buildDecideRetryPrompt,
+      validateDecideOutput,
       toolRuntime,
     })
     nextVRuntimeCallHooks = runtimeCallHooks
@@ -333,11 +361,20 @@ export function createNextVRuntimeController({
         const eventSource = String(event?.source ?? '').trim()
         if (eventSource === 'timer' && suppressTimerNoOps) {
           const runtimeEventType = String(runtimeEvent?.type ?? '').trim()
-          if (runtimeEventType !== 'output') return
+          const allowTimerRuntimeEvent = (
+            runtimeEventType === 'agent_call'
+            || runtimeEventType === 'agent_result'
+            || runtimeEventType === 'tool_call'
+            || runtimeEventType === 'tool_result'
+            || runtimeEventType === 'output'
+            || runtimeEventType === 'warning'
+          )
+          if (!allowTimerRuntimeEvent) return
         }
-        eventBus.publish('nextv_runtime_event', { event, runtimeEvent, snapshot })
-        const effectChannelId = String(runtimeEvent?.effectChannelId ?? '').trim()
-        if (runtimeEvent?.type === 'output' && effectChannelId && effectRuntime && typeof effectRuntime.realize === 'function') {
+        const runtimeEventForStudio = normalizeRuntimeEventForStudio(runtimeEvent)
+        eventBus.publish('nextv_runtime_event', { event, runtimeEvent: runtimeEventForStudio, snapshot })
+        const effectChannelId = String(runtimeEventForStudio?.effectChannelId ?? '').trim()
+        if (runtimeEventForStudio?.type === 'output' && effectChannelId && effectRuntime && typeof effectRuntime.realize === 'function') {
           Promise
             .resolve()
             .then(async () => effectRuntime.realize({
@@ -346,7 +383,7 @@ export function createNextVRuntimeController({
               channelId: effectChannelId,
               effectChannelId,
               event,
-              runtimeEvent,
+              runtimeEvent: runtimeEventForStudio,
               snapshot,
               workspaceDir: workspaceDir.relativePath,
               entrypointPath: entrypoint.relativePath,
@@ -356,7 +393,7 @@ export function createNextVRuntimeController({
                 effectChannelId,
                 result,
                 event,
-                runtimeEvent,
+                runtimeEvent: runtimeEventForStudio,
                 snapshot,
               })
             })
@@ -383,6 +420,9 @@ export function createNextVRuntimeController({
         if (suppressTimerNoOps && eventSource === 'timer' && !executionIsMeaningful) {
           return
         }
+        const normalizedEvents = Array.isArray(events)
+          ? events.map((runtimeEvent) => normalizeRuntimeEventForStudio(runtimeEvent))
+          : []
         eventBus.publish('nextv_execution', {
           event,
           result: {
@@ -390,19 +430,27 @@ export function createNextVRuntimeController({
             steps: Number(result?.steps ?? 0),
             agentCalls: Array.isArray(result?.agentCallMetadata) ? result.agentCallMetadata : [],
           },
-          events: Array.isArray(events) ? events : [],
+          events: normalizedEvents,
           snapshot,
         })
       },
       onError: (err) => {
+        const normalizedErrorEvents = Array.isArray(err?.events)
+          ? err.events.map((runtimeEvent) => normalizeRuntimeEventForStudio(runtimeEvent))
+          : []
+        const errorAgentCalls = Array.isArray(err?.agentCallMetadata) ? err.agentCallMetadata : []
         eventBus.publish('nextv_error', {
           message: String(err?.message ?? 'Unknown nextV runtime error'),
           line: Number.isFinite(Number(err?.line)) ? Number(err.line) : null,
-          sourcePath: String(err?.sourcePath ?? ''),
+          sourcePath: normalizeRuntimeEventSourcePath(err?.sourcePath),
           sourceLine: Number.isFinite(Number(err?.sourceLine)) ? Number(err.sourceLine) : null,
           kind: String(err?.kind ?? ''),
           code: String(err?.code ?? ''),
           statement: String(err?.statement ?? ''),
+          result: {
+            agentCalls: errorAgentCalls,
+          },
+          events: normalizedErrorEvents,
           snapshot: nextVRunner ? nextVRunner.getSnapshot() : null,
         })
       },

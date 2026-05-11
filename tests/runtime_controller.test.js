@@ -503,6 +503,77 @@ test('controller warns when effect realizer fails', async () => {
   )
 })
 
+test('controller publishes timer-sourced agent runtime events when suppressTimerNoOps is enabled', async () => {
+  class TimerAgentRunner {
+    constructor(options = {}) {
+      this.options = options
+      this.running = false
+    }
+
+    start() {
+      this.running = true
+    }
+
+    stop() {
+      this.running = false
+    }
+
+    enqueue(event) {
+      if (!this.running) return false
+      if (typeof this.options.onEvent === 'function') {
+        this.options.onEvent({
+          event: { ...event, source: 'timer' },
+          runtimeEvent: {
+            type: 'agent_call',
+            agent: 'intent',
+            sourcePath: 'timer.nrv',
+            sourceLine: 12,
+            timestamp: new Date().toISOString(),
+          },
+          snapshot: this.getSnapshot(),
+        })
+      }
+      return true
+    }
+
+    getSnapshot() {
+      return {
+        running: this.running,
+        executionCount: 0,
+        pendingEvents: 0,
+        state: {},
+        locals: {},
+      }
+    }
+  }
+
+  const { controller, published } = createController({
+    createRunner: (options) => new TimerAgentRunner(options),
+    workspaceConfig: {
+      agents: { status: 'missing', source: '' },
+      tools: { status: 'missing', source: '' },
+      nextv: {
+        status: 'loaded',
+        file: 'nextv.json',
+        config: { suppressTimerNoOps: true },
+        timers: [],
+        timersSource: '',
+      },
+      operators: { status: 'missing', source: '' },
+    },
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  controller.enqueue({ type: 'tick', source: 'timer' })
+
+  assert.equal(
+    published.some(
+      (entry) => entry.eventName === 'nextv_runtime_event' && entry.payload?.runtimeEvent?.type === 'agent_call',
+    ),
+    true,
+  )
+})
+
 test('controller publishes nextv_warning for slow agent calls', async () => {
   class AgentCallingRunner {
     constructor(options = {}) {

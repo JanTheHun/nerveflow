@@ -1963,6 +1963,20 @@ test('model() calls are dispatched with model name to callAgent hook', async () 
   assert.equal(result.locals.response, 'Model called')
 })
 
+test('agent_call event includes structured call args', async () => {
+  const result = await runNextVScript('response = agent("qa_bot", "What tests should we run?", "Be concise", format="text", retry_on_contract_violation=2)', {
+    callAgent: async () => 'ok',
+  })
+
+  const agentCall = result.events.find((event) => event.type === 'agent_call')
+  assert.ok(agentCall)
+  assert.equal(agentCall.agent, 'qa_bot')
+  assert.equal(agentCall.args.prompt, 'What tests should we run?')
+  assert.equal(agentCall.args.instructions, 'Be concise')
+  assert.equal(agentCall.args.format, 'text')
+  assert.equal(agentCall.args.retry_on_contract_violation, 2)
+})
+
 test('agent() and model() both work as expected', async () => {
   const calls = []
   
@@ -3094,5 +3108,32 @@ test('agent() with decide throws AGENT_RETURN_CONTRACT_VIOLATION on mismatch aft
       return true
     },
   )
+})
+
+test('agent() decide mismatch preserves source metadata for included files', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'nextv-decide-source-map-'))
+  const entryPath = join(tmpDir, 'entry.nrv')
+  const includePath = join(tmpDir, 'intent.nrv')
+
+  writeFileSync(entryPath, 'include "intent.nrv"\n', 'utf8')
+  writeFileSync(includePath, 'result = agent("router", event.value, decide=["play", "unclear"])\n', 'utf8')
+
+  try {
+    await assert.rejects(
+      () => runNextVScriptFromFile(entryPath, {
+        event: { type: 'user_input', value: 'play garbage' },
+        callAgent: async () => 'Unclear (ambiguous command)',
+      }),
+      (err) => {
+        assert.equal(err.code, 'AGENT_RETURN_CONTRACT_VIOLATION')
+        assert.equal(err.sourceLine, 1)
+        assert.equal(err.line, 1)
+        assert.match(String(err.sourcePath ?? ''), /intent\.nrv$/)
+        return true
+      },
+    )
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true })
+  }
 })
 

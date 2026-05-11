@@ -125,6 +125,32 @@ header {
   letter-spacing: 0;
 }
 
+.nextv-attach-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nextv-attach-status {
+  margin-left: auto;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #8f9aa6;
+}
+
+.nextv-attach-status[data-state="attached"] {
+  color: #b8db95;
+}
+
+.nextv-attach-status[data-state="attaching"] {
+  color: #dcdcaa;
+}
+
+.nextv-attach-status[data-state="error"] {
+  color: #f4978e;
+}
+
 .chat-header-controls {
   display: flex;
   align-items: center;
@@ -2295,6 +2321,10 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
 .nextv-graph-transition-line {
   color: var(--dim);
   line-height: 1.35;
+
+.nextv-debug-payload[hidden] {
+  display: none !important;
+}
 }
 
 .nextv-graph-transition-line.warning {
@@ -3569,6 +3599,73 @@ header label { color: var(--dim); display: flex; align-items: center; gap: 4px; 
   flex: 1;
   word-break: break-word;
   white-space: pre-wrap;
+}
+
+.exec-event-debug-toggle {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  padding: 0 4px;
+  height: 18px;
+  font-size: 10px;
+  line-height: 18px;
+  border: 1px solid #2b3038;
+  border-radius: 3px;
+  background: transparent;
+  color: #6b7888;
+  cursor: pointer;
+  transition: color 0.1s, border-color 0.1s;
+  align-self: center;
+}
+
+.exec-event-debug-toggle:hover {
+  color: #9cdcfe;
+  border-color: #3a5068;
+}
+
+.exec-event-debug {
+  margin: 6px 0 0 152px;
+  padding: 8px;
+  border: 1px solid #2b3038;
+  border-radius: 6px;
+  background: #11151b;
+  color: #c8d1dc;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.nextv-debug-toggle {
+  padding: 0 2px;
+  margin-right: 2px;
+  border: none;
+  background: transparent;
+  color: #6b7888;
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 14px;
+  transition: color 0.1s;
+}
+
+.nextv-debug-toggle:hover {
+  color: #9cdcfe;
+}
+
+.nextv-debug-payload {
+  display: block;
+  margin: 4px 0 4px 24px;
+  padding: 8px;
+  border-left: 2px solid #2b3038;
+  background: transparent;
+  color: #c8d1dc;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.nextv-debug-payload[hidden] {
+  display: none !important;
 }
 
 #nextv-events-live-btn {

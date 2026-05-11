@@ -1249,6 +1249,49 @@ export function appendNextVLogRow(line, cls = '') {
   appendPanelLogRow(nextVEventsOutput, line, cls)
 }
 
+export function appendNextVDebugRow(label, debugPayload) {
+  if (!isNextVMode()) return
+  const panel = nextVEventsOutput
+  if (!panel) return
+
+  const rowId = 'nextv-debug-' + Math.random().toString(36).slice(2)
+  
+  // Create toggle button
+  const toggleBtn = document.createElement('button')
+  toggleBtn.type = 'button'
+  toggleBtn.className = 'nextv-debug-toggle'
+  toggleBtn.textContent = '▶'
+  toggleBtn.title = 'show'
+  toggleBtn.setAttribute('aria-label', 'show')
+  
+  // Create row with label
+  const row = document.createElement('div')
+  row.className = 'script-log-row result'
+  row.appendChild(toggleBtn)
+  row.appendChild(document.createTextNode(' ' + label))
+  panel.appendChild(row)
+  
+  // Create debug payload element
+  const debugEl = document.createElement('pre')
+  debugEl.id = rowId
+  debugEl.className = 'nextv-debug-payload'
+  debugEl.hidden = true
+  debugEl.textContent = debugPayload
+  panel.appendChild(debugEl)
+  
+  // Attach click handler
+  toggleBtn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const isExpanded = !debugEl.hidden
+    debugEl.hidden = isExpanded
+    toggleBtn.textContent = isExpanded ? '▶' : '▼'
+    toggleBtn.title = isExpanded ? 'show' : 'hide'
+    toggleBtn.setAttribute('aria-label', isExpanded ? 'show' : 'hide')
+  })
+  
+  panel.scrollTop = panel.scrollHeight
+}
+
 export function extractErrorLineNumber(raw) {
   const text = String(raw ?? '')
   if (!text) return 0

@@ -32,6 +32,10 @@ import {
   renderNextVSnapshot
 } from './11_state_panels.js'
 import {
+  toPrettyJson,
+  summarizeToolCallArgs
+} from './10_file_tree.js'
+import {
   setStatus,
   appendErrorRow
 } from './13_layout.js'
@@ -447,11 +451,35 @@ export function renderExecutionGroups() {
       for (const event of group.events) {
         const eventEl = document.createElement('div')
         eventEl.className = `exec-event exec-event-${event.type}`
+
+        const debugPayload = getExecutionEventDebugPayload(event)
         eventEl.innerHTML = `
           <span class="exec-event-ts">${event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '—'}</span>
           <span class="exec-event-type">${event.type}</span>
-          <span class="exec-event-content">${formatExecutionEventContent(event)}</span>
+          <span class="exec-event-content">${escapeExecutionEventText(formatExecutionEventContent(event))}</span>
+          ${debugPayload !== null ? '<button type="button" class="exec-event-debug-toggle" aria-label="show payload" title="show payload">&#x25B6;</button>' : ''}
         `
+
+        if (debugPayload !== null) {
+          const toggleBtn = eventEl.querySelector('.exec-event-debug-toggle')
+          const debugEl = document.createElement('pre')
+          debugEl.className = 'exec-event-debug'
+          debugEl.hidden = true
+          debugEl.textContent = toPrettyJson(debugPayload)
+          eventEl.appendChild(debugEl)
+
+          if (toggleBtn) {
+            toggleBtn.addEventListener('click', (e) => {
+              e.stopPropagation()
+              const expanded = !debugEl.hidden
+              debugEl.hidden = expanded
+              toggleBtn.textContent = expanded ? '\u25B6' : '\u25BC'
+              toggleBtn.title = expanded ? 'show payload' : 'hide payload'
+              toggleBtn.setAttribute('aria-label', expanded ? 'show payload' : 'hide payload')
+            })
+          }
+        }
+
         bodyEl.appendChild(eventEl)
       }
 
@@ -460,6 +488,46 @@ export function renderExecutionGroups() {
 
     nextVEventsOutput.appendChild(groupEl)
   }
+}
+
+function escapeExecutionEventText(text) {
+  return String(text ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+}
+
+function getExecutionEventDebugPayload(event) {
+  if (!event || typeof event !== 'object') return null
+
+  if (event.type === 'tool_call') {
+    return {
+      tool: String(event.tool ?? ''),
+      args: event.args ?? null,
+      toolMetadata: event.toolMetadata ?? null,
+    }
+  }
+
+  if (event.type === 'agent_call') {
+    return {
+      agent: String(event.agent ?? ''),
+      args: event.args ?? null,
+      line: Number.isFinite(Number(event.line)) ? Number(event.line) : null,
+      sourcePath: String(event.sourcePath ?? ''),
+      sourceLine: Number.isFinite(Number(event.sourceLine)) ? Number(event.sourceLine) : null,
+    }
+  }
+
+  if (event.type === 'agent_result') {
+    const metadata = (event.metadata && typeof event.metadata === 'object') ? event.metadata : null
+    if (!metadata) return null
+    return {
+      agent: String(event.agent ?? ''),
+      metadata,
+    }
+  }
+
+  return null
 }
 
 function formatExecutionEventContent(event) {
@@ -472,7 +540,22 @@ function formatExecutionEventContent(event) {
   }
   if (type === 'tool_call') {
     const tool = event.tool || 'unknown'
+    if (tool === 'agent' || tool === 'model') {
+      return `call: ${tool} ${summarizeToolCallArgs(event.args)}`
+    }
     return `call: ${tool}`
+  }
+  if (type === 'agent_call') {
+    const agent = String(event.agent ?? 'unknown')
+    return `agent call: ${agent}`
+  }
+  if (type === 'agent_result') {
+    const agent = String(event.agent ?? 'unknown')
+    const elapsedMs = Number(event?.metadata?.elapsedMs)
+    if (Number.isFinite(elapsedMs)) {
+      return `agent result: ${agent} (${Math.max(0, Math.round(elapsedMs))}ms)`
+    }
+    return `agent result: ${agent}`
   }
   if (type === 'tool_result') {
     const tool = event.tool || 'unknown'

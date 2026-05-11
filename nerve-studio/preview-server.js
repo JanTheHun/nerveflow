@@ -156,6 +156,7 @@ const isRemoteObserveOnlyMode = REMOTE_MODE === 'mqtt'
 const MANAGED_RUNTIME_PORT = Number(process.env.NERVE_STUDIO_MANAGED_RUNTIME_PORT || 4190)
 const MANAGED_RUNTIME_WS_PATH = String(process.env.NERVE_STUDIO_MANAGED_RUNTIME_WS_PATH || '/api/runtime/ws').trim() || '/api/runtime/ws'
 const MANAGED_RUNTIME_WS_URL = String(process.env.NERVE_STUDIO_MANAGED_RUNTIME_WS_URL || `ws://127.0.0.1:${MANAGED_RUNTIME_PORT}${MANAGED_RUNTIME_WS_PATH}`).trim()
+const ATTACH_RUNTIME_WS_URL_DEFAULT = String(process.env.NERVE_STUDIO_ATTACH_WS || '').trim()
 const MANAGED_RUNTIME_START_TIMEOUT_MS = Number(process.env.NERVE_STUDIO_MANAGED_RUNTIME_START_TIMEOUT_MS || 12000)
 
 // Warn if the managed runtime port is already in use when Studio starts,
@@ -301,19 +302,90 @@ const managedWsRemoteBridge = !isRemoteMode
     eventBus,
   })
   : null
+let attachedWsRemoteBridge = null
+let attachedWsRemoteBridgeUrl = ''
 let managedRuntimeProcess = null
+
+function resolveAttachWsUrl(url) {
+  return String(url?.searchParams?.get('attachWsUrl') ?? ATTACH_RUNTIME_WS_URL_DEFAULT).trim()
+}
+
+function validateAttachWsUrlOrThrow(wsUrlRaw) {
+  const wsUrl = String(wsUrlRaw ?? '').trim()
+  if (!wsUrl) {
+    const err = new Error('attach mode requires attachWsUrl query parameter or NERVE_STUDIO_ATTACH_WS env')
+    err.code = 'validation_error'
+    throw err
+  }
+
+  let parsed
+  try {
+    parsed = new URL(wsUrl)
+  } catch {
+    const err = new Error(`attach ws url is invalid: ${wsUrl}`)
+    err.code = 'validation_error'
+    throw err
+  }
+
+  if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') {
+    const err = new Error(`attach ws url must use ws:// or wss://: ${wsUrl}`)
+    err.code = 'validation_error'
+    throw err
+  }
+
+  return parsed.toString()
+}
+
+function disconnectAttachedWsRemoteBridge() {
+  if (attachedWsRemoteBridge) {
+    try {
+      attachedWsRemoteBridge.disconnect()
+    } catch {
+      // best effort
+    }
+  }
+  attachedWsRemoteBridge = null
+  attachedWsRemoteBridgeUrl = ''
+}
+
+function ensureAttachedWsRemoteBridge(url) {
+  const validatedUrl = validateAttachWsUrlOrThrow(url)
+  if (attachedWsRemoteBridge && attachedWsRemoteBridgeUrl === validatedUrl) {
+    return attachedWsRemoteBridge
+  }
+
+  disconnectAttachedWsRemoteBridge()
+  attachedWsRemoteBridge = createWsRemoteBridge({
+    wsUrl: validatedUrl,
+    eventBus,
+  })
+  attachedWsRemoteBridgeUrl = validatedUrl
+  return attachedWsRemoteBridge
+}
 
 function resolveRuntimeTarget(url) {
   if (isRemoteObserveOnlyMode) return 'remote-observe'
   if (isRemoteControlMode) return 'remote-control'
-  return String(url?.searchParams?.get('runtimeTarget') ?? '').trim().toLowerCase() === 'external'
-    ? 'external'
-    : 'embedded'
+  const requestedTarget = String(url?.searchParams?.get('runtimeTarget') ?? '').trim().toLowerCase()
+  if (requestedTarget === 'external') return 'external'
+  if (requestedTarget === 'attach') return 'attach'
+  return 'embedded'
 }
 
-function getRuntimeControlBridge(runtimeTarget) {
+function getRuntimeControlBridge(runtimeTarget, url = null, options = {}) {
+  const required = options.required === true
   if (runtimeTarget === 'remote-control') return wsRemoteBridge
   if (runtimeTarget === 'external') return managedWsRemoteBridge
+  if (runtimeTarget === 'attach') {
+    const attachWsUrl = resolveAttachWsUrl(url)
+    if (!attachWsUrl) {
+      if (!required) return null
+      const err = new Error('attach mode requires attachWsUrl query parameter or NERVE_STUDIO_ATTACH_WS env')
+      err.code = 'validation_error'
+      throw err
+    }
+    return ensureAttachedWsRemoteBridge(attachWsUrl)
+  }
   return null
 }
 
@@ -403,7 +475,7 @@ if (isRemoteObserveOnlyMode) {
   })
 }
 
-function buildRemoteModeMetadata(runtimeTarget = 'embedded') {
+function buildRemoteModeMetadata(runtimeTarget = 'embedded', url = null) {
   if (runtimeTarget === 'embedded' && !isRemoteMode) {
     return {
       remoteMode: false,
@@ -428,6 +500,24 @@ function buildRemoteModeMetadata(runtimeTarget = 'embedded') {
 
   if (runtimeTarget === 'remote-control') {
     const remoteConnection = wsRemoteBridge?.getStatus() ?? null
+    return {
+      remoteMode: true,
+      remoteControl: true,
+      remoteTransport: 'ws',
+      remoteConnection,
+      remoteRuntimeWorkspaceDir: String(remoteConnection?.workspaceDir ?? ''),
+      remoteRuntimeEntrypointPath: String(remoteConnection?.entrypointPath ?? ''),
+    }
+  }
+
+  if (runtimeTarget === 'attach') {
+    let remoteConnection = null
+    try {
+      remoteConnection = getRuntimeControlBridge(runtimeTarget, url)?.getStatus?.() ?? null
+    } catch {
+      remoteConnection = null
+    }
+
     return {
       remoteMode: true,
       remoteControl: true,
@@ -1263,7 +1353,7 @@ async function handleApi(req, res, url) {
 
     try {
       await ensureManagedRuntimeProcess(body?.workspaceDir)
-      const runtimeBridge = getRuntimeControlBridge(runtimeTarget)
+      const runtimeBridge = getRuntimeControlBridge(runtimeTarget, url, { required: true })
       const status = runtimeBridge.getStatus()
       return sendJson(res, 200, {
         ok: true,
@@ -1301,10 +1391,11 @@ async function handleApi(req, res, url) {
       // Just send the start command; don't spawn process here
     }
 
-    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external') {
-      const runtimeBridge = getRuntimeControlBridge(runtimeTarget)
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
+      let runtimeBridge
       let response
       try {
+        runtimeBridge = getRuntimeControlBridge(runtimeTarget, url, { required: true })
         if (!runtimeBridge?.sendCommand) {
           return sendRemoteConnectionUnavailable(res, 'remote runtime bridge is not configured', runtimeTarget)
         }
@@ -1314,6 +1405,9 @@ async function handleApi(req, res, url) {
         }
         response = await runtimeBridge.sendCommand({ type: 'start', payload: body })
       } catch (err) {
+        if (String(err?.code ?? '') === 'validation_error') {
+          return sendJson(res, 400, { ok: false, error: String(err?.message ?? err), ...buildRemoteModeMetadata(runtimeTarget) })
+        }
         return sendRemoteConnectionUnavailable(res, String(err?.message ?? err), runtimeTarget)
       }
 
@@ -1346,10 +1440,11 @@ async function handleApi(req, res, url) {
     if (runtimeTarget === 'remote-observe') {
       return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
     }
-    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external') {
-      const runtimeBridge = getRuntimeControlBridge(runtimeTarget)
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
+      let runtimeBridge
       let response
       try {
+        runtimeBridge = getRuntimeControlBridge(runtimeTarget, url, { required: true })
         if (!runtimeBridge?.sendCommand) {
           return sendRemoteConnectionUnavailable(res, 'remote runtime bridge is not configured', runtimeTarget)
         }
@@ -1359,6 +1454,9 @@ async function handleApi(req, res, url) {
         }
         response = await runtimeBridge.sendCommand({ type: 'stop', payload: {} })
       } catch (err) {
+        if (String(err?.code ?? '') === 'validation_error') {
+          return sendJson(res, 400, { ok: false, error: String(err?.message ?? err), ...buildRemoteModeMetadata(runtimeTarget) })
+        }
         return sendRemoteConnectionUnavailable(res, String(err?.message ?? err), runtimeTarget)
       }
 
@@ -1390,7 +1488,7 @@ async function handleApi(req, res, url) {
     if (runtimeTarget === 'remote-observe') {
       return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
     }
-    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external') {
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
       return sendJson(res, 405, { error: 'config reload is currently supported only in embedded runtime mode' })
     }
 
@@ -1411,7 +1509,7 @@ async function handleApi(req, res, url) {
     if (runtimeTarget === 'remote-observe') {
       return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
     }
-    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external') {
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
       let body
       try {
         body = await readRequestBody(req)
@@ -1419,9 +1517,10 @@ async function handleApi(req, res, url) {
         return sendJson(res, 400, { error: err.message })
       }
 
-      const runtimeBridge = getRuntimeControlBridge(runtimeTarget)
+      let runtimeBridge
       let response
       try {
+        runtimeBridge = getRuntimeControlBridge(runtimeTarget, url, { required: true })
         if (!runtimeBridge?.sendCommand) {
           return sendRemoteConnectionUnavailable(res, 'remote runtime bridge is not configured', runtimeTarget)
         }
@@ -1431,6 +1530,9 @@ async function handleApi(req, res, url) {
         }
         response = await runtimeBridge.sendCommand({ type: 'enqueue_event', payload: body })
       } catch (err) {
+        if (String(err?.code ?? '') === 'validation_error') {
+          return sendJson(res, 400, { ok: false, error: String(err?.message ?? err), ...buildRemoteModeMetadata(runtimeTarget) })
+        }
         return sendRemoteConnectionUnavailable(res, String(err?.message ?? err), runtimeTarget)
       }
 
@@ -1468,7 +1570,7 @@ async function handleApi(req, res, url) {
     if (runtimeTarget === 'remote-observe') {
       return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
     }
-    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external') {
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
       let body
       try {
         body = await readRequestBody(req)
@@ -1476,9 +1578,10 @@ async function handleApi(req, res, url) {
         return sendJson(res, 400, { error: err.message })
       }
 
-      const runtimeBridge = getRuntimeControlBridge(runtimeTarget)
+      let runtimeBridge
       let response
       try {
+        runtimeBridge = getRuntimeControlBridge(runtimeTarget, url, { required: true })
         if (!runtimeBridge?.sendCommand) {
           return sendRemoteConnectionUnavailable(res, 'remote runtime bridge is not configured', runtimeTarget)
         }
@@ -1488,6 +1591,9 @@ async function handleApi(req, res, url) {
         }
         response = await runtimeBridge.sendCommand({ type: 'dispatch_ingress', payload: body })
       } catch (err) {
+        if (String(err?.code ?? '') === 'validation_error') {
+          return sendJson(res, 400, { ok: false, error: String(err?.message ?? err), ...buildRemoteModeMetadata(runtimeTarget) })
+        }
         return sendRemoteConnectionUnavailable(res, String(err?.message ?? err), runtimeTarget)
       }
 
@@ -1527,14 +1633,27 @@ async function handleApi(req, res, url) {
         ok: true,
         running: false,
         snapshot: null,
-        ...buildRemoteModeMetadata(runtimeTarget),
+        ...buildRemoteModeMetadata(runtimeTarget, url),
       })
     }
 
-    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external') {
-      const runtimeBridge = getRuntimeControlBridge(runtimeTarget)
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
+      let runtimeBridge
+      try {
+        runtimeBridge = getRuntimeControlBridge(runtimeTarget, url)
+      } catch (err) {
+        if (String(err?.code ?? '') === 'validation_error') {
+          return sendJson(res, 400, { ok: false, error: String(err?.message ?? err), ...buildRemoteModeMetadata(runtimeTarget, url) })
+        }
+        return sendRemoteConnectionUnavailable(res, String(err?.message ?? err), runtimeTarget)
+      }
       if (!runtimeBridge) {
-        return sendRemoteConnectionUnavailable(res, 'remote runtime bridge is not configured', runtimeTarget)
+        return sendJson(res, 200, {
+          ok: true,
+          running: false,
+          snapshot: null,
+          ...buildRemoteModeMetadata(runtimeTarget, url),
+        })
       }
 
       try {
@@ -1543,7 +1662,7 @@ async function handleApi(req, res, url) {
           ok: true,
           running: snapshot.running === true,
           snapshot: snapshot.snapshot,
-          ...buildRemoteModeMetadata(runtimeTarget),
+          ...buildRemoteModeMetadata(runtimeTarget, url),
         })
       } catch (err) {
         const cachedSnapshot = runtimeBridge.getCachedSnapshot()
@@ -1554,7 +1673,7 @@ async function handleApi(req, res, url) {
             snapshot: cachedSnapshot,
             staleSnapshot: true,
             warning: String(err?.message ?? err),
-            ...buildRemoteModeMetadata(runtimeTarget),
+            ...buildRemoteModeMetadata(runtimeTarget, url),
           })
         }
         // Not connected yet (e.g. no runtime started) — not an error, just idle
@@ -1562,7 +1681,7 @@ async function handleApi(req, res, url) {
           ok: true,
           running: false,
           snapshot: null,
-          ...buildRemoteModeMetadata(runtimeTarget),
+          ...buildRemoteModeMetadata(runtimeTarget, url),
         })
       }
     }
@@ -1572,13 +1691,18 @@ async function handleApi(req, res, url) {
       ok: true,
       running: snapshot?.running === true,
       snapshot,
-      ...buildRemoteModeMetadata(runtimeTarget),
+      ...buildRemoteModeMetadata(runtimeTarget, url),
     })
   }
 
   if (req.method === 'GET' && url.pathname === '/api/nextv/stream') {
     const runtimeTarget = resolveRuntimeTarget(url)
-    const runtimeBridge = getRuntimeControlBridge(runtimeTarget)
+    let runtimeBridge = null
+    try {
+      runtimeBridge = getRuntimeControlBridge(runtimeTarget, url)
+    } catch {
+      runtimeBridge = null
+    }
     if (!ENABLED_SURFACES.has('sse')) {
       return sendJson(res, 404, {
         error: 'SSE surface is disabled for this host.',
@@ -1713,11 +1837,13 @@ server.listen(PORT, () => {
 
 process.on('exit', () => {
   stopManagedRuntimeProcess()
+  disconnectAttachedWsRemoteBridge()
 })
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     stopManagedRuntimeProcess()
+    disconnectAttachedWsRemoteBridge()
     process.exit(0)
   })
 }

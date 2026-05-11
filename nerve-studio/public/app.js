@@ -59,6 +59,7 @@ const storageKeys = {
   nextVUserOutputChannels: 'local-agent.nextv.userOutputChannels',
   nextVIngressControlsVisible: 'local-agent.nextv.ingressControlsVisible',
   nextVRuntimeTarget: 'local-agent.nextv.runtimeTarget',
+  nextVAttachWsUrl: 'local-agent.nextv.attachWsUrl',
   nextVGraphDirection: 'local-agent.nextv.graphDirection',
   nextVControlOverlay: 'local-agent.nextv.controlOverlay',
   nextVShowControlBranches: 'local-agent.nextv.showControlBranches',
@@ -213,6 +214,13 @@ const nextVIngressControlsState = {
 
 const nextVRuntimeTargetState = {
   target: 'embedded',
+  attachWsUrl: '',
+}
+
+const nextVAttachSessionState = {
+  attached: false,
+  connecting: false,
+  lastError: '',
 }
 
 const nextVGraphMappingApi = globalThis?.nextVGraphMapping || null
@@ -369,6 +377,12 @@ const nextVStartBtn = document.getElementById('nextv-start-btn')
 const nextVRunBtn = document.getElementById('nextv-run-btn')
 const nextVStopBtn = document.getElementById('nextv-stop-btn')
 const nextVRuntimeTargetInput = document.getElementById('nextv-runtime-target')
+const nextVAttachWsUrlInput = document.getElementById('nextv-attach-ws-url')
+const nextVAttachWsUrlLabel = document.getElementById('nextv-attach-ws-url-label')
+const nextVAttachControls = document.getElementById('nextv-attach-controls')
+const nextVAttachBtn = document.getElementById('nextv-attach-btn')
+const nextVDetachBtn = document.getElementById('nextv-detach-btn')
+const nextVAttachStatus = document.getElementById('nextv-attach-status')
 const remoteModeBadge = document.getElementById('remote-mode-badge')
 const userOutput = document.getElementById('user-output')
 const userOutputChannelFilters = document.getElementById('user-output-channel-filters')
@@ -441,6 +455,10 @@ import {
 import {
   renderNextVSnapshot
 } from './11_state_panels.js'
+import {
+  toPrettyJson,
+  summarizeToolCallArgs
+} from './10_file_tree.js'
 import {
   setStatus,
   appendErrorRow
@@ -857,11 +875,35 @@ export function renderExecutionGroups() {
       for (const event of group.events) {
         const eventEl = document.createElement('div')
         eventEl.className = `exec-event exec-event-${event.type}`
+
+        const debugPayload = getExecutionEventDebugPayload(event)
         eventEl.innerHTML = `
           <span class="exec-event-ts">${event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '—'}</span>
           <span class="exec-event-type">${event.type}</span>
-          <span class="exec-event-content">${formatExecutionEventContent(event)}</span>
+          <span class="exec-event-content">${escapeExecutionEventText(formatExecutionEventContent(event))}</span>
+          ${debugPayload !== null ? '<button type="button" class="exec-event-debug-toggle" aria-label="show payload" title="show payload">&#x25B6;</button>' : ''}
         `
+
+        if (debugPayload !== null) {
+          const toggleBtn = eventEl.querySelector('.exec-event-debug-toggle')
+          const debugEl = document.createElement('pre')
+          debugEl.className = 'exec-event-debug'
+          debugEl.hidden = true
+          debugEl.textContent = toPrettyJson(debugPayload)
+          eventEl.appendChild(debugEl)
+
+          if (toggleBtn) {
+            toggleBtn.addEventListener('click', (e) => {
+              e.stopPropagation()
+              const expanded = !debugEl.hidden
+              debugEl.hidden = expanded
+              toggleBtn.textContent = expanded ? '\u25B6' : '\u25BC'
+              toggleBtn.title = expanded ? 'show payload' : 'hide payload'
+              toggleBtn.setAttribute('aria-label', expanded ? 'show payload' : 'hide payload')
+            })
+          }
+        }
+
         bodyEl.appendChild(eventEl)
       }
 
@@ -870,6 +912,46 @@ export function renderExecutionGroups() {
 
     nextVEventsOutput.appendChild(groupEl)
   }
+}
+
+function escapeExecutionEventText(text) {
+  return String(text ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+}
+
+function getExecutionEventDebugPayload(event) {
+  if (!event || typeof event !== 'object') return null
+
+  if (event.type === 'tool_call') {
+    return {
+      tool: String(event.tool ?? ''),
+      args: event.args ?? null,
+      toolMetadata: event.toolMetadata ?? null,
+    }
+  }
+
+  if (event.type === 'agent_call') {
+    return {
+      agent: String(event.agent ?? ''),
+      args: event.args ?? null,
+      line: Number.isFinite(Number(event.line)) ? Number(event.line) : null,
+      sourcePath: String(event.sourcePath ?? ''),
+      sourceLine: Number.isFinite(Number(event.sourceLine)) ? Number(event.sourceLine) : null,
+    }
+  }
+
+  if (event.type === 'agent_result') {
+    const metadata = (event.metadata && typeof event.metadata === 'object') ? event.metadata : null
+    if (!metadata) return null
+    return {
+      agent: String(event.agent ?? ''),
+      metadata,
+    }
+  }
+
+  return null
 }
 
 function formatExecutionEventContent(event) {
@@ -882,7 +964,22 @@ function formatExecutionEventContent(event) {
   }
   if (type === 'tool_call') {
     const tool = event.tool || 'unknown'
+    if (tool === 'agent' || tool === 'model') {
+      return `call: ${tool} ${summarizeToolCallArgs(event.args)}`
+    }
     return `call: ${tool}`
+  }
+  if (type === 'agent_call') {
+    const agent = String(event.agent ?? 'unknown')
+    return `agent call: ${agent}`
+  }
+  if (type === 'agent_result') {
+    const agent = String(event.agent ?? 'unknown')
+    const elapsedMs = Number(event?.metadata?.elapsedMs)
+    if (Number.isFinite(elapsedMs)) {
+      return `agent result: ${agent} (${Math.max(0, Math.round(elapsedMs))}ms)`
+    }
+    return `agent result: ${agent}`
   }
   if (type === 'tool_result') {
     const tool = event.tool || 'unknown'
@@ -970,6 +1067,13 @@ import {
   nextVReloadConfigBtn,
   nextVRunBtn,
   nextVRuntimeRunning,
+  nextVAttachSessionState,
+  nextVAttachControls,
+  nextVAttachBtn,
+  nextVDetachBtn,
+  nextVAttachStatus,
+  nextVAttachWsUrlInput,
+  nextVAttachWsUrlLabel,
   nextVRuntimeTargetInput,
   nextVRuntimeTargetState,
   nextVShowIngressToggle,
@@ -1413,7 +1517,93 @@ export function toggleNextVIngressControlsSetting() {
 }
 
 export function normalizeNextVRuntimeTarget(value) {
-  return String(value ?? '').trim().toLowerCase() === 'external' ? 'external' : 'embedded'
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (normalized === 'external') return 'external'
+  if (normalized === 'attach') return 'attach'
+  return 'embedded'
+}
+
+export function normalizeNextVAttachWsUrl(value) {
+  return String(value ?? '').trim()
+}
+
+export function getNextVAttachWsUrl() {
+  return normalizeNextVAttachWsUrl(nextVRuntimeTargetState.attachWsUrl)
+}
+
+export function syncNextVAttachWsUrlControls() {
+  const showAttachControls = getNextVRuntimeTarget() === 'attach'
+  if (nextVAttachWsUrlLabel) {
+    nextVAttachWsUrlLabel.hidden = !showAttachControls
+  }
+  if (nextVAttachWsUrlInput) {
+    nextVAttachWsUrlInput.hidden = !showAttachControls
+    nextVAttachWsUrlInput.disabled = !showAttachControls
+    nextVAttachWsUrlInput.value = getNextVAttachWsUrl()
+  }
+  if (nextVAttachControls) {
+    nextVAttachControls.hidden = !showAttachControls
+  }
+  syncNextVAttachSessionUi()
+}
+
+export function syncNextVAttachSessionUi() {
+  const isAttachMode = getNextVRuntimeTarget() === 'attach'
+  const isConnecting = nextVAttachSessionState.connecting === true
+  const isAttached = nextVAttachSessionState.attached === true
+  const hasAttachUrl = Boolean(getNextVAttachWsUrl())
+
+  if (nextVAttachBtn) {
+    nextVAttachBtn.disabled = !isAttachMode || isConnecting || isAttached || !hasAttachUrl
+  }
+  if (nextVDetachBtn) {
+    nextVDetachBtn.disabled = !isAttachMode || isConnecting || !isAttached
+  }
+  if (nextVAttachStatus) {
+    if (!isAttachMode) {
+      nextVAttachStatus.dataset.state = 'detached'
+      nextVAttachStatus.textContent = 'detached'
+    } else if (isConnecting) {
+      nextVAttachStatus.dataset.state = 'attaching'
+      nextVAttachStatus.textContent = 'attaching'
+    } else if (isAttached) {
+      nextVAttachStatus.dataset.state = 'attached'
+      nextVAttachStatus.textContent = 'attached'
+    } else if (nextVAttachSessionState.lastError) {
+      nextVAttachStatus.dataset.state = 'error'
+      nextVAttachStatus.textContent = 'attach failed'
+    } else {
+      nextVAttachStatus.dataset.state = 'detached'
+      nextVAttachStatus.textContent = 'detached'
+    }
+    if (nextVAttachSessionState.lastError) {
+      nextVAttachStatus.title = String(nextVAttachSessionState.lastError)
+    } else {
+      nextVAttachStatus.title = nextVAttachStatus.textContent
+    }
+  }
+}
+
+export function setNextVAttachWsUrl(value, options = {}) {
+  const { persist = true, sync = true } = options
+  const previousUrl = String(nextVRuntimeTargetState.attachWsUrl ?? '').trim()
+  const normalized = normalizeNextVAttachWsUrl(value)
+  nextVRuntimeTargetState.attachWsUrl = normalized
+  if (previousUrl !== normalized) {
+    nextVAttachSessionState.attached = false
+    nextVAttachSessionState.connecting = false
+  }
+  nextVAttachSessionState.lastError = ''
+  if (nextVAttachWsUrlInput) {
+    nextVAttachWsUrlInput.value = normalized
+  }
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVAttachWsUrl, normalized)
+  }
+  syncNextVAttachSessionUi()
+  if (sync && getNextVRuntimeTarget() === 'attach' && nextVAttachSessionState.attached === true) {
+    syncNextVRuntimeState()
+  }
 }
 
 export function getNextVRuntimeTarget() {
@@ -1424,9 +1614,15 @@ export function setNextVRuntimeTarget(value, options = {}) {
   const { persist = true, sync = true } = options
   const normalized = normalizeNextVRuntimeTarget(value)
   nextVRuntimeTargetState.target = normalized
+  if (normalized !== 'attach') {
+    nextVAttachSessionState.attached = false
+    nextVAttachSessionState.connecting = false
+    nextVAttachSessionState.lastError = ''
+  }
   if (nextVRuntimeTargetInput) {
     nextVRuntimeTargetInput.value = normalized
   }
+  syncNextVAttachWsUrlControls()
   if (persist) {
     localStorage.setItem(storageKeys.nextVRuntimeTarget, normalized)
   }
@@ -1437,7 +1633,14 @@ export function setNextVRuntimeTarget(value, options = {}) {
 
 export function buildNextVApiPath(pathname) {
   const params = new URLSearchParams()
-  params.set('runtimeTarget', getNextVRuntimeTarget())
+  const runtimeTarget = getNextVRuntimeTarget()
+  params.set('runtimeTarget', runtimeTarget)
+  if (runtimeTarget === 'attach' && nextVAttachSessionState.attached === true) {
+    const attachWsUrl = getNextVAttachWsUrl()
+    if (attachWsUrl) {
+      params.set('attachWsUrl', attachWsUrl)
+    }
+  }
   return `${pathname}?${params.toString()}`
 }
 
@@ -1605,7 +1808,9 @@ export function updateRemoteModeBadge() {
 
   let label = 'remote runtime'
   if (isRemoteControlMode) {
-    label = 'remote WS runtime (control)'
+    label = nextVRuntimeTargetState.target === 'attach'
+      ? 'attached WS runtime (control)'
+      : 'remote WS runtime (control)'
   } else if (remoteTransport === 'mqtt') {
     label = 'remote MQTT runtime'
   }
@@ -1629,7 +1834,9 @@ export function updateRemoteModeBadge() {
 export function setNextVRunControls() {
   const hasEntrypoint = Boolean(normalizeRelativePath(nextVEntrypointInput?.value ?? ''))
   const isExternalMode = nextVRuntimeTargetState.target === 'external'
-  const remoteBlocksControl = isRemoteMode && !isExternalMode && (!isRemoteControlMode || !isRemoteRuntimeConnected)
+  const isAttachMode = nextVRuntimeTargetState.target === 'attach'
+  const attachBlocksControl = isAttachMode && nextVAttachSessionState.attached !== true
+  const remoteBlocksControl = attachBlocksControl || (isRemoteMode && !isExternalMode && (!isRemoteControlMode || !isRemoteRuntimeConnected))
   
   // In external mode: show run/start buttons separately
   // In embedded mode: show only start button
@@ -1647,13 +1854,17 @@ export function setNextVRunControls() {
   }
   
   // Start button behavior:
-  // - In embedded mode: normal behavior (start the workflow)
+  // - In embedded/attach mode: normal behavior (attach starts remote workflow)
   // - In external mode: only enabled after process is running
   if (nextVStartBtn) {
     const startDisabled = isExternalMode
       ? (remoteBlocksControl || !nextVManagedProcessRunning || nextVRuntimeRunning || isBusy)
       : (remoteBlocksControl || nextVRuntimeRunning || isBusy || !hasEntrypoint)
     nextVStartBtn.disabled = startDisabled
+  }
+
+  if (isAttachMode && nextVRunBtn) {
+    nextVRunBtn.hidden = true
   }
   
   if (nextVStopBtn) nextVStopBtn.disabled = remoteBlocksControl || !nextVRuntimeRunning || isBusy
@@ -3120,6 +3331,254 @@ export function reconcileNextVGraphAgentTimersFromExecution(nodeId, result) {
   return true
 }
 
+function resolveNextVGraphRuntimeHandlerNode(runtimeEvent) {
+  const fallbackNode = String(nextVGraphState.runtimeLastDispatchedNode ?? '').trim()
+  const runtimeEventSourcePath = normalizeNextVGraphFilePath(runtimeEvent?.sourcePath)
+  const runtimeEventSourceLineRaw = Number(runtimeEvent?.sourceLine)
+  const runtimeEventSourceLine = Number.isFinite(runtimeEventSourceLineRaw) ? runtimeEventSourceLineRaw : null
+  const runtimeEventSourcePathLower = runtimeEventSourcePath ? runtimeEventSourcePath.toLowerCase() : ''
+  const runtimeEventSourcePathBase = runtimeEventSourcePathLower.includes('/')
+    ? runtimeEventSourcePathLower.slice(runtimeEventSourcePathLower.lastIndexOf('/') + 1)
+    : runtimeEventSourcePathLower
+
+  const fallbackNodeObj = (Array.isArray(nextVGraphState.nodes) ? nextVGraphState.nodes : []).find(
+    (nodeObj) => String(nodeObj?.id ?? '').trim() === fallbackNode,
+  )
+  const fallbackNodeSourcePath = normalizeNextVGraphFilePath(fallbackNodeObj?.sourcePath)
+  const fallbackNodeSourcePathLower = fallbackNodeSourcePath ? fallbackNodeSourcePath.toLowerCase() : ''
+
+  let bestMatchingNodeId = ''
+  let bestMatchingNodeLine = Number.NEGATIVE_INFINITY
+  let firstPathMatchNodeId = ''
+  let firstCaseInsensitivePathMatchNodeId = ''
+  let firstSuffixPathMatchNodeId = ''
+  let bestSuffixNodeId = ''
+  let bestSuffixNodeLine = Number.NEGATIVE_INFINITY
+  let bestCaseInsensitiveNodeId = ''
+  let bestCaseInsensitiveNodeLine = Number.NEGATIVE_INFINITY
+  let bestLineOnlyNodeId = ''
+  let bestLineOnlyNodeLine = Number.NEGATIVE_INFINITY
+
+  for (const nodeObj of Array.isArray(nextVGraphState.nodes) ? nextVGraphState.nodes : []) {
+    if (String(nodeObj?.kind ?? '').trim() !== 'handler') continue
+    const nodeId = String(nodeObj?.id ?? '').trim()
+    if (!nodeId) continue
+    const nodeSourceLineRaw = Number(nodeObj?.sourceLine)
+    const nodeSourceLine = Number.isFinite(nodeSourceLineRaw) ? nodeSourceLineRaw : null
+
+    const nodeSourcePath = normalizeNextVGraphFilePath(nodeObj?.sourcePath)
+    const nodeSourcePathLower = nodeSourcePath ? nodeSourcePath.toLowerCase() : ''
+
+    // Last-resort fallback: only line-match within the currently active file context,
+    // or when runtime events have no sourcePath at all.
+    if (runtimeEventSourceLine != null && nodeSourceLine != null && nodeSourceLine <= runtimeEventSourceLine) {
+      const allowLineOnlyFallback = !runtimeEventSourcePathLower
+        || (fallbackNodeSourcePathLower && nodeSourcePathLower && nodeSourcePathLower === fallbackNodeSourcePathLower)
+      if (allowLineOnlyFallback && nodeSourceLine >= bestLineOnlyNodeLine) {
+        bestLineOnlyNodeLine = nodeSourceLine
+        bestLineOnlyNodeId = nodeId
+      }
+    }
+
+    if (!runtimeEventSourcePath || !nodeSourcePath) continue
+
+    if (nodeSourcePath === runtimeEventSourcePath) {
+      if (!firstPathMatchNodeId) {
+        firstPathMatchNodeId = nodeId
+      }
+
+      if (runtimeEventSourceLine == null || nodeSourceLine == null) continue
+      if (nodeSourceLine > runtimeEventSourceLine) continue
+      if (nodeSourceLine < bestMatchingNodeLine) continue
+
+      bestMatchingNodeLine = nodeSourceLine
+      bestMatchingNodeId = nodeId
+      continue
+    }
+
+    if (runtimeEventSourcePathLower && nodeSourcePath.toLowerCase() === runtimeEventSourcePathLower) {
+      if (!firstCaseInsensitivePathMatchNodeId) {
+        firstCaseInsensitivePathMatchNodeId = nodeId
+      }
+      if (runtimeEventSourceLine == null || nodeSourceLine == null) continue
+      if (nodeSourceLine > runtimeEventSourceLine) continue
+      if (nodeSourceLine < bestCaseInsensitiveNodeLine) continue
+
+      bestCaseInsensitiveNodeLine = nodeSourceLine
+      bestCaseInsensitiveNodeId = nodeId
+      continue
+    }
+
+    // Handle relative-vs-absolute workspace path differences such as:
+    // "music-select.nrv" vs "workspaces-local/music-agent/music-select.nrv".
+    const nodeSourcePathBase = nodeSourcePathLower.includes('/')
+      ? nodeSourcePathLower.slice(nodeSourcePathLower.lastIndexOf('/') + 1)
+      : nodeSourcePathLower
+    const isSuffixPathMatch = Boolean(
+      runtimeEventSourcePathLower
+      && nodeSourcePathLower
+      && (
+        runtimeEventSourcePathLower.endsWith(`/${nodeSourcePathLower}`)
+        || nodeSourcePathLower.endsWith(`/${runtimeEventSourcePathLower}`)
+        || (runtimeEventSourcePathBase && nodeSourcePathBase && runtimeEventSourcePathBase === nodeSourcePathBase)
+      )
+    )
+    if (isSuffixPathMatch) {
+      if (!firstSuffixPathMatchNodeId) {
+        firstSuffixPathMatchNodeId = nodeId
+      }
+      if (runtimeEventSourceLine == null || nodeSourceLine == null) continue
+      if (nodeSourceLine > runtimeEventSourceLine) continue
+      if (nodeSourceLine < bestSuffixNodeLine) continue
+
+      bestSuffixNodeLine = nodeSourceLine
+      bestSuffixNodeId = nodeId
+    }
+  }
+
+  return (
+    bestMatchingNodeId
+    || firstPathMatchNodeId
+    || bestCaseInsensitiveNodeId
+    || firstCaseInsensitivePathMatchNodeId
+    || bestSuffixNodeId
+    || firstSuffixPathMatchNodeId
+    || bestLineOnlyNodeId
+    || fallbackNode
+  )
+}
+
+export function resolveNextVGraphHandlerNodeForSource(sourcePath, sourceLine, fallbackNode = '') {
+  return resolveNextVGraphRuntimeHandlerNode({
+    sourcePath,
+    sourceLine,
+    line: sourceLine,
+  }) || String(fallbackNode ?? '').trim()
+}
+
+function findNextVGraphAgentStartSlotIndex(record, lineNumber) {
+  const slots = Array.isArray(record?.slots) ? record.slots : []
+  if (slots.length === 0) return 0
+
+  const targetLine = Number(lineNumber)
+  if (Number.isFinite(targetLine)) {
+    for (let idx = 0; idx < slots.length; idx += 1) {
+      const slotLine = Number(slots[idx]?.line)
+      if (!Number.isFinite(slotLine) || slotLine !== targetLine) continue
+      if (slots[idx]?.active === true) continue
+      if (Math.max(0, Number(slots[idx]?.elapsedMs) || 0) === 0) {
+        return idx
+      }
+    }
+    for (let idx = 0; idx < slots.length; idx += 1) {
+      const slotLine = Number(slots[idx]?.line)
+      if (Number.isFinite(slotLine) && slotLine === targetLine && slots[idx]?.active !== true) {
+        return idx
+      }
+    }
+  }
+
+  const startIndex = Number.isInteger(record?.nextStartIndex) ? record.nextStartIndex : 0
+  for (let offset = 0; offset < slots.length; offset += 1) {
+    const idx = (startIndex + offset) % slots.length
+    const slot = slots[idx]
+    if (slot?.active !== true && Math.max(0, Number(slot?.elapsedMs) || 0) === 0) {
+      return idx
+    }
+  }
+
+  for (let offset = 0; offset < slots.length; offset += 1) {
+    const idx = (startIndex + offset) % slots.length
+    if (slots[idx]?.active !== true) return idx
+  }
+
+  return startIndex % slots.length
+}
+
+function findNextVGraphAgentFinishSlotIndex(record, lineNumber) {
+  const slots = Array.isArray(record?.slots) ? record.slots : []
+  if (slots.length === 0) return 0
+
+  const targetLine = Number(lineNumber)
+  if (Number.isFinite(targetLine)) {
+    let bestIndex = -1
+    let bestStartMs = Number.POSITIVE_INFINITY
+    for (let idx = 0; idx < slots.length; idx += 1) {
+      const slot = slots[idx]
+      const slotLine = Number(slot?.line)
+      if (!Number.isFinite(slotLine) || slotLine !== targetLine) continue
+      if (slot?.active !== true) continue
+      const slotStartMs = Number(slot?.startMs)
+      const resolvedStartMs = Number.isFinite(slotStartMs) ? slotStartMs : 0
+      if (resolvedStartMs < bestStartMs) {
+        bestStartMs = resolvedStartMs
+        bestIndex = idx
+      }
+    }
+    if (bestIndex >= 0) return bestIndex
+  }
+
+  const oldestActiveIndex = findNextVGraphAgentFinishSlot(record)
+  if (Number.isInteger(oldestActiveIndex) && slots[oldestActiveIndex]?.active === true) {
+    return oldestActiveIndex
+  }
+
+  for (let idx = 0; idx < slots.length; idx += 1) {
+    if (slots[idx]?.active !== true) return idx
+  }
+
+  return 0
+}
+
+function startNextVGraphAgentTimer(runtimeEvent) {
+  const currentNode = resolveNextVGraphRuntimeHandlerNode(runtimeEvent)
+  const agentName = String(runtimeEvent?.agent ?? '').trim()
+  if (!currentNode || !agentName) return false
+
+  const timerRecord = ensureNextVGraphAgentTimerRecord(currentNode)
+  const slotIndex = findNextVGraphAgentStartSlotIndex(timerRecord, runtimeEvent?.line ?? runtimeEvent?.sourceLine)
+  timerRecord.slots[slotIndex] = {
+    active: true,
+    startMs: parseNextVGraphRuntimeEventTimestampMs(runtimeEvent),
+    elapsedMs: 0,
+    line: Number.isFinite(Number(runtimeEvent?.line))
+      ? Number(runtimeEvent.line)
+      : (Number.isFinite(Number(runtimeEvent?.sourceLine)) ? Number(runtimeEvent.sourceLine) : null),
+  }
+  timerRecord.nextStartIndex = Math.min(slotIndex + 1, timerRecord.slots.length - 1)
+  nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, timerRecord)
+  nextVGraphState.runtimeLastDispatchedNode = currentNode
+  applyNextVGraphRuntimeVisuals()
+  return true
+}
+
+function finishNextVGraphAgentTimer(runtimeEvent) {
+  const currentNode = resolveNextVGraphRuntimeHandlerNode(runtimeEvent)
+  const agentName = String(runtimeEvent?.agent ?? '').trim()
+  if (!currentNode || !agentName) return false
+
+  const timerRecord = ensureNextVGraphAgentTimerRecord(currentNode)
+  const slotIndex = findNextVGraphAgentFinishSlotIndex(timerRecord, runtimeEvent?.line ?? runtimeEvent?.sourceLine)
+  const currentSlot = timerRecord.slots[slotIndex] ?? null
+  const elapsedMs = Number(runtimeEvent?.metadata?.elapsedMs)
+  const startMs = Number(currentSlot?.startMs)
+  timerRecord.slots[slotIndex] = {
+    active: false,
+    startMs: Number.isFinite(startMs) ? startMs : 0,
+    elapsedMs: Number.isFinite(elapsedMs) && elapsedMs >= 0
+      ? elapsedMs
+      : Math.max(0, parseNextVGraphRuntimeEventTimestampMs(runtimeEvent) - (Number.isFinite(startMs) ? startMs : parseNextVGraphRuntimeEventTimestampMs(runtimeEvent))),
+    line: Number.isFinite(Number(runtimeEvent?.line))
+      ? Number(runtimeEvent.line)
+      : (Number.isFinite(Number(runtimeEvent?.sourceLine)) ? Number(runtimeEvent.sourceLine) : (Number(currentSlot?.line) || null)),
+  }
+  timerRecord.nextStartIndex = Math.min(slotIndex + 1, timerRecord.slots.length - 1)
+  nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, timerRecord)
+  nextVGraphState.runtimeLastDispatchedNode = currentNode
+  applyNextVGraphRuntimeVisuals()
+  return true
+}
+
 export function finalizeNextVGraphActiveAgentTimers(options = {}) {
   return nextVGraphTimerApi.finalizeActive(
     nextVGraphState,
@@ -3973,9 +4432,10 @@ export function handleNextVGraphRuntimeEvent(runtimeEvent) {
   }
 
   if (runtimeEvent.type === 'output') {
-    const currentNode = String(nextVGraphState.runtimeLastDispatchedNode ?? '').trim()
+    const currentNode = resolveNextVGraphRuntimeHandlerNode(runtimeEvent)
     const format = String(runtimeEvent.format ?? '').trim()
     if (currentNode && format) {
+      nextVGraphState.runtimeLastDispatchedNode = currentNode
       markNextVGraphEffectEdgeActive(currentNode, 'output', format)
       const edgeKey = resolveNextVGraphEffectEdgeKey(currentNode, 'output', format)
       flashNextVGraphEdgeValue(edgeKey, runtimeEvent.value ?? runtimeEvent.content)
@@ -3983,40 +4443,55 @@ export function handleNextVGraphRuntimeEvent(runtimeEvent) {
     return
   }
 
+  if (runtimeEvent.type === 'agent_call') {
+    startNextVGraphAgentTimer(runtimeEvent)
+    return
+  }
+
+  if (runtimeEvent.type === 'agent_result') {
+    finishNextVGraphAgentTimer(runtimeEvent)
+    return
+  }
+
   if (runtimeEvent.type === 'tool_call' || runtimeEvent.type === 'tool_result') {
-    const currentNode = String(nextVGraphState.runtimeLastDispatchedNode ?? '').trim()
-    const toolName = String(runtimeEvent.tool ?? '').trim()
+    const currentNode = resolveNextVGraphRuntimeHandlerNode(runtimeEvent)
+    const toolName = String(runtimeEvent.tool ?? runtimeEvent.agent ?? '').trim()
     const runtimeEventTimestampMs = parseNextVGraphRuntimeEventTimestampMs(runtimeEvent)
 
-    if (currentNode && toolName === 'agent') {
-      const timerRecord = ensureNextVGraphAgentTimerRecord(currentNode)
-      if (runtimeEvent.type === 'tool_call') {
-        const slotIndex = findNextVGraphAgentStartSlot(timerRecord)
-        timerRecord.slots[slotIndex] = {
-          active: true,
-          startMs: runtimeEventTimestampMs,
-          elapsedMs: 0,
-        }
-        timerRecord.nextStartIndex = Math.min(slotIndex + 1, timerRecord.slots.length - 1)
-        nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, timerRecord)
-      } else {
-        const slotIndex = findNextVGraphAgentFinishSlot(timerRecord)
-        const currentTimerState = timerRecord.slots[slotIndex]
-        const metadataElapsedMs = Number(runtimeEvent?.result?.metadata?.elapsedMs)
-        const startMs = Number(currentTimerState?.startMs)
-        const elapsedMs = Number.isFinite(metadataElapsedMs)
-          ? Math.max(0, metadataElapsedMs)
-          : Math.max(0, runtimeEventTimestampMs - (Number.isFinite(startMs) ? startMs : runtimeEventTimestampMs))
+    if (currentNode && toolName) {
+      nextVGraphState.runtimeLastDispatchedNode = currentNode
+      const hasDeclaredAgentEntries = getNextVGraphAgentEntriesForHandlerNode(currentNode).length > 0
+      if (!hasDeclaredAgentEntries) {
+        const timerRecord = ensureNextVGraphAgentTimerRecord(currentNode)
+        if (runtimeEvent.type === 'tool_call') {
+          const slotIndex = findNextVGraphAgentStartSlot(timerRecord)
+          timerRecord.slots[slotIndex] = {
+            active: true,
+            startMs: runtimeEventTimestampMs,
+            elapsedMs: 0,
+          }
+          timerRecord.nextStartIndex = Math.min(slotIndex + 1, timerRecord.slots.length - 1)
+          nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, timerRecord)
+        } else {
+          const slotIndex = findNextVGraphAgentFinishSlot(timerRecord)
+          const currentTimerState = timerRecord.slots[slotIndex]
+          const metadataElapsedMs = Number(runtimeEvent?.result?.metadata?.elapsedMs)
+          const startMs = Number(currentTimerState?.startMs)
+          const elapsedMs = Number.isFinite(metadataElapsedMs)
+            ? Math.max(0, metadataElapsedMs)
+            : Math.max(0, runtimeEventTimestampMs - (Number.isFinite(startMs) ? startMs : runtimeEventTimestampMs))
 
-        timerRecord.slots[slotIndex] = {
-          active: false,
-          startMs: Number.isFinite(startMs) ? startMs : Math.max(0, runtimeEventTimestampMs - elapsedMs),
-          elapsedMs,
+          timerRecord.slots[slotIndex] = {
+            active: false,
+            startMs: Number.isFinite(startMs) ? startMs : Math.max(0, runtimeEventTimestampMs - elapsedMs),
+            elapsedMs,
+          }
+          nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, timerRecord)
         }
-        nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, timerRecord)
+
+        syncNextVGraphAgentTicker()
       }
 
-      syncNextVGraphAgentTicker()
       applyNextVGraphRuntimeVisuals()
     }
 
@@ -5545,6 +6020,49 @@ export function appendNextVLogRow(line, cls = '') {
   appendPanelLogRow(nextVEventsOutput, line, cls)
 }
 
+export function appendNextVDebugRow(label, debugPayload) {
+  if (!isNextVMode()) return
+  const panel = nextVEventsOutput
+  if (!panel) return
+
+  const rowId = 'nextv-debug-' + Math.random().toString(36).slice(2)
+  
+  // Create toggle button
+  const toggleBtn = document.createElement('button')
+  toggleBtn.type = 'button'
+  toggleBtn.className = 'nextv-debug-toggle'
+  toggleBtn.textContent = '▶'
+  toggleBtn.title = 'show'
+  toggleBtn.setAttribute('aria-label', 'show')
+  
+  // Create row with label
+  const row = document.createElement('div')
+  row.className = 'script-log-row result'
+  row.appendChild(toggleBtn)
+  row.appendChild(document.createTextNode(' ' + label))
+  panel.appendChild(row)
+  
+  // Create debug payload element
+  const debugEl = document.createElement('pre')
+  debugEl.id = rowId
+  debugEl.className = 'nextv-debug-payload'
+  debugEl.hidden = true
+  debugEl.textContent = debugPayload
+  panel.appendChild(debugEl)
+  
+  // Attach click handler
+  toggleBtn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const isExpanded = !debugEl.hidden
+    debugEl.hidden = isExpanded
+    toggleBtn.textContent = isExpanded ? '▶' : '▼'
+    toggleBtn.title = isExpanded ? 'show' : 'hide'
+    toggleBtn.setAttribute('aria-label', isExpanded ? 'show' : 'hide')
+  })
+  
+  panel.scrollTop = panel.scrollHeight
+}
+
 export function extractErrorLineNumber(raw) {
   const text = String(raw ?? '')
   if (!text) return 0
@@ -5798,6 +6316,7 @@ import {
   filetreeDeleteTimer,
   inputPanelState,
   nextVAutoSaveInput,
+  nextVAttachWsUrlInput,
   nextVEditorTabSizeInput,
   nextVEntrypointInput,
   nextVFileState,
@@ -7409,6 +7928,7 @@ export function persistNextVConfig() {
   const entrypointPath = normalizeRelativePath(nextVEntrypointInput?.value ?? '')
   const autoSaveEnabled = nextVAutoSaveInput?.checked !== false
   const runtimeTarget = getNextVRuntimeTarget()
+  const attachWsUrl = String(nextVRuntimeTargetState.attachWsUrl ?? '').trim()
   const graphDirection = normalizeNextVGraphDirection(nextVGraphState.layoutDirection)
   const editorTabSize = getCurrentNextVEditorTabSize()
 
@@ -7416,6 +7936,7 @@ export function persistNextVConfig() {
   localStorage.setItem(storageKeys.nextVEntrypoint, entrypointPath)
   localStorage.setItem(storageKeys.nextVAutoSave, autoSaveEnabled ? '1' : '0')
   localStorage.setItem(storageKeys.nextVRuntimeTarget, runtimeTarget)
+  localStorage.setItem(storageKeys.nextVAttachWsUrl, attachWsUrl)
   localStorage.setItem(storageKeys.nextVGraphDirection, graphDirection)
   localStorage.setItem(storageKeys.nextVEditorTabSize, String(editorTabSize))
 }
@@ -7431,6 +7952,7 @@ export function restoreNextVConfig() {
   const devTab = ['events', 'trace', 'console'].includes(storedDevTab) ? storedDevTab : 'events'
   const storedInputTab = String(localStorage.getItem(storageKeys.nextVInputTab) ?? '').trim()
   const runtimeTarget = normalizeNextVRuntimeTarget(localStorage.getItem(storageKeys.nextVRuntimeTarget) ?? 'embedded')
+  const attachWsUrl = String(localStorage.getItem(storageKeys.nextVAttachWsUrl) ?? '').trim()
   const devConsoleOpen = localStorage.getItem(storageKeys.nextVDevConsoleOpen) !== '0'
   const graphDirection = normalizeNextVGraphDirection(localStorage.getItem(storageKeys.nextVGraphDirection) ?? 'TB')
   const controlOverlayEnabled = localStorage.getItem(storageKeys.nextVControlOverlay) !== '0'
@@ -7443,7 +7965,9 @@ export function restoreNextVConfig() {
   if (nextVEntrypointInput) nextVEntrypointInput.value = entrypointPath
   if (nextVAutoSaveInput) nextVAutoSaveInput.checked = autoSaveEnabled
   nextVRuntimeTargetState.target = runtimeTarget
+  nextVRuntimeTargetState.attachWsUrl = attachWsUrl
   if (nextVRuntimeTargetInput) nextVRuntimeTargetInput.value = runtimeTarget
+  if (nextVAttachWsUrlInput) nextVAttachWsUrlInput.value = attachWsUrl
   tracePanelState.currentTab = devTab
   inputPanelState.currentTab = storedInputTab || 'manual'
   nextVViewState.currentView = primaryView
@@ -8035,7 +8559,8 @@ import {
   setNextVRunControls
 } from './03_ui_controls.js'
 import {
-  appendNextVLogRow
+  appendNextVLogRow,
+  appendNextVDebugRow
 } from './07_graph_render.js'
 import {
   toPrettyJson,
@@ -8056,6 +8581,73 @@ import {
   appendErrorRow,
   escapeHtml
 } from './13_layout.js'
+
+const NEXTV_EVENT_DEDUPE_TTL_MS = 8000
+const nextVRenderedEventKeys = new Map()
+
+function normalizeEventPart(value) {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function buildCanonicalEventDedupeKey(event) {
+  if (!event || typeof event !== 'object') return ''
+  const type = String(event.type ?? '')
+  const timestamp = String(event.timestamp ?? '')
+  const tool = String(event.tool ?? '')
+  const agent = String(event.agent ?? '')
+  const line = String(event.line ?? '')
+  const statement = String(event.statement ?? '')
+  const sourcePath = String(event.sourcePath ?? '')
+  const sourceLine = String(event.sourceLine ?? '')
+  const args = normalizeEventPart(event.args)
+  const result = normalizeEventPart(event.result)
+  const content = normalizeEventPart(event.content)
+  const value = normalizeEventPart(event.value)
+  const metadata = normalizeEventPart(event.metadata)
+  return [
+    type,
+    timestamp,
+    tool,
+    agent,
+    line,
+    statement,
+    sourcePath,
+    sourceLine,
+    args,
+    result,
+    content,
+    value,
+    metadata,
+  ].join('|')
+}
+
+function shouldRenderCanonicalEvent(event) {
+  const key = buildCanonicalEventDedupeKey(event)
+  if (!key) return true
+  const now = Date.now()
+  const lastSeenAt = nextVRenderedEventKeys.get(key)
+  if (Number.isFinite(lastSeenAt) && (now - lastSeenAt) < NEXTV_EVENT_DEDUPE_TTL_MS) {
+    return false
+  }
+  nextVRenderedEventKeys.set(key, now)
+
+  if (nextVRenderedEventKeys.size > 5000) {
+    for (const [seenKey, seenAt] of nextVRenderedEventKeys.entries()) {
+      if ((now - seenAt) >= NEXTV_EVENT_DEDUPE_TTL_MS) {
+        nextVRenderedEventKeys.delete(seenKey)
+      }
+    }
+  }
+  return true
+}
 
 export function initNextVUserIOPanel() {
   const stored = localStorage.getItem(storageKeys.nextVUserIOOpen)
@@ -8301,6 +8893,7 @@ export function renderCanonicalNextVEvents(events) {
 
   for (const event of events) {
     if (!event || typeof event !== 'object') continue
+    if (!shouldRenderCanonicalEvent(event)) continue
 
     if (event.type === 'output') {
       const format = String(event.format ?? 'text')
@@ -8350,6 +8943,9 @@ export function renderCanonicalNextVEvents(events) {
 
     if (event.type === 'tool_call') {
       const toolName = String(event.tool ?? '')
+      if (toolName === 'agent' || toolName === 'model') {
+        continue
+      }
       const detail = getToolCallDetail(toolName, event.args)
       const detailSuffix = detail ? ` ${detail}` : ''
       appendNextVLogRow(
@@ -8359,9 +8955,38 @@ export function renderCanonicalNextVEvents(events) {
       continue
     }
 
+    if (event.type === 'agent_call') {
+      const agentName = String(event.agent ?? '').trim() || 'unknown'
+      appendNextVLogRow(`[nextv:agent_call] agent=${agentName}`, 'step')
+      if (event.args && typeof event.args === 'object') {
+        appendNextVDebugRow('[nextv:agent_call:args]', toPrettyJson(event.args))
+      }
+      continue
+    }
+
+    if (event.type === 'agent_result') {
+      const agentName = String(event.agent ?? '').trim() || 'unknown'
+      const elapsedMs = Number(event?.metadata?.elapsedMs)
+      const elapsedLabel = Number.isFinite(elapsedMs) ? ` elapsedMs=${Math.max(0, Math.round(elapsedMs))}` : ''
+      appendNextVLogRow(`[nextv:agent_result] agent=${agentName}${elapsedLabel}`, 'result')
+
+      const requestDebug = event?.metadata?.request ?? null
+      const wirePayload = requestDebug && typeof requestDebug === 'object'
+        ? (requestDebug.wirePayload ?? requestDebug)
+        : null
+      if (wirePayload) {
+        appendNextVDebugRow('[nextv:agent_request:wire]', toPrettyJson(wirePayload))
+      }
+      continue
+    }
+
     if (event.type === 'tool_result') {
+      const toolName = String(event.tool ?? '')
+      if (toolName === 'agent' || toolName === 'model') {
+        continue
+      }
       appendNextVLogRow(
-        `[nextv:tool_result] tool=${String(event.tool ?? '')} ${summarizeToolResultPayload(event.result)}`,
+        `[nextv:tool_result] tool=${toolName} ${summarizeToolResultPayload(event.result)}`,
         'result'
       )
       continue
@@ -8381,9 +9006,11 @@ export function renderCanonicalNextVEvents(events) {
 
 export function renderNextVSnapshot(snapshot, options = {}) {
   if (!snapshot || typeof snapshot !== 'object') return
-  const { log = false } = options
+  const { log = false, skipControlUpdate = false } = options
   _setNextVRuntimeRunning(snapshot.running === true)
-  setNextVRunControls()
+  if (!skipControlUpdate) {
+    setNextVRunControls()
+  }
 
   if (log) {
     appendNextVLogRow(`[nextv:snapshot] running=${nextVRuntimeRunning} executions=${Number(snapshot.executionCount ?? 0)} pending=${Number(snapshot.pendingEvents ?? 0)}`, 'result')
@@ -8470,6 +9097,7 @@ export function closeNextVStream() {
   nextVEventSource.close()
   _setNextVEventSource(null)
   _setNextVHasLiveRuntimeEvents(false)
+  nextVRenderedEventKeys.clear()
 }
 
 
@@ -8520,6 +9148,7 @@ import {
   nextVManagedProcessRunning,
   nextVPanelState,
   nextVRuntimeRunning,
+  nextVAttachSessionState,
   nextVRuntimeTargetState,
   nextVWorkspaceDirInput,
   nextVExecutionGroups,
@@ -8542,6 +9171,8 @@ import {
   isNextVMode,
   setNextVImagesOpen,
   buildNextVApiPath,
+  getNextVAttachWsUrl,
+  syncNextVAttachSessionUi,
   getSelectedNextVInputChannel,
   setNextVMode,
   updateRemoteRuntimeIdentity,
@@ -8557,6 +9188,7 @@ import {
 } from './02_user_output.js'
 import {
   reconcileNextVGraphAgentTimersFromExecution,
+  resolveNextVGraphHandlerNodeForSource,
   resetNextVGraphRuntimeState,
   beginNextVGraphExecutionTrail,
   flashNextVGraphExternalEvent,
@@ -8567,7 +9199,9 @@ import {
   applyNextVGraphRuntimeVisuals,
   updateNextVGraphRuntimeStep,
   inferNextVGraphFallbackHandler,
-  handleNextVGraphRuntimeEvent
+  handleNextVGraphRuntimeEvent,
+  finalizeNextVGraphActiveAgentTimers,
+  extractExecutionAgentElapsedMs
 } from './06_graph_runtime.js'
 import {
   refreshNextVGraph,
@@ -8604,8 +9238,119 @@ import {
 import {
   setStatus,
   appendErrorRow,
-  ensureNextVEntrypointVisible
+  ensureNextVEntrypointVisible,
+  saveNextVEntrypoint
 } from './13_layout.js'
+
+function buildNextVAttachApiPath(pathname) {
+  const params = new URLSearchParams()
+  params.set('runtimeTarget', 'attach')
+  const attachWsUrl = getNextVAttachWsUrl()
+  if (attachWsUrl) {
+    params.set('attachWsUrl', attachWsUrl)
+  }
+  return `${pathname}?${params.toString()}`
+}
+
+function readToolErrorMessageFromRuntimeEvent(runtimeEvent) {
+  if (!runtimeEvent || typeof runtimeEvent !== 'object') return ''
+  if (String(runtimeEvent?.type ?? '').trim() !== 'tool_result') return ''
+
+  const toolName = String(runtimeEvent?.tool ?? '').trim()
+  const result = runtimeEvent?.result
+  if (!result || typeof result !== 'object') return ''
+
+  const explicitError = typeof result.error === 'string'
+    ? result.error
+    : (result?.error && typeof result.error === 'object' && typeof result.error.message === 'string'
+      ? result.error.message
+      : '')
+  const explicitMessage = typeof result.message === 'string' ? result.message : ''
+  const didFail = result.ok === false || Boolean(explicitError) || Boolean(explicitMessage)
+  if (!didFail) return ''
+
+  const message = explicitError || explicitMessage || 'tool call failed'
+  return toolName ? `tool("${toolName}") failed: ${message}` : message
+}
+
+export async function attachNextVRuntime() {
+  if (nextVRuntimeTargetState.target !== 'attach') {
+    setStatus('select attach WS runtime target first', 'responding')
+    return
+  }
+
+  const attachWsUrl = getNextVAttachWsUrl()
+  if (!attachWsUrl) {
+    nextVAttachSessionState.lastError = 'attach ws url is required'
+    syncNextVAttachSessionUi()
+    setStatus('attach ws url required', 'responding')
+    return
+  }
+
+  nextVAttachSessionState.connecting = true
+  nextVAttachSessionState.attached = false
+  nextVAttachSessionState.lastError = ''
+  syncNextVAttachSessionUi()
+  setStatus('attaching to remote runtime...')
+
+  try {
+    const res = await fetch(buildNextVAttachApiPath('/api/nextv/snapshot'))
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'attach failed')
+    }
+
+    const remoteWorkspaceDir = String(data?.remoteRuntimeWorkspaceDir ?? data?.workspaceDir ?? '').trim()
+    const remoteEntrypointPath = String(data?.remoteRuntimeEntrypointPath ?? data?.entrypointPath ?? '').trim()
+    if (nextVWorkspaceDirInput && remoteWorkspaceDir) {
+      nextVWorkspaceDirInput.value = remoteWorkspaceDir === '.' ? '' : remoteWorkspaceDir
+    }
+    if (nextVEntrypointInput && remoteEntrypointPath) {
+      nextVEntrypointInput.value = remoteEntrypointPath
+      saveNextVEntrypoint()
+    }
+
+    nextVAttachSessionState.attached = true
+    nextVAttachSessionState.connecting = false
+    nextVAttachSessionState.lastError = ''
+    syncNextVAttachSessionUi()
+    await syncNextVRuntimeState()
+    setStatus('attached to remote runtime')
+  } catch (err) {
+    nextVAttachSessionState.connecting = false
+    nextVAttachSessionState.attached = false
+    nextVAttachSessionState.lastError = String(err?.message ?? err)
+    syncNextVAttachSessionUi()
+    _setIsRemoteMode(true)
+    _setIsRemoteControlMode(true)
+    _setRemoteTransport('ws')
+    _setIsRemoteRuntimeConnected(false)
+    _setNextVRuntimeRunning(false)
+    updateRemoteRuntimeIdentity(null, { clear: true })
+    updateRemoteModeBadge()
+    closeNextVStream()
+    setNextVRunControls()
+    setStatus('attach failed', 'responding')
+  }
+}
+
+export function detachNextVRuntime() {
+  nextVAttachSessionState.connecting = false
+  nextVAttachSessionState.attached = false
+  nextVAttachSessionState.lastError = ''
+  syncNextVAttachSessionUi()
+  _setIsRemoteMode(true)
+  _setIsRemoteControlMode(true)
+  _setRemoteTransport('ws')
+  _setIsRemoteRuntimeConnected(false)
+  _setNextVRuntimeRunning(false)
+  _setNextVManagedProcessRunning(false)
+  updateRemoteRuntimeIdentity(null, { clear: true })
+  updateRemoteModeBadge()
+  closeNextVStream()
+  setNextVRunControls()
+  setStatus('detached from remote runtime')
+}
 
 export function openNextVStream() {
   closeNextVStream()
@@ -8665,6 +9410,14 @@ export function openNextVStream() {
       handleNextVGraphRuntimeEvent(runtimeEvent)
       renderCanonicalNextVEvents([runtimeEvent])
       appendTraceRows([runtimeEvent])
+        applyNextVGraphRuntimeVisuals()
+
+      const toolFailureMessage = readToolErrorMessageFromRuntimeEvent(runtimeEvent)
+      if (toolFailureMessage) {
+        appendNextVErrorLog({ message: toolFailureMessage }, '[nextv:tool_error]')
+        setStatus('nextv tool error', 'responding')
+      }
+
       if (payload?.snapshot) renderNextVSnapshot(payload.snapshot)
     } catch {
       // ignore malformed stream payload
@@ -8676,32 +9429,84 @@ export function openNextVStream() {
       const payload = JSON.parse(evt.data)
       const eventType = String(payload?.event?.type ?? '')
       const source = String(payload?.event?.source ?? '')
+      const executionEvents = Array.isArray(payload?.events) ? payload.events : []
       const shouldRenderFromExecution = !nextVHasLiveRuntimeEvents
+      const shouldUseTimerExecutionSupplement = false
+      
+      // Prefer live runtime events. Fall back to execution event replay only when live events were not observed.
+      const runtimeEventsForGraph = shouldRenderFromExecution
+        ? executionEvents
+        : []
+      
+      const eventsForGraphProcessing = runtimeEventsForGraph
+
       if (eventType) {
         nextVGraphState.runtimeExternalNodes.add(eventType)
       }
-      if (shouldRenderFromExecution && Array.isArray(payload?.events)) {
-        for (const runtimeEvent of payload.events) {
-          handleNextVGraphRuntimeEvent(runtimeEvent)
-        }
+      
+      for (const runtimeEvent of eventsForGraphProcessing) {
+        handleNextVGraphRuntimeEvent(runtimeEvent)
       }
-      if (shouldRenderFromExecution) {
-        renderCanonicalNextVEvents(payload?.events)
-        appendTraceRows(payload?.events)
+      
+      if (runtimeEventsForGraph.length > 0) {
+        renderCanonicalNextVEvents(runtimeEventsForGraph)
+        appendTraceRows(runtimeEventsForGraph)
       }
-      if (eventType && nextVGraphState.runtimeSequence === 0) {
-        const fallbackHandlerId = inferNextVGraphFallbackHandler(eventType) || `handler:${eventType}`
+
+      const fallbackHandlerId = eventType
+        ? (inferNextVGraphFallbackHandler(eventType) || `handler:${eventType}`)
+        : ''
+      if (fallbackHandlerId && !nextVGraphState.runtimeLastDispatchedNode) {
         updateNextVGraphRuntimeStep(fallbackHandlerId)
         nextVGraphState.runtimeLastDispatchedNode = fallbackHandlerId
-        // Mark both the queued event node and the inferred active handler node.
         nextVGraphState.runtimeActiveNodes.add(eventType)
         nextVGraphState.runtimeActiveNodes.add(fallbackHandlerId)
       }
-      reconcileNextVGraphAgentTimersFromExecution(nextVGraphState.runtimeLastDispatchedNode, payload?.result)
-      const fallbackFinalizedCount = finalizeNextVGraphActiveAgentTimers({ elapsedMs: extractExecutionAgentElapsedMs(payload?.result) })
-      if (fallbackFinalizedCount > 0) {
-        appendNextVLogRow(`[nextv:agent_timer] fallback finalizer closed ${fallbackFinalizedCount} active timer${fallbackFinalizedCount === 1 ? '' : 's'}`, 'step')
+
+      const hasExecutionAgentCalls = Array.isArray(payload?.result?.agentCalls) && payload.result.agentCalls.length > 0
+      const shouldUseExecutionTimerFallback = shouldRenderFromExecution
+        && runtimeEventsForGraph.length === 0
+        && hasExecutionAgentCalls
+      if (shouldRenderFromExecution || shouldUseExecutionTimerFallback) {
+        const fallbackNode = String(nextVGraphState.runtimeLastDispatchedNode ?? '').trim() || fallbackHandlerId
+        const agentCalls = Array.isArray(payload?.result?.agentCalls) ? payload.result.agentCalls : []
+        const callsByNode = new Map()
+        for (const call of agentCalls) {
+          const callSourcePath = String(call?.sourcePath ?? '').trim()
+          const callSourceLineRaw = Number(call?.sourceLine)
+          const callSourceLine = Number.isFinite(callSourceLineRaw)
+            ? callSourceLineRaw
+            : Number(call?.line)
+          const resolvedNodeId = resolveNextVGraphHandlerNodeForSource(callSourcePath, callSourceLine, fallbackNode)
+          const nodeId = String(resolvedNodeId ?? '').trim() || fallbackNode
+          if (!nodeId) continue
+          if (!callsByNode.has(nodeId)) {
+            callsByNode.set(nodeId, [])
+          }
+          callsByNode.get(nodeId).push(call)
+        }
+
+        if (callsByNode.size > 0) {
+          for (const [nodeId, calls] of callsByNode.entries()) {
+            reconcileNextVGraphAgentTimersFromExecution(nodeId, { agentCalls: calls })
+            nextVGraphState.runtimeLastDispatchedNode = nodeId
+          }
+        } else if (fallbackNode) {
+          reconcileNextVGraphAgentTimersFromExecution(fallbackNode, payload?.result)
+        }
+        const fallbackFinalizedCount = finalizeNextVGraphActiveAgentTimers({ elapsedMs: extractExecutionAgentElapsedMs(payload?.result) })
+        if (fallbackFinalizedCount > 0) {
+          appendNextVLogRow(`[nextv:agent_timer] fallback finalizer closed ${fallbackFinalizedCount} active timer${fallbackFinalizedCount === 1 ? '' : 's'}`, 'step')
+        }
       }
+
+      for (const runtimeEvent of runtimeEventsForGraph) {
+        const toolFailureMessage = readToolErrorMessageFromRuntimeEvent(runtimeEvent)
+        if (!toolFailureMessage) continue
+        appendNextVErrorLog({ message: toolFailureMessage }, '[nextv:tool_error]')
+        setStatus('nextv tool error', 'responding')
+      }
+
       applyNextVGraphRuntimeVisuals()
       fadeNextVGraphActiveHighlights(760)
 
@@ -8772,6 +9577,49 @@ export function openNextVStream() {
   nextVEventSource.addEventListener('nextv_error', (evt) => {
     try {
       const payload = JSON.parse(evt.data)
+      const errorEvents = Array.isArray(payload?.events) ? payload.events : []
+      if (errorEvents.length > 0) {
+        for (const runtimeEvent of errorEvents) {
+          handleNextVGraphRuntimeEvent(runtimeEvent)
+        }
+        renderCanonicalNextVEvents(errorEvents)
+        appendTraceRows(errorEvents)
+      }
+
+      const sourceLabelFallback = String(payload?.sourcePath ?? '').trim()
+      const lineFallback = Number.isFinite(Number(payload?.sourceLine))
+        ? Number(payload.sourceLine)
+        : Number(payload?.line)
+      const fallbackHandlerId = sourceLabelFallback
+        ? resolveNextVGraphHandlerNodeForSource(sourceLabelFallback, lineFallback, String(nextVGraphState.runtimeLastDispatchedNode ?? '').trim())
+        : String(nextVGraphState.runtimeLastDispatchedNode ?? '').trim()
+      const errorAgentCalls = Array.isArray(payload?.result?.agentCalls) ? payload.result.agentCalls : []
+      if (errorAgentCalls.length > 0) {
+        const callsByNode = new Map()
+        for (const call of errorAgentCalls) {
+          const callSourcePath = String(call?.sourcePath ?? '').trim()
+          const callSourceLineRaw = Number(call?.sourceLine)
+          const callSourceLine = Number.isFinite(callSourceLineRaw)
+            ? callSourceLineRaw
+            : Number(call?.line)
+          const resolvedNodeId = resolveNextVGraphHandlerNodeForSource(callSourcePath, callSourceLine, fallbackHandlerId)
+          const nodeId = String(resolvedNodeId ?? '').trim() || fallbackHandlerId
+          if (!nodeId) continue
+          if (!callsByNode.has(nodeId)) {
+            callsByNode.set(nodeId, [])
+          }
+          callsByNode.get(nodeId).push(call)
+        }
+        if (callsByNode.size > 0) {
+          for (const [nodeId, calls] of callsByNode.entries()) {
+            reconcileNextVGraphAgentTimersFromExecution(nodeId, { agentCalls: calls })
+            nextVGraphState.runtimeLastDispatchedNode = nodeId
+          }
+        } else if (fallbackHandlerId) {
+          reconcileNextVGraphAgentTimersFromExecution(fallbackHandlerId, { agentCalls: errorAgentCalls })
+        }
+      }
+
       finalizeNextVGraphActiveAgentTimers()
       applyNextVGraphRuntimeVisuals()
       appendNextVErrorLog(payload)
@@ -8829,6 +9677,20 @@ export async function refreshNextVSnapshot() {
 }
 
 export async function syncNextVRuntimeState() {
+  if (nextVRuntimeTargetState.target === 'attach' && nextVAttachSessionState.attached !== true) {
+    _setIsRemoteMode(true)
+    _setIsRemoteControlMode(true)
+    _setRemoteTransport('ws')
+    _setIsRemoteRuntimeConnected(false)
+    _setNextVRuntimeRunning(false)
+    updateRemoteRuntimeIdentity(null, { clear: true })
+    updateRemoteModeBadge()
+    closeNextVStream()
+    setNextVRunControls()
+    syncNextVAttachSessionUi()
+    return
+  }
+
   try {
     const res = await fetch(buildNextVApiPath('/api/nextv/snapshot'))
     const data = await res.json().catch(() => ({}))
@@ -8836,9 +9698,14 @@ export async function syncNextVRuntimeState() {
     _setIsRemoteMode(data?.remoteMode === true)
     _setIsRemoteControlMode(data?.remoteControl === true)
     _setRemoteTransport(String(data?.remoteTransport ?? (isRemoteControlMode ? 'ws' : (isRemoteMode ? 'mqtt' : 'local'))))
-    _setIsRemoteRuntimeConnected(isRemoteControlMode)
-      ? (data?.remoteConnection?.connected === true)
-      : true
+    const attachConnected = nextVRuntimeTargetState.target === 'attach' && nextVAttachSessionState.attached === true
+    _setIsRemoteRuntimeConnected(
+      attachConnected
+        ? true
+        : (isRemoteControlMode
+          ? (data?.remoteConnection?.connected === true)
+          : true),
+    )
     if (isRemoteMode) {
       updateRemoteRuntimeIdentity(data)
     } else {
@@ -8853,23 +9720,36 @@ export async function syncNextVRuntimeState() {
       return
     }
     updateRemoteModeBadge()
-    renderNextVSnapshot(data.snapshot)
+    renderNextVSnapshot(data.snapshot, { skipControlUpdate: true })
     if (isRemoteMode || data?.snapshot?.running === true) {
       openNextVStream()
     } else {
       closeNextVStream()
     }
-    _setNextVRuntimeRunning(data?.running === true)
+    const resolvedRunning = (
+      data?.running === true
+      || data?.snapshot?.running === true
+      || data?.remoteConnection?.remoteActive === true
+    )
+    _setNextVRuntimeRunning(resolvedRunning)
     if (nextVRuntimeRunning) {
       _setNextVManagedProcessRunning(true)
       appendNextVLogRow('[nextv:reconnect] reattached to running workflow', 'step')
       setStatus('reconnected to running workflow')
     }
+    if (nextVRuntimeTargetState.target === 'attach') {
+      nextVAttachSessionState.lastError = ''
+      syncNextVAttachSessionUi()
+    }
     setNextVRunControls()
-  } catch {
+  } catch (err) {
     _setNextVRuntimeRunning(false)
     if (isRemoteControlMode) {
       _setIsRemoteRuntimeConnected(false)
+    }
+    if (nextVRuntimeTargetState.target === 'attach') {
+      nextVAttachSessionState.lastError = String(err?.message ?? 'remote runtime websocket is not connected')
+      syncNextVAttachSessionUi()
     }
     updateRemoteModeBadge()
     closeNextVStream()
@@ -11281,6 +12161,7 @@ import {
   setNextVImagesOpen,
   setNextVIngressControlsVisible,
   setNextVRuntimeTarget,
+  setNextVAttachWsUrl,
   toggleNextVIngressControlsSetting,
   setDeclaredExternalChannels,
   setNextVInputTab,
@@ -11346,6 +12227,8 @@ import {
   startNextVRuntime,
   stopNextVRuntime,
   runNextVRuntime,
+  attachNextVRuntime,
+  detachNextVRuntime,
   sendNextVEvent,
   sendNextVIngress,
   clearNextVEventImages,
@@ -11402,6 +12285,7 @@ export function initLayoutState() {
   const ingressControlsVisible = ingressControlsVisibleStored == null ? true : ingressControlsVisibleStored === '1'
   setNextVIngressControlsVisible(ingressControlsVisible, { persist: false })
   setNextVRuntimeTarget(nextVRuntimeTargetState.target, { persist: false, sync: false })
+  setNextVAttachWsUrl(nextVRuntimeTargetState.attachWsUrl, { persist: false, sync: false })
   const drawerStored = localStorage.getItem(storageKeys.nextVTreeDrawerOpen)
   setNextVFileDrawerOpen(drawerStored !== '0', { persist: false })
 
@@ -11491,6 +12375,9 @@ Object.assign(window, {
   setNextVDevTab,
   setNextVStateDiffTab,
   setNextVRuntimeTarget,
+  setNextVAttachWsUrl,
+  attachNextVRuntime,
+  detachNextVRuntime,
   setUserIOPanelOpen,
   toggleNextVDevConsole,
   toggleNextVFileDrawer,

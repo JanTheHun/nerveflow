@@ -59,6 +59,7 @@ const storageKeys = {
   nextVUserOutputChannels: 'local-agent.nextv.userOutputChannels',
   nextVIngressControlsVisible: 'local-agent.nextv.ingressControlsVisible',
   nextVRuntimeTarget: 'local-agent.nextv.runtimeTarget',
+  nextVAttachWsUrl: 'local-agent.nextv.attachWsUrl',
   nextVGraphDirection: 'local-agent.nextv.graphDirection',
   nextVControlOverlay: 'local-agent.nextv.controlOverlay',
   nextVShowControlBranches: 'local-agent.nextv.showControlBranches',
@@ -213,6 +214,13 @@ const nextVIngressControlsState = {
 
 const nextVRuntimeTargetState = {
   target: 'embedded',
+  attachWsUrl: '',
+}
+
+const nextVAttachSessionState = {
+  attached: false,
+  connecting: false,
+  lastError: '',
 }
 
 const nextVGraphMappingApi = globalThis?.nextVGraphMapping || null
@@ -369,6 +377,12 @@ const nextVStartBtn = document.getElementById('nextv-start-btn')
 const nextVRunBtn = document.getElementById('nextv-run-btn')
 const nextVStopBtn = document.getElementById('nextv-stop-btn')
 const nextVRuntimeTargetInput = document.getElementById('nextv-runtime-target')
+const nextVAttachWsUrlInput = document.getElementById('nextv-attach-ws-url')
+const nextVAttachWsUrlLabel = document.getElementById('nextv-attach-ws-url-label')
+const nextVAttachControls = document.getElementById('nextv-attach-controls')
+const nextVAttachBtn = document.getElementById('nextv-attach-btn')
+const nextVDetachBtn = document.getElementById('nextv-detach-btn')
+const nextVAttachStatus = document.getElementById('nextv-attach-status')
 const remoteModeBadge = document.getElementById('remote-mode-badge')
 const userOutput = document.getElementById('user-output')
 const userOutputChannelFilters = document.getElementById('user-output-channel-filters')

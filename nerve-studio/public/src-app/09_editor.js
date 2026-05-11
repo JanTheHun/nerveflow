@@ -28,6 +28,7 @@ import {
   filetreeDeleteTimer,
   inputPanelState,
   nextVAutoSaveInput,
+  nextVAttachWsUrlInput,
   nextVEditorTabSizeInput,
   nextVEntrypointInput,
   nextVFileState,
@@ -1639,6 +1640,7 @@ export function persistNextVConfig() {
   const entrypointPath = normalizeRelativePath(nextVEntrypointInput?.value ?? '')
   const autoSaveEnabled = nextVAutoSaveInput?.checked !== false
   const runtimeTarget = getNextVRuntimeTarget()
+  const attachWsUrl = String(nextVRuntimeTargetState.attachWsUrl ?? '').trim()
   const graphDirection = normalizeNextVGraphDirection(nextVGraphState.layoutDirection)
   const editorTabSize = getCurrentNextVEditorTabSize()
 
@@ -1646,6 +1648,7 @@ export function persistNextVConfig() {
   localStorage.setItem(storageKeys.nextVEntrypoint, entrypointPath)
   localStorage.setItem(storageKeys.nextVAutoSave, autoSaveEnabled ? '1' : '0')
   localStorage.setItem(storageKeys.nextVRuntimeTarget, runtimeTarget)
+  localStorage.setItem(storageKeys.nextVAttachWsUrl, attachWsUrl)
   localStorage.setItem(storageKeys.nextVGraphDirection, graphDirection)
   localStorage.setItem(storageKeys.nextVEditorTabSize, String(editorTabSize))
 }
@@ -1661,6 +1664,7 @@ export function restoreNextVConfig() {
   const devTab = ['events', 'trace', 'console'].includes(storedDevTab) ? storedDevTab : 'events'
   const storedInputTab = String(localStorage.getItem(storageKeys.nextVInputTab) ?? '').trim()
   const runtimeTarget = normalizeNextVRuntimeTarget(localStorage.getItem(storageKeys.nextVRuntimeTarget) ?? 'embedded')
+  const attachWsUrl = String(localStorage.getItem(storageKeys.nextVAttachWsUrl) ?? '').trim()
   const devConsoleOpen = localStorage.getItem(storageKeys.nextVDevConsoleOpen) !== '0'
   const graphDirection = normalizeNextVGraphDirection(localStorage.getItem(storageKeys.nextVGraphDirection) ?? 'TB')
   const controlOverlayEnabled = localStorage.getItem(storageKeys.nextVControlOverlay) !== '0'
@@ -1673,7 +1677,9 @@ export function restoreNextVConfig() {
   if (nextVEntrypointInput) nextVEntrypointInput.value = entrypointPath
   if (nextVAutoSaveInput) nextVAutoSaveInput.checked = autoSaveEnabled
   nextVRuntimeTargetState.target = runtimeTarget
+  nextVRuntimeTargetState.attachWsUrl = attachWsUrl
   if (nextVRuntimeTargetInput) nextVRuntimeTargetInput.value = runtimeTarget
+  if (nextVAttachWsUrlInput) nextVAttachWsUrlInput.value = attachWsUrl
   tracePanelState.currentTab = devTab
   inputPanelState.currentTab = storedInputTab || 'manual'
   nextVViewState.currentView = primaryView

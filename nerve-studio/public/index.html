@@ -36,7 +36,23 @@
           <select id="nextv-runtime-target" class="settings-item" onchange="setNextVRuntimeTarget(this.value)">
             <option value="embedded">embedded runtime</option>
             <option value="external">external runtime process</option>
+            <option value="attach">attach WS runtime</option>
           </select>
+          <label id="nextv-attach-ws-url-label" class="settings-item" for="nextv-attach-ws-url">attach ws url</label>
+          <input
+            id="nextv-attach-ws-url"
+            class="settings-item"
+            type="text"
+            placeholder="ws://127.0.0.1:4190/api/runtime/ws"
+            autocomplete="off"
+            spellcheck="false"
+            oninput="setNextVAttachWsUrl(this.value)"
+          />
+          <div id="nextv-attach-controls" class="settings-item nextv-attach-controls" hidden>
+            <button id="nextv-attach-btn" type="button" onclick="attachNextVRuntime()">attach</button>
+            <button id="nextv-detach-btn" type="button" onclick="detachNextVRuntime()" disabled>detach</button>
+            <span id="nextv-attach-status" class="nextv-attach-status" data-state="detached">detached</span>
+          </div>
           <label class="settings-item" for="nextv-editor-tab-size">editor tab size</label>
           <select id="nextv-editor-tab-size" class="settings-item" onchange="setNextVEditorTabSize(this.value)">
             <option value="2">2 spaces</option>

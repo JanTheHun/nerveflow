@@ -33,6 +33,13 @@ import {
   nextVReloadConfigBtn,
   nextVRunBtn,
   nextVRuntimeRunning,
+  nextVAttachSessionState,
+  nextVAttachControls,
+  nextVAttachBtn,
+  nextVDetachBtn,
+  nextVAttachStatus,
+  nextVAttachWsUrlInput,
+  nextVAttachWsUrlLabel,
   nextVRuntimeTargetInput,
   nextVRuntimeTargetState,
   nextVShowIngressToggle,
@@ -476,7 +483,93 @@ export function toggleNextVIngressControlsSetting() {
 }
 
 export function normalizeNextVRuntimeTarget(value) {
-  return String(value ?? '').trim().toLowerCase() === 'external' ? 'external' : 'embedded'
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (normalized === 'external') return 'external'
+  if (normalized === 'attach') return 'attach'
+  return 'embedded'
+}
+
+export function normalizeNextVAttachWsUrl(value) {
+  return String(value ?? '').trim()
+}
+
+export function getNextVAttachWsUrl() {
+  return normalizeNextVAttachWsUrl(nextVRuntimeTargetState.attachWsUrl)
+}
+
+export function syncNextVAttachWsUrlControls() {
+  const showAttachControls = getNextVRuntimeTarget() === 'attach'
+  if (nextVAttachWsUrlLabel) {
+    nextVAttachWsUrlLabel.hidden = !showAttachControls
+  }
+  if (nextVAttachWsUrlInput) {
+    nextVAttachWsUrlInput.hidden = !showAttachControls
+    nextVAttachWsUrlInput.disabled = !showAttachControls
+    nextVAttachWsUrlInput.value = getNextVAttachWsUrl()
+  }
+  if (nextVAttachControls) {
+    nextVAttachControls.hidden = !showAttachControls
+  }
+  syncNextVAttachSessionUi()
+}
+
+export function syncNextVAttachSessionUi() {
+  const isAttachMode = getNextVRuntimeTarget() === 'attach'
+  const isConnecting = nextVAttachSessionState.connecting === true
+  const isAttached = nextVAttachSessionState.attached === true
+  const hasAttachUrl = Boolean(getNextVAttachWsUrl())
+
+  if (nextVAttachBtn) {
+    nextVAttachBtn.disabled = !isAttachMode || isConnecting || isAttached || !hasAttachUrl
+  }
+  if (nextVDetachBtn) {
+    nextVDetachBtn.disabled = !isAttachMode || isConnecting || !isAttached
+  }
+  if (nextVAttachStatus) {
+    if (!isAttachMode) {
+      nextVAttachStatus.dataset.state = 'detached'
+      nextVAttachStatus.textContent = 'detached'
+    } else if (isConnecting) {
+      nextVAttachStatus.dataset.state = 'attaching'
+      nextVAttachStatus.textContent = 'attaching'
+    } else if (isAttached) {
+      nextVAttachStatus.dataset.state = 'attached'
+      nextVAttachStatus.textContent = 'attached'
+    } else if (nextVAttachSessionState.lastError) {
+      nextVAttachStatus.dataset.state = 'error'
+      nextVAttachStatus.textContent = 'attach failed'
+    } else {
+      nextVAttachStatus.dataset.state = 'detached'
+      nextVAttachStatus.textContent = 'detached'
+    }
+    if (nextVAttachSessionState.lastError) {
+      nextVAttachStatus.title = String(nextVAttachSessionState.lastError)
+    } else {
+      nextVAttachStatus.title = nextVAttachStatus.textContent
+    }
+  }
+}
+
+export function setNextVAttachWsUrl(value, options = {}) {
+  const { persist = true, sync = true } = options
+  const previousUrl = String(nextVRuntimeTargetState.attachWsUrl ?? '').trim()
+  const normalized = normalizeNextVAttachWsUrl(value)
+  nextVRuntimeTargetState.attachWsUrl = normalized
+  if (previousUrl !== normalized) {
+    nextVAttachSessionState.attached = false
+    nextVAttachSessionState.connecting = false
+  }
+  nextVAttachSessionState.lastError = ''
+  if (nextVAttachWsUrlInput) {
+    nextVAttachWsUrlInput.value = normalized
+  }
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVAttachWsUrl, normalized)
+  }
+  syncNextVAttachSessionUi()
+  if (sync && getNextVRuntimeTarget() === 'attach' && nextVAttachSessionState.attached === true) {
+    syncNextVRuntimeState()
+  }
 }
 
 export function getNextVRuntimeTarget() {
@@ -487,9 +580,15 @@ export function setNextVRuntimeTarget(value, options = {}) {
   const { persist = true, sync = true } = options
   const normalized = normalizeNextVRuntimeTarget(value)
   nextVRuntimeTargetState.target = normalized
+  if (normalized !== 'attach') {
+    nextVAttachSessionState.attached = false
+    nextVAttachSessionState.connecting = false
+    nextVAttachSessionState.lastError = ''
+  }
   if (nextVRuntimeTargetInput) {
     nextVRuntimeTargetInput.value = normalized
   }
+  syncNextVAttachWsUrlControls()
   if (persist) {
     localStorage.setItem(storageKeys.nextVRuntimeTarget, normalized)
   }
@@ -500,7 +599,14 @@ export function setNextVRuntimeTarget(value, options = {}) {
 
 export function buildNextVApiPath(pathname) {
   const params = new URLSearchParams()
-  params.set('runtimeTarget', getNextVRuntimeTarget())
+  const runtimeTarget = getNextVRuntimeTarget()
+  params.set('runtimeTarget', runtimeTarget)
+  if (runtimeTarget === 'attach' && nextVAttachSessionState.attached === true) {
+    const attachWsUrl = getNextVAttachWsUrl()
+    if (attachWsUrl) {
+      params.set('attachWsUrl', attachWsUrl)
+    }
+  }
   return `${pathname}?${params.toString()}`
 }
 
@@ -668,7 +774,9 @@ export function updateRemoteModeBadge() {
 
   let label = 'remote runtime'
   if (isRemoteControlMode) {
-    label = 'remote WS runtime (control)'
+    label = nextVRuntimeTargetState.target === 'attach'
+      ? 'attached WS runtime (control)'
+      : 'remote WS runtime (control)'
   } else if (remoteTransport === 'mqtt') {
     label = 'remote MQTT runtime'
   }
@@ -692,7 +800,9 @@ export function updateRemoteModeBadge() {
 export function setNextVRunControls() {
   const hasEntrypoint = Boolean(normalizeRelativePath(nextVEntrypointInput?.value ?? ''))
   const isExternalMode = nextVRuntimeTargetState.target === 'external'
-  const remoteBlocksControl = isRemoteMode && !isExternalMode && (!isRemoteControlMode || !isRemoteRuntimeConnected)
+  const isAttachMode = nextVRuntimeTargetState.target === 'attach'
+  const attachBlocksControl = isAttachMode && nextVAttachSessionState.attached !== true
+  const remoteBlocksControl = attachBlocksControl || (isRemoteMode && !isExternalMode && (!isRemoteControlMode || !isRemoteRuntimeConnected))
   
   // In external mode: show run/start buttons separately
   // In embedded mode: show only start button
@@ -710,13 +820,17 @@ export function setNextVRunControls() {
   }
   
   // Start button behavior:
-  // - In embedded mode: normal behavior (start the workflow)
+  // - In embedded/attach mode: normal behavior (attach starts remote workflow)
   // - In external mode: only enabled after process is running
   if (nextVStartBtn) {
     const startDisabled = isExternalMode
       ? (remoteBlocksControl || !nextVManagedProcessRunning || nextVRuntimeRunning || isBusy)
       : (remoteBlocksControl || nextVRuntimeRunning || isBusy || !hasEntrypoint)
     nextVStartBtn.disabled = startDisabled
+  }
+
+  if (isAttachMode && nextVRunBtn) {
+    nextVRunBtn.hidden = true
   }
   
   if (nextVStopBtn) nextVStopBtn.disabled = remoteBlocksControl || !nextVRuntimeRunning || isBusy

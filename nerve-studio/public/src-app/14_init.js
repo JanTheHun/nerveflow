@@ -31,6 +31,7 @@ import {
   setNextVImagesOpen,
   setNextVIngressControlsVisible,
   setNextVRuntimeTarget,
+  setNextVAttachWsUrl,
   toggleNextVIngressControlsSetting,
   setDeclaredExternalChannels,
   setNextVInputTab,
@@ -96,6 +97,8 @@ import {
   startNextVRuntime,
   stopNextVRuntime,
   runNextVRuntime,
+  attachNextVRuntime,
+  detachNextVRuntime,
   sendNextVEvent,
   sendNextVIngress,
   clearNextVEventImages,
@@ -152,6 +155,7 @@ export function initLayoutState() {
   const ingressControlsVisible = ingressControlsVisibleStored == null ? true : ingressControlsVisibleStored === '1'
   setNextVIngressControlsVisible(ingressControlsVisible, { persist: false })
   setNextVRuntimeTarget(nextVRuntimeTargetState.target, { persist: false, sync: false })
+  setNextVAttachWsUrl(nextVRuntimeTargetState.attachWsUrl, { persist: false, sync: false })
   const drawerStored = localStorage.getItem(storageKeys.nextVTreeDrawerOpen)
   setNextVFileDrawerOpen(drawerStored !== '0', { persist: false })
 
@@ -241,6 +245,9 @@ Object.assign(window, {
   setNextVDevTab,
   setNextVStateDiffTab,
   setNextVRuntimeTarget,
+  setNextVAttachWsUrl,
+  attachNextVRuntime,
+  detachNextVRuntime,
   setUserIOPanelOpen,
   toggleNextVDevConsole,
   toggleNextVFileDrawer,

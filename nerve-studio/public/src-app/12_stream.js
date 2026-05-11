@@ -45,6 +45,7 @@ import {
   nextVManagedProcessRunning,
   nextVPanelState,
   nextVRuntimeRunning,
+  nextVAttachSessionState,
   nextVRuntimeTargetState,
   nextVWorkspaceDirInput,
   nextVExecutionGroups,
@@ -67,6 +68,8 @@ import {
   isNextVMode,
   setNextVImagesOpen,
   buildNextVApiPath,
+  getNextVAttachWsUrl,
+  syncNextVAttachSessionUi,
   getSelectedNextVInputChannel,
   setNextVMode,
   updateRemoteRuntimeIdentity,
@@ -82,6 +85,7 @@ import {
 } from './02_user_output.js'
 import {
   reconcileNextVGraphAgentTimersFromExecution,
+  resolveNextVGraphHandlerNodeForSource,
   resetNextVGraphRuntimeState,
   beginNextVGraphExecutionTrail,
   flashNextVGraphExternalEvent,
@@ -92,7 +96,9 @@ import {
   applyNextVGraphRuntimeVisuals,
   updateNextVGraphRuntimeStep,
   inferNextVGraphFallbackHandler,
-  handleNextVGraphRuntimeEvent
+  handleNextVGraphRuntimeEvent,
+  finalizeNextVGraphActiveAgentTimers,
+  extractExecutionAgentElapsedMs
 } from './06_graph_runtime.js'
 import {
   refreshNextVGraph,
@@ -129,8 +135,119 @@ import {
 import {
   setStatus,
   appendErrorRow,
-  ensureNextVEntrypointVisible
+  ensureNextVEntrypointVisible,
+  saveNextVEntrypoint
 } from './13_layout.js'
+
+function buildNextVAttachApiPath(pathname) {
+  const params = new URLSearchParams()
+  params.set('runtimeTarget', 'attach')
+  const attachWsUrl = getNextVAttachWsUrl()
+  if (attachWsUrl) {
+    params.set('attachWsUrl', attachWsUrl)
+  }
+  return `${pathname}?${params.toString()}`
+}
+
+function readToolErrorMessageFromRuntimeEvent(runtimeEvent) {
+  if (!runtimeEvent || typeof runtimeEvent !== 'object') return ''
+  if (String(runtimeEvent?.type ?? '').trim() !== 'tool_result') return ''
+
+  const toolName = String(runtimeEvent?.tool ?? '').trim()
+  const result = runtimeEvent?.result
+  if (!result || typeof result !== 'object') return ''
+
+  const explicitError = typeof result.error === 'string'
+    ? result.error
+    : (result?.error && typeof result.error === 'object' && typeof result.error.message === 'string'
+      ? result.error.message
+      : '')
+  const explicitMessage = typeof result.message === 'string' ? result.message : ''
+  const didFail = result.ok === false || Boolean(explicitError) || Boolean(explicitMessage)
+  if (!didFail) return ''
+
+  const message = explicitError || explicitMessage || 'tool call failed'
+  return toolName ? `tool("${toolName}") failed: ${message}` : message
+}
+
+export async function attachNextVRuntime() {
+  if (nextVRuntimeTargetState.target !== 'attach') {
+    setStatus('select attach WS runtime target first', 'responding')
+    return
+  }
+
+  const attachWsUrl = getNextVAttachWsUrl()
+  if (!attachWsUrl) {
+    nextVAttachSessionState.lastError = 'attach ws url is required'
+    syncNextVAttachSessionUi()
+    setStatus('attach ws url required', 'responding')
+    return
+  }
+
+  nextVAttachSessionState.connecting = true
+  nextVAttachSessionState.attached = false
+  nextVAttachSessionState.lastError = ''
+  syncNextVAttachSessionUi()
+  setStatus('attaching to remote runtime...')
+
+  try {
+    const res = await fetch(buildNextVAttachApiPath('/api/nextv/snapshot'))
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'attach failed')
+    }
+
+    const remoteWorkspaceDir = String(data?.remoteRuntimeWorkspaceDir ?? data?.workspaceDir ?? '').trim()
+    const remoteEntrypointPath = String(data?.remoteRuntimeEntrypointPath ?? data?.entrypointPath ?? '').trim()
+    if (nextVWorkspaceDirInput && remoteWorkspaceDir) {
+      nextVWorkspaceDirInput.value = remoteWorkspaceDir === '.' ? '' : remoteWorkspaceDir
+    }
+    if (nextVEntrypointInput && remoteEntrypointPath) {
+      nextVEntrypointInput.value = remoteEntrypointPath
+      saveNextVEntrypoint()
+    }
+
+    nextVAttachSessionState.attached = true
+    nextVAttachSessionState.connecting = false
+    nextVAttachSessionState.lastError = ''
+    syncNextVAttachSessionUi()
+    await syncNextVRuntimeState()
+    setStatus('attached to remote runtime')
+  } catch (err) {
+    nextVAttachSessionState.connecting = false
+    nextVAttachSessionState.attached = false
+    nextVAttachSessionState.lastError = String(err?.message ?? err)
+    syncNextVAttachSessionUi()
+    _setIsRemoteMode(true)
+    _setIsRemoteControlMode(true)
+    _setRemoteTransport('ws')
+    _setIsRemoteRuntimeConnected(false)
+    _setNextVRuntimeRunning(false)
+    updateRemoteRuntimeIdentity(null, { clear: true })
+    updateRemoteModeBadge()
+    closeNextVStream()
+    setNextVRunControls()
+    setStatus('attach failed', 'responding')
+  }
+}
+
+export function detachNextVRuntime() {
+  nextVAttachSessionState.connecting = false
+  nextVAttachSessionState.attached = false
+  nextVAttachSessionState.lastError = ''
+  syncNextVAttachSessionUi()
+  _setIsRemoteMode(true)
+  _setIsRemoteControlMode(true)
+  _setRemoteTransport('ws')
+  _setIsRemoteRuntimeConnected(false)
+  _setNextVRuntimeRunning(false)
+  _setNextVManagedProcessRunning(false)
+  updateRemoteRuntimeIdentity(null, { clear: true })
+  updateRemoteModeBadge()
+  closeNextVStream()
+  setNextVRunControls()
+  setStatus('detached from remote runtime')
+}
 
 export function openNextVStream() {
   closeNextVStream()
@@ -190,6 +307,14 @@ export function openNextVStream() {
       handleNextVGraphRuntimeEvent(runtimeEvent)
       renderCanonicalNextVEvents([runtimeEvent])
       appendTraceRows([runtimeEvent])
+        applyNextVGraphRuntimeVisuals()
+
+      const toolFailureMessage = readToolErrorMessageFromRuntimeEvent(runtimeEvent)
+      if (toolFailureMessage) {
+        appendNextVErrorLog({ message: toolFailureMessage }, '[nextv:tool_error]')
+        setStatus('nextv tool error', 'responding')
+      }
+
       if (payload?.snapshot) renderNextVSnapshot(payload.snapshot)
     } catch {
       // ignore malformed stream payload
@@ -201,32 +326,84 @@ export function openNextVStream() {
       const payload = JSON.parse(evt.data)
       const eventType = String(payload?.event?.type ?? '')
       const source = String(payload?.event?.source ?? '')
+      const executionEvents = Array.isArray(payload?.events) ? payload.events : []
       const shouldRenderFromExecution = !nextVHasLiveRuntimeEvents
+      const shouldUseTimerExecutionSupplement = false
+      
+      // Prefer live runtime events. Fall back to execution event replay only when live events were not observed.
+      const runtimeEventsForGraph = shouldRenderFromExecution
+        ? executionEvents
+        : []
+      
+      const eventsForGraphProcessing = runtimeEventsForGraph
+
       if (eventType) {
         nextVGraphState.runtimeExternalNodes.add(eventType)
       }
-      if (shouldRenderFromExecution && Array.isArray(payload?.events)) {
-        for (const runtimeEvent of payload.events) {
-          handleNextVGraphRuntimeEvent(runtimeEvent)
-        }
+      
+      for (const runtimeEvent of eventsForGraphProcessing) {
+        handleNextVGraphRuntimeEvent(runtimeEvent)
       }
-      if (shouldRenderFromExecution) {
-        renderCanonicalNextVEvents(payload?.events)
-        appendTraceRows(payload?.events)
+      
+      if (runtimeEventsForGraph.length > 0) {
+        renderCanonicalNextVEvents(runtimeEventsForGraph)
+        appendTraceRows(runtimeEventsForGraph)
       }
-      if (eventType && nextVGraphState.runtimeSequence === 0) {
-        const fallbackHandlerId = inferNextVGraphFallbackHandler(eventType) || `handler:${eventType}`
+
+      const fallbackHandlerId = eventType
+        ? (inferNextVGraphFallbackHandler(eventType) || `handler:${eventType}`)
+        : ''
+      if (fallbackHandlerId && !nextVGraphState.runtimeLastDispatchedNode) {
         updateNextVGraphRuntimeStep(fallbackHandlerId)
         nextVGraphState.runtimeLastDispatchedNode = fallbackHandlerId
-        // Mark both the queued event node and the inferred active handler node.
         nextVGraphState.runtimeActiveNodes.add(eventType)
         nextVGraphState.runtimeActiveNodes.add(fallbackHandlerId)
       }
-      reconcileNextVGraphAgentTimersFromExecution(nextVGraphState.runtimeLastDispatchedNode, payload?.result)
-      const fallbackFinalizedCount = finalizeNextVGraphActiveAgentTimers({ elapsedMs: extractExecutionAgentElapsedMs(payload?.result) })
-      if (fallbackFinalizedCount > 0) {
-        appendNextVLogRow(`[nextv:agent_timer] fallback finalizer closed ${fallbackFinalizedCount} active timer${fallbackFinalizedCount === 1 ? '' : 's'}`, 'step')
+
+      const hasExecutionAgentCalls = Array.isArray(payload?.result?.agentCalls) && payload.result.agentCalls.length > 0
+      const shouldUseExecutionTimerFallback = shouldRenderFromExecution
+        && runtimeEventsForGraph.length === 0
+        && hasExecutionAgentCalls
+      if (shouldRenderFromExecution || shouldUseExecutionTimerFallback) {
+        const fallbackNode = String(nextVGraphState.runtimeLastDispatchedNode ?? '').trim() || fallbackHandlerId
+        const agentCalls = Array.isArray(payload?.result?.agentCalls) ? payload.result.agentCalls : []
+        const callsByNode = new Map()
+        for (const call of agentCalls) {
+          const callSourcePath = String(call?.sourcePath ?? '').trim()
+          const callSourceLineRaw = Number(call?.sourceLine)
+          const callSourceLine = Number.isFinite(callSourceLineRaw)
+            ? callSourceLineRaw
+            : Number(call?.line)
+          const resolvedNodeId = resolveNextVGraphHandlerNodeForSource(callSourcePath, callSourceLine, fallbackNode)
+          const nodeId = String(resolvedNodeId ?? '').trim() || fallbackNode
+          if (!nodeId) continue
+          if (!callsByNode.has(nodeId)) {
+            callsByNode.set(nodeId, [])
+          }
+          callsByNode.get(nodeId).push(call)
+        }
+
+        if (callsByNode.size > 0) {
+          for (const [nodeId, calls] of callsByNode.entries()) {
+            reconcileNextVGraphAgentTimersFromExecution(nodeId, { agentCalls: calls })
+            nextVGraphState.runtimeLastDispatchedNode = nodeId
+          }
+        } else if (fallbackNode) {
+          reconcileNextVGraphAgentTimersFromExecution(fallbackNode, payload?.result)
+        }
+        const fallbackFinalizedCount = finalizeNextVGraphActiveAgentTimers({ elapsedMs: extractExecutionAgentElapsedMs(payload?.result) })
+        if (fallbackFinalizedCount > 0) {
+          appendNextVLogRow(`[nextv:agent_timer] fallback finalizer closed ${fallbackFinalizedCount} active timer${fallbackFinalizedCount === 1 ? '' : 's'}`, 'step')
+        }
       }
+
+      for (const runtimeEvent of runtimeEventsForGraph) {
+        const toolFailureMessage = readToolErrorMessageFromRuntimeEvent(runtimeEvent)
+        if (!toolFailureMessage) continue
+        appendNextVErrorLog({ message: toolFailureMessage }, '[nextv:tool_error]')
+        setStatus('nextv tool error', 'responding')
+      }
+
       applyNextVGraphRuntimeVisuals()
       fadeNextVGraphActiveHighlights(760)
 
@@ -297,6 +474,49 @@ export function openNextVStream() {
   nextVEventSource.addEventListener('nextv_error', (evt) => {
     try {
       const payload = JSON.parse(evt.data)
+      const errorEvents = Array.isArray(payload?.events) ? payload.events : []
+      if (errorEvents.length > 0) {
+        for (const runtimeEvent of errorEvents) {
+          handleNextVGraphRuntimeEvent(runtimeEvent)
+        }
+        renderCanonicalNextVEvents(errorEvents)
+        appendTraceRows(errorEvents)
+      }
+
+      const sourceLabelFallback = String(payload?.sourcePath ?? '').trim()
+      const lineFallback = Number.isFinite(Number(payload?.sourceLine))
+        ? Number(payload.sourceLine)
+        : Number(payload?.line)
+      const fallbackHandlerId = sourceLabelFallback
+        ? resolveNextVGraphHandlerNodeForSource(sourceLabelFallback, lineFallback, String(nextVGraphState.runtimeLastDispatchedNode ?? '').trim())
+        : String(nextVGraphState.runtimeLastDispatchedNode ?? '').trim()
+      const errorAgentCalls = Array.isArray(payload?.result?.agentCalls) ? payload.result.agentCalls : []
+      if (errorAgentCalls.length > 0) {
+        const callsByNode = new Map()
+        for (const call of errorAgentCalls) {
+          const callSourcePath = String(call?.sourcePath ?? '').trim()
+          const callSourceLineRaw = Number(call?.sourceLine)
+          const callSourceLine = Number.isFinite(callSourceLineRaw)
+            ? callSourceLineRaw
+            : Number(call?.line)
+          const resolvedNodeId = resolveNextVGraphHandlerNodeForSource(callSourcePath, callSourceLine, fallbackHandlerId)
+          const nodeId = String(resolvedNodeId ?? '').trim() || fallbackHandlerId
+          if (!nodeId) continue
+          if (!callsByNode.has(nodeId)) {
+            callsByNode.set(nodeId, [])
+          }
+          callsByNode.get(nodeId).push(call)
+        }
+        if (callsByNode.size > 0) {
+          for (const [nodeId, calls] of callsByNode.entries()) {
+            reconcileNextVGraphAgentTimersFromExecution(nodeId, { agentCalls: calls })
+            nextVGraphState.runtimeLastDispatchedNode = nodeId
+          }
+        } else if (fallbackHandlerId) {
+          reconcileNextVGraphAgentTimersFromExecution(fallbackHandlerId, { agentCalls: errorAgentCalls })
+        }
+      }
+
       finalizeNextVGraphActiveAgentTimers()
       applyNextVGraphRuntimeVisuals()
       appendNextVErrorLog(payload)
@@ -354,6 +574,20 @@ export async function refreshNextVSnapshot() {
 }
 
 export async function syncNextVRuntimeState() {
+  if (nextVRuntimeTargetState.target === 'attach' && nextVAttachSessionState.attached !== true) {
+    _setIsRemoteMode(true)
+    _setIsRemoteControlMode(true)
+    _setRemoteTransport('ws')
+    _setIsRemoteRuntimeConnected(false)
+    _setNextVRuntimeRunning(false)
+    updateRemoteRuntimeIdentity(null, { clear: true })
+    updateRemoteModeBadge()
+    closeNextVStream()
+    setNextVRunControls()
+    syncNextVAttachSessionUi()
+    return
+  }
+
   try {
     const res = await fetch(buildNextVApiPath('/api/nextv/snapshot'))
     const data = await res.json().catch(() => ({}))
@@ -361,9 +595,14 @@ export async function syncNextVRuntimeState() {
     _setIsRemoteMode(data?.remoteMode === true)
     _setIsRemoteControlMode(data?.remoteControl === true)
     _setRemoteTransport(String(data?.remoteTransport ?? (isRemoteControlMode ? 'ws' : (isRemoteMode ? 'mqtt' : 'local'))))
-    _setIsRemoteRuntimeConnected(isRemoteControlMode)
-      ? (data?.remoteConnection?.connected === true)
-      : true
+    const attachConnected = nextVRuntimeTargetState.target === 'attach' && nextVAttachSessionState.attached === true
+    _setIsRemoteRuntimeConnected(
+      attachConnected
+        ? true
+        : (isRemoteControlMode
+          ? (data?.remoteConnection?.connected === true)
+          : true),
+    )
     if (isRemoteMode) {
       updateRemoteRuntimeIdentity(data)
     } else {
@@ -378,23 +617,36 @@ export async function syncNextVRuntimeState() {
       return
     }
     updateRemoteModeBadge()
-    renderNextVSnapshot(data.snapshot)
+    renderNextVSnapshot(data.snapshot, { skipControlUpdate: true })
     if (isRemoteMode || data?.snapshot?.running === true) {
       openNextVStream()
     } else {
       closeNextVStream()
     }
-    _setNextVRuntimeRunning(data?.running === true)
+    const resolvedRunning = (
+      data?.running === true
+      || data?.snapshot?.running === true
+      || data?.remoteConnection?.remoteActive === true
+    )
+    _setNextVRuntimeRunning(resolvedRunning)
     if (nextVRuntimeRunning) {
       _setNextVManagedProcessRunning(true)
       appendNextVLogRow('[nextv:reconnect] reattached to running workflow', 'step')
       setStatus('reconnected to running workflow')
     }
+    if (nextVRuntimeTargetState.target === 'attach') {
+      nextVAttachSessionState.lastError = ''
+      syncNextVAttachSessionUi()
+    }
     setNextVRunControls()
-  } catch {
+  } catch (err) {
     _setNextVRuntimeRunning(false)
     if (isRemoteControlMode) {
       _setIsRemoteRuntimeConnected(false)
+    }
+    if (nextVRuntimeTargetState.target === 'attach') {
+      nextVAttachSessionState.lastError = String(err?.message ?? 'remote runtime websocket is not connected')
+      syncNextVAttachSessionUi()
     }
     updateRemoteModeBadge()
     closeNextVStream()

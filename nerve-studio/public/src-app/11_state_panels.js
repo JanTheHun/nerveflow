@@ -39,7 +39,8 @@ import {
   setNextVRunControls
 } from './03_ui_controls.js'
 import {
-  appendNextVLogRow
+  appendNextVLogRow,
+  appendNextVDebugRow
 } from './07_graph_render.js'
 import {
   toPrettyJson,
@@ -60,6 +61,73 @@ import {
   appendErrorRow,
   escapeHtml
 } from './13_layout.js'
+
+const NEXTV_EVENT_DEDUPE_TTL_MS = 8000
+const nextVRenderedEventKeys = new Map()
+
+function normalizeEventPart(value) {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function buildCanonicalEventDedupeKey(event) {
+  if (!event || typeof event !== 'object') return ''
+  const type = String(event.type ?? '')
+  const timestamp = String(event.timestamp ?? '')
+  const tool = String(event.tool ?? '')
+  const agent = String(event.agent ?? '')
+  const line = String(event.line ?? '')
+  const statement = String(event.statement ?? '')
+  const sourcePath = String(event.sourcePath ?? '')
+  const sourceLine = String(event.sourceLine ?? '')
+  const args = normalizeEventPart(event.args)
+  const result = normalizeEventPart(event.result)
+  const content = normalizeEventPart(event.content)
+  const value = normalizeEventPart(event.value)
+  const metadata = normalizeEventPart(event.metadata)
+  return [
+    type,
+    timestamp,
+    tool,
+    agent,
+    line,
+    statement,
+    sourcePath,
+    sourceLine,
+    args,
+    result,
+    content,
+    value,
+    metadata,
+  ].join('|')
+}
+
+function shouldRenderCanonicalEvent(event) {
+  const key = buildCanonicalEventDedupeKey(event)
+  if (!key) return true
+  const now = Date.now()
+  const lastSeenAt = nextVRenderedEventKeys.get(key)
+  if (Number.isFinite(lastSeenAt) && (now - lastSeenAt) < NEXTV_EVENT_DEDUPE_TTL_MS) {
+    return false
+  }
+  nextVRenderedEventKeys.set(key, now)
+
+  if (nextVRenderedEventKeys.size > 5000) {
+    for (const [seenKey, seenAt] of nextVRenderedEventKeys.entries()) {
+      if ((now - seenAt) >= NEXTV_EVENT_DEDUPE_TTL_MS) {
+        nextVRenderedEventKeys.delete(seenKey)
+      }
+    }
+  }
+  return true
+}
 
 export function initNextVUserIOPanel() {
   const stored = localStorage.getItem(storageKeys.nextVUserIOOpen)
@@ -305,6 +373,7 @@ export function renderCanonicalNextVEvents(events) {
 
   for (const event of events) {
     if (!event || typeof event !== 'object') continue
+    if (!shouldRenderCanonicalEvent(event)) continue
 
     if (event.type === 'output') {
       const format = String(event.format ?? 'text')
@@ -354,6 +423,9 @@ export function renderCanonicalNextVEvents(events) {
 
     if (event.type === 'tool_call') {
       const toolName = String(event.tool ?? '')
+      if (toolName === 'agent' || toolName === 'model') {
+        continue
+      }
       const detail = getToolCallDetail(toolName, event.args)
       const detailSuffix = detail ? ` ${detail}` : ''
       appendNextVLogRow(
@@ -363,9 +435,38 @@ export function renderCanonicalNextVEvents(events) {
       continue
     }
 
+    if (event.type === 'agent_call') {
+      const agentName = String(event.agent ?? '').trim() || 'unknown'
+      appendNextVLogRow(`[nextv:agent_call] agent=${agentName}`, 'step')
+      if (event.args && typeof event.args === 'object') {
+        appendNextVDebugRow('[nextv:agent_call:args]', toPrettyJson(event.args))
+      }
+      continue
+    }
+
+    if (event.type === 'agent_result') {
+      const agentName = String(event.agent ?? '').trim() || 'unknown'
+      const elapsedMs = Number(event?.metadata?.elapsedMs)
+      const elapsedLabel = Number.isFinite(elapsedMs) ? ` elapsedMs=${Math.max(0, Math.round(elapsedMs))}` : ''
+      appendNextVLogRow(`[nextv:agent_result] agent=${agentName}${elapsedLabel}`, 'result')
+
+      const requestDebug = event?.metadata?.request ?? null
+      const wirePayload = requestDebug && typeof requestDebug === 'object'
+        ? (requestDebug.wirePayload ?? requestDebug)
+        : null
+      if (wirePayload) {
+        appendNextVDebugRow('[nextv:agent_request:wire]', toPrettyJson(wirePayload))
+      }
+      continue
+    }
+
     if (event.type === 'tool_result') {
+      const toolName = String(event.tool ?? '')
+      if (toolName === 'agent' || toolName === 'model') {
+        continue
+      }
       appendNextVLogRow(
-        `[nextv:tool_result] tool=${String(event.tool ?? '')} ${summarizeToolResultPayload(event.result)}`,
+        `[nextv:tool_result] tool=${toolName} ${summarizeToolResultPayload(event.result)}`,
         'result'
       )
       continue
@@ -385,9 +486,11 @@ export function renderCanonicalNextVEvents(events) {
 
 export function renderNextVSnapshot(snapshot, options = {}) {
   if (!snapshot || typeof snapshot !== 'object') return
-  const { log = false } = options
+  const { log = false, skipControlUpdate = false } = options
   _setNextVRuntimeRunning(snapshot.running === true)
-  setNextVRunControls()
+  if (!skipControlUpdate) {
+    setNextVRunControls()
+  }
 
   if (log) {
     appendNextVLogRow(`[nextv:snapshot] running=${nextVRuntimeRunning} executions=${Number(snapshot.executionCount ?? 0)} pending=${Number(snapshot.pendingEvents ?? 0)}`, 'result')
@@ -474,5 +577,6 @@ export function closeNextVStream() {
   nextVEventSource.close()
   _setNextVEventSource(null)
   _setNextVHasLiveRuntimeEvents(false)
+  nextVRenderedEventKeys.clear()
 }
 

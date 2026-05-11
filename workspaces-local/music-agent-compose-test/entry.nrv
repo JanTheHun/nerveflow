@@ -14,31 +14,12 @@ on external "user_message"
     target: ""
   }
   
-  # result = agent(
-    # "intent-2",
-    # event.value,
-    # instructions,
-    # format="json"
-  # )
-
-  # output json result
-
-  # result2 = agent(
-    # "intent",
-    # event.value,
-    # instructions,
-    # format="json"
-  # )
-
-  # output json result2
-
-
   intent_results = parallel([
     agent(
       "intent-4",
       event.value,
       intent_instructions,
-      returns=intent_contract
+      decide=["play", "unclear"]
     ),
     agent(
       "intent-4",

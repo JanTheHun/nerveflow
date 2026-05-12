@@ -1,0 +1,13 @@
+on external "tool_call_smoke"
+  input = { query: event.value, require_fresh_time_tool: true }
+  result = agent(
+    "smoke-chat",
+    to_json(input),
+    to_json(file("tool-smoke/tool-smoke.instructions.md")),
+    returns={ status: "ok", current_time: 1, explanation: "" },
+    validate="strict",
+    retry_on_contract_violation=1,
+    tools={ mode: "governed", allow: ["get_time"], maxRounds: 2, timeoutMs: 15000, denyOnUnknownTool: true }
+  )
+  output json result
+end

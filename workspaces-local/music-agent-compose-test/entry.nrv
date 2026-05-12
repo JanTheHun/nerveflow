@@ -1,6 +1,7 @@
 include "intent_unknown.nrv"
 include "memory.nrv"
 include "music-select.nrv"
+include "tool-call-smoke.nrv"
 include "user-wants-music.nrv"
 
 on external "user_message"

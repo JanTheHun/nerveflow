@@ -2,6 +2,7 @@
   "entrypointPath": "entry.nrv",
   "externals": [
     "user_message",
+    "tool_call_smoke",
     "remember_music",
     "recall_music",
     "delete_music",
@@ -30,7 +31,11 @@
   },
   "models": {
     "chat-model": {
-      "model": "qwen2.5:3b",
+      "model": "llama3.2:1b",
+      "transport": "ollama"
+    },
+    "smoke-chat-model": {
+      "model": "gpt-oss:20b",
       "transport": "ollama"
     },
     "intent-model": {
@@ -61,6 +66,9 @@
       "model": "gemini-2.5-flash-lite",
       "transport": "gemini"
     }
+  },
+  "tools": {
+    "allow": ["get_time", "memory_retrieve", "memory_store", "memory_delete", "memory_update"]
   },
   "requires": {
     "memory": {

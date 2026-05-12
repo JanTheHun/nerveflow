@@ -432,6 +432,9 @@ export function renderCanonicalNextVEvents(events) {
         `[nextv:tool_call] tool=${toolName}${detailSuffix} ${summarizeToolCallArgs(event.args)}`,
         'step'
       )
+      if (event.args != null) {
+        appendNextVDebugRow('[nextv:tool_call:args]', toPrettyJson(event.args))
+      }
       continue
     }
 
@@ -469,6 +472,9 @@ export function renderCanonicalNextVEvents(events) {
         `[nextv:tool_result] tool=${toolName} ${summarizeToolResultPayload(event.result)}`,
         'result'
       )
+      if (event.result != null) {
+        appendNextVDebugRow('[nextv:tool_result:detail]', toPrettyJson(event.result))
+      }
       continue
     }
 

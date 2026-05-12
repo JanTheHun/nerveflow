@@ -54,6 +54,8 @@ import {
   nextVEventsPausedBuffer,
   nextVEventsOutput,
   outputSection,
+  remoteRuntimeEntrypointPath,
+  remoteRuntimeWorkspaceDir,
   remoteTransport,
   scriptSection,
   scriptVSplit1,
@@ -69,6 +71,7 @@ import {
   setNextVImagesOpen,
   buildNextVApiPath,
   getNextVAttachWsUrl,
+  isNextVAttachStartOverrideEnabled,
   syncNextVAttachSessionUi,
   getSelectedNextVInputChannel,
   setNextVMode,
@@ -149,6 +152,19 @@ function buildNextVAttachApiPath(pathname) {
   return `${pathname}?${params.toString()}`
 }
 
+function normalizeEntrypointForWorkspace(entrypointPathRaw, workspaceDirRaw) {
+  const entrypointPath = normalizeRelativePath(entrypointPathRaw)
+  if (!entrypointPath) return ''
+
+  const workspaceDir = normalizeNextVWorkspaceDir(workspaceDirRaw)
+  if (!workspaceDir) return entrypointPath
+  if (entrypointPath === workspaceDir) return ''
+  if (entrypointPath.startsWith(`${workspaceDir}/`)) {
+    return entrypointPath.slice(workspaceDir.length + 1)
+  }
+  return entrypointPath
+}
+
 function readToolErrorMessageFromRuntimeEvent(runtimeEvent) {
   if (!runtimeEvent || typeof runtimeEvent !== 'object') return ''
   if (String(runtimeEvent?.type ?? '').trim() !== 'tool_result') return ''
@@ -198,12 +214,13 @@ export async function attachNextVRuntime() {
     }
 
     const remoteWorkspaceDir = String(data?.remoteRuntimeWorkspaceDir ?? data?.workspaceDir ?? '').trim()
-    const remoteEntrypointPath = String(data?.remoteRuntimeEntrypointPath ?? data?.entrypointPath ?? '').trim()
+    const remoteEntrypointPathRaw = String(data?.remoteRuntimeEntrypointPath ?? data?.entrypointPath ?? '').trim()
     if (nextVWorkspaceDirInput && remoteWorkspaceDir) {
       nextVWorkspaceDirInput.value = remoteWorkspaceDir === '.' ? '' : remoteWorkspaceDir
     }
-    if (nextVEntrypointInput && remoteEntrypointPath) {
-      nextVEntrypointInput.value = remoteEntrypointPath
+    if (nextVEntrypointInput && remoteEntrypointPathRaw) {
+      const normalizedEntrypoint = normalizeEntrypointForWorkspace(remoteEntrypointPathRaw, remoteWorkspaceDir)
+      nextVEntrypointInput.value = normalizedEntrypoint
       saveNextVEntrypoint()
     }
 
@@ -656,7 +673,7 @@ export async function syncNextVRuntimeState() {
 
 export async function runNextVRuntime() {
   const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
-  const entrypointPath = normalizeRelativePath(nextVEntrypointInput?.value ?? '')
+  const entrypointPath = normalizeEntrypointForWorkspace(nextVEntrypointInput?.value ?? '', workspaceDir)
   if (!entrypointPath) {
     setStatus('nextv entrypoint required', 'responding')
     return
@@ -713,8 +730,13 @@ export async function killNextVRuntime() {
 }
 
 export async function startNextVRuntime() {
-  const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
-  const entrypointPath = normalizeRelativePath(nextVEntrypointInput?.value ?? '')
+  const isAttachLockedToRuntime = nextVRuntimeTargetState.target === 'attach' && !isNextVAttachStartOverrideEnabled()
+  const localWorkspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
+  const localEntrypointPath = normalizeEntrypointForWorkspace(nextVEntrypointInput?.value ?? '', localWorkspaceDir)
+  const runtimeWorkspaceDir = normalizeNextVWorkspaceDir(remoteRuntimeWorkspaceDir ?? '')
+  const runtimeEntrypointPath = normalizeEntrypointForWorkspace(remoteRuntimeEntrypointPath ?? '', runtimeWorkspaceDir)
+  const workspaceDir = isAttachLockedToRuntime ? (runtimeWorkspaceDir || localWorkspaceDir) : localWorkspaceDir
+  const entrypointPath = isAttachLockedToRuntime ? (runtimeEntrypointPath || localEntrypointPath) : localEntrypointPath
   const emitTrace = true
   const emitTraceState = true
   if (!entrypointPath) {
@@ -732,7 +754,9 @@ export async function startNextVRuntime() {
     clearTracePanel({ silent: true })
     clearNextVEventsOutput()
     clearNextVConsoleOutput()
-    await ensureNextVEntrypointVisible({ logLoaded: true, warnOnDirty: true })
+    if (!isAttachLockedToRuntime) {
+      await ensureNextVEntrypointVisible({ logLoaded: true, warnOnDirty: true })
+    }
     const res = await fetch(buildNextVApiPath('/api/nextv/start'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

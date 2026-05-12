@@ -22,8 +22,12 @@ export function createOllamaTransport(opts = {}) {
     try { onDebugRecord(record) } catch { /* debug must never affect execution */ }
   }
 
-  const callOllamaAgent = async function callOllamaAgent({ model, messages, transport }) {
-    const requestPayload = { model, messages, stream: false }
+  const callOllamaAgent = async function callOllamaAgent({ model, messages, tools, transport }) {
+    const requestPayload = { model, messages: normalizeOllamaMessages(messages), stream: false }
+
+    if (Array.isArray(tools) && tools.length > 0) {
+      requestPayload.tools = tools
+    }
 
     if (transport && typeof transport === 'object') {
       if (typeof transport.keep_alive === 'string' && transport.keep_alive.trim()) {
@@ -133,6 +137,7 @@ export function createOllamaTransport(opts = {}) {
           total_duration: Number.isFinite(Number(payload?.total_duration)) ? Number(payload.total_duration) : null,
           load_duration: Number.isFinite(Number(payload?.load_duration)) ? Number(payload.load_duration) : null,
         },
+        toolCalls: extractOllamaToolCalls(payload?.message?.tool_calls),
       },
     }
   }
@@ -195,6 +200,94 @@ export function createOllamaFileDebugLogger(opts = {}) {
 function previewDebugText(value, maxLength = 240) {
   const text = String(value ?? '')
   return text.length <= maxLength ? text : `${text.slice(0, maxLength)}...`
+}
+
+function normalizeOllamaMessages(messages) {
+  if (!Array.isArray(messages)) return []
+
+  return messages.map((message) => {
+    if (!message || typeof message !== 'object') return message
+
+    const role = String(message.role ?? '').trim()
+    if (role === 'assistant' && Array.isArray(message.tool_calls)) {
+      return {
+        ...message,
+        tool_calls: normalizeOllamaToolCallsForRequest(message.tool_calls),
+      }
+    }
+
+    if (role === 'tool') {
+      return {
+        role: 'tool',
+        content: String(message.content ?? ''),
+        tool_name: String(message.tool_name ?? message.name ?? '').trim(),
+      }
+    }
+
+    return message
+  })
+}
+
+function normalizeOllamaToolCallsForRequest(toolCalls) {
+  if (!Array.isArray(toolCalls)) return []
+
+  return toolCalls
+    .map((toolCall) => {
+      const name = String(toolCall?.function?.name ?? '').trim()
+      if (!name) return null
+      return {
+        function: {
+          name,
+          arguments: normalizeOllamaToolArguments(toolCall?.function?.arguments),
+        },
+      }
+    })
+    .filter(Boolean)
+}
+
+function normalizeOllamaToolArguments(argumentsValue) {
+  if (argumentsValue && typeof argumentsValue === 'object' && !Array.isArray(argumentsValue)) {
+    return argumentsValue
+  }
+
+  if (typeof argumentsValue === 'string' && argumentsValue.trim()) {
+    try {
+      const parsed = JSON.parse(argumentsValue)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed
+      }
+    } catch {
+      return {}
+    }
+  }
+
+  return {}
+}
+
+function extractOllamaToolCalls(rawToolCalls) {
+  if (!Array.isArray(rawToolCalls)) return []
+
+  return rawToolCalls
+    .map((toolCall, index) => {
+      let name = String(toolCall?.function?.name ?? '').trim()
+      if (!name) return null
+      // Strip "tool." prefix if present (some Ollama models add this prefix)
+      if (name.startsWith('tool.')) {
+        name = name.substring(5)
+      }
+      const id = String(toolCall?.id ?? `tool-call-${index + 1}`).trim() || `tool-call-${index + 1}`
+      const argumentsValue = toolCall?.function?.arguments
+      const argumentsRaw = typeof argumentsValue === 'string'
+        ? (argumentsValue.trim() || '{}')
+        : JSON.stringify(
+            (argumentsValue && typeof argumentsValue === 'object' && !Array.isArray(argumentsValue))
+              ? argumentsValue
+              : {},
+          )
+
+      return { id, name, argumentsRaw }
+    })
+    .filter(Boolean)
 }
 
 function summarizeDebugValue(value) {

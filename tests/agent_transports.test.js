@@ -159,6 +159,76 @@ test('createOllamaTransport ignores transport config when not provided', async (
   })
 })
 
+test('createOllamaTransport forwards tools payload, normalizes tool history, and extracts tool calls metadata', async () => {
+  let capturedBody = null
+  await withFetchMock(async (_url, opts = {}) => {
+    capturedBody = JSON.parse(opts.body ?? 'null')
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        model: 'qwen2.5:3b',
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            function: {
+              name: 'get_time',
+              arguments: { timeZone: 'UTC' },
+            },
+          }],
+        },
+        done: true,
+        done_reason: 'stop',
+        prompt_eval_count: 5,
+        eval_count: 3,
+      }),
+      text: async () => '',
+    }
+  }, async () => {
+    const callAgent = createOllamaTransport({ timeoutMs: 5000 })
+    const result = await callAgent({
+      model: 'qwen2.5:3b',
+      messages: [
+        { role: 'user', content: 'what time is it?' },
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'call_123',
+            type: 'function',
+            function: {
+              name: 'get_time',
+              arguments: '{"timeZone":"UTC"}',
+            },
+          }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_123',
+          name: 'get_time',
+          content: '{"iso":"2026-05-12T00:00:00.000Z"}',
+        },
+      ],
+      tools: [{ type: 'function', function: { name: 'get_time', parameters: { type: 'object' } } }],
+    })
+
+    assert.equal(Array.isArray(capturedBody.tools), true)
+    assert.equal(capturedBody.tools[0].function.name, 'get_time')
+    assert.equal(capturedBody.messages[1].tool_calls[0].function.name, 'get_time')
+    assert.deepEqual(capturedBody.messages[1].tool_calls[0].function.arguments, { timeZone: 'UTC' })
+    assert.equal(capturedBody.messages[2].role, 'tool')
+    assert.equal(capturedBody.messages[2].tool_name, 'get_time')
+    assert.equal(capturedBody.messages[2].tool_call_id, undefined)
+
+    assert.equal(Array.isArray(result.metadata.toolCalls), true)
+    assert.equal(result.metadata.toolCalls.length, 1)
+    assert.equal(result.metadata.toolCalls[0].id, 'tool-call-1')
+    assert.equal(result.metadata.toolCalls[0].name, 'get_time')
+    assert.equal(result.metadata.toolCalls[0].argumentsRaw, '{"timeZone":"UTC"}')
+  })
+})
+
 test('createOllamaTransport times out with AGENT_TRANSPORT_TIMEOUT', async () => {
   await withFetchMock((_url, options = {}) => new Promise((resolve, reject) => {
     options.signal?.addEventListener('abort', () => {
@@ -331,4 +401,55 @@ test('createOpenAICompatTransport times out with AGENT_TRANSPORT_TIMEOUT', async
 test('createOpenAICompatTransport exposes capabilities.supports_preload=false', () => {
   const callAgent = createOpenAICompatTransport({})
   assert.equal(callAgent.capabilities.supports_preload, false)
+})
+
+test('createOpenAICompatTransport forwards tools payload and extracts tool calls metadata', async () => {
+  let capturedBody = null
+  await withFetchMock(async (_url, fetchOpts = {}) => {
+    capturedBody = JSON.parse(fetchOpts.body ?? 'null')
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: 'chatcmpl-tools',
+        object: 'chat.completion',
+        created: 1710000010,
+        model: 'gpt-4o',
+        choices: [{
+          index: 0,
+          finish_reason: 'tool_calls',
+          message: {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_123',
+              type: 'function',
+              function: {
+                name: 'search',
+                arguments: '{"q":"nerveflow"}',
+              },
+            }],
+          },
+        }],
+      }),
+      text: async () => '',
+    }
+  }, async () => {
+    const callAgent = createOpenAICompatTransport({ timeoutMs: 5000 })
+    const result = await callAgent({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'search docs' }],
+      tools: [{ type: 'function', function: { name: 'search', parameters: { type: 'object' } } }],
+      tool_choice: 'auto',
+    })
+
+    assert.equal(Array.isArray(capturedBody.tools), true)
+    assert.equal(capturedBody.tools[0].function.name, 'search')
+    assert.equal(capturedBody.tool_choice, 'auto')
+    assert.equal(Array.isArray(result.metadata.toolCalls), true)
+    assert.equal(result.metadata.toolCalls.length, 1)
+    assert.equal(result.metadata.toolCalls[0].id, 'call_123')
+    assert.equal(result.metadata.toolCalls[0].name, 'search')
+    assert.equal(result.metadata.toolCalls[0].argumentsRaw, '{"q":"nerveflow"}')
+  })
 })

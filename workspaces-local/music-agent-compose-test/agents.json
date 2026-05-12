@@ -2,8 +2,13 @@
   "profiles": {
     "chat": {
       "model": "chat-model",
-      "tools": [],
+      "tools": ["get_time"],
       "instructions": ""
+    },
+    "smoke-chat": {
+      "model": "smoke-chat-model",
+      "tools": ["get_time"],
+      "instructions": "Tool-calling smoke profile."
     },
     "intent": {
       "model": "intent-model",
@@ -22,7 +27,7 @@
     },
     "intent-4": {
       "model": "intent-4-model",
-      "tools": [],
+      "tools": ["get_time"],
       "instructions": "Classify user intent."
     },
     "intent-5": {

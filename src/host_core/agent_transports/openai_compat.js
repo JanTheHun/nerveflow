@@ -33,7 +33,7 @@ export function createOpenAICompatTransport(opts = {}) {
     try { onDebugRecord(record) } catch { /* debug must never affect execution */ }
   }
 
-  const callOpenAICompatAgent = async function callOpenAICompatAgent({ model, messages, transport }) {
+  const callOpenAICompatAgent = async function callOpenAICompatAgent({ model, messages, tools, tool_choice, transport }) {
     // Per-call transport config (from nextv.json transports.map) can override API key and base URL.
     const callApiKey = String(
       (transport && typeof transport === 'object' ? transport.apiKey : null)
@@ -58,6 +58,13 @@ export function createOpenAICompatTransport(opts = {}) {
       if (typeof transport.top_p === 'number' && Number.isFinite(transport.top_p)) {
         requestPayload.top_p = transport.top_p
       }
+    }
+
+    if (Array.isArray(tools) && tools.length > 0) {
+      requestPayload.tools = tools
+      requestPayload.tool_choice = typeof tool_choice === 'string' && tool_choice.trim()
+        ? tool_choice.trim()
+        : 'auto'
     }
 
     const headers = { 'Content-Type': 'application/json' }
@@ -132,6 +139,20 @@ export function createOpenAICompatTransport(opts = {}) {
 
     const choice = payload?.choices?.[0]
     const text = String(choice?.message?.content ?? '').trim()
+    const rawToolCalls = Array.isArray(choice?.message?.tool_calls) ? choice.message.tool_calls : []
+    const toolCalls = rawToolCalls
+      .map((call, index) => {
+        const callId = String(call?.id ?? `tool-call-${index + 1}`).trim() || `tool-call-${index + 1}`
+        const callName = String(call?.function?.name ?? '').trim()
+        if (!callName) return null
+        const argumentsRaw = String(call?.function?.arguments ?? '').trim() || '{}'
+        return {
+          id: callId,
+          name: callName,
+          argumentsRaw,
+        }
+      })
+      .filter(Boolean)
 
     const promptTokens = Number.isFinite(Number(payload?.usage?.prompt_tokens))
       ? Number(payload.usage.prompt_tokens)
@@ -168,6 +189,7 @@ export function createOpenAICompatTransport(opts = {}) {
           completion_tokens: completionTokens,
           total_tokens: totalTokens,
         },
+        toolCalls,
       },
     }
   }

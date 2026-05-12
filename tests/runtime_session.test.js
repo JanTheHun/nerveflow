@@ -911,3 +911,257 @@ test('getAgentCapabilities returns null when no runtime capabilities and no tran
 
   assert.equal(adapter.getAgentCapabilities(), null)
 })
+
+test('callAgent executes governed tool calls and feeds tool results back to model transport', async () => {
+  const transportCalls = []
+  const toolCalls = []
+
+  const toolRuntime = createToolRuntime({
+    providers: [
+      {
+        search: async ({ args }) => {
+          toolCalls.push(args)
+          return { hits: ['doc-1'], q: String(args?.q ?? '') }
+        },
+      },
+    ],
+  })
+
+  let callCount = 0
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: new Set(['search']), aliases: {} },
+      agents: { profiles: { chat: { model: 'gpt-4o', tools: ['search'] } } },
+      operators: { map: {} },
+    },
+    callAgent: async (payload) => {
+      transportCalls.push(payload)
+      callCount += 1
+      if (callCount === 1) {
+        return {
+          text: '',
+          metadata: {
+            provider: 'openai_compat',
+            toolCalls: [{ id: 'call-1', name: 'search', argumentsRaw: '{"q":"nerveflow"}' }],
+          },
+        }
+      }
+      return { text: 'final answer', metadata: { provider: 'openai_compat' } }
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+    toolRuntime,
+  })
+
+  const result = await adapter.callAgent({
+    agent: 'chat',
+    prompt: 'find docs',
+    tools: { mode: 'governed', maxRounds: 4, allow: ['search'] },
+    event: { type: 'user_message', source: 'external' },
+    state: {},
+    locals: {},
+    line: 12,
+    statement: 'answer = agent("chat", event.value)',
+  })
+
+  assert.equal(result.value, 'final answer')
+  assert.equal(callCount, 2)
+  assert.equal(toolCalls.length, 1)
+  assert.equal(toolCalls[0].q, 'nerveflow')
+  assert.equal(Array.isArray(transportCalls[0].tools), true)
+  assert.equal(transportCalls[0].tools.length, 1)
+  assert.equal(transportCalls[0].tools[0].function.name, 'search')
+  assert.equal(transportCalls[1].messages.some((m) => m.role === 'tool' && /doc-1/.test(String(m.content))), true)
+  assert.equal(result.metadata.tools.mode, 'governed')
+  assert.equal(result.metadata.tools.timeoutMs, 0)
+  assert.equal(result.metadata.tools.denyOnUnknownTool, true)
+  assert.equal(result.metadata.tools.toolCalls, 1)
+  assert.equal(result.metadata.tools.deniedToolCalls, 0)
+  assert.deepEqual(result.metadata.tools.toolsUsed, ['search'])
+})
+
+test('callAgent does not execute tool calls when tools mode is disabled', async () => {
+  let toolRuntimeCalled = false
+  const toolRuntime = createToolRuntime({
+    providers: [
+      {
+        search: async () => {
+          toolRuntimeCalled = true
+          return { ok: true }
+        },
+      },
+    ],
+  })
+
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: new Set(['search']), aliases: {} },
+      agents: { profiles: { chat: { model: 'gpt-4o', tools: ['search'] } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => ({
+      text: 'direct answer',
+      metadata: {
+        provider: 'openai_compat',
+        toolCalls: [{ id: 'call-1', name: 'search', argumentsRaw: '{"q":"ignored"}' }],
+      },
+    }),
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+    toolRuntime,
+  })
+
+  const result = await adapter.callAgent({
+    agent: 'chat',
+    prompt: 'find docs',
+    tools: { mode: 'disabled' },
+    event: { type: 'user_message', source: 'external' },
+  })
+
+  assert.equal(result.value, 'direct answer')
+  assert.equal(toolRuntimeCalled, false)
+  assert.equal(result.metadata.provider, 'openai_compat')
+  assert.equal(Object.prototype.hasOwnProperty.call(result.metadata, 'tools'), false)
+})
+
+test('callAgent governed mode denies unknown tools by default', async () => {
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: new Set(['search']), aliases: {} },
+      agents: { profiles: { chat: { model: 'gpt-4o', tools: ['search'] } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => ({
+      text: '',
+      metadata: {
+        provider: 'openai_compat',
+        toolCalls: [{ id: 'call-1', name: 'fetch', argumentsRaw: '{"url":"https://example.com"}' }],
+      },
+    }),
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  await assert.rejects(
+    () => adapter.callAgent({
+      agent: 'chat',
+      prompt: 'find docs',
+      tools: { mode: 'governed', maxRounds: 2, allow: ['search'] },
+      event: { type: 'user_message', source: 'external' },
+    }),
+    /not allowed by tools policy/,
+  )
+})
+
+test('callAgent governed mode can continue when denyOnUnknownTool is false', async () => {
+  let callCount = 0
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: new Set(['search']), aliases: {} },
+      agents: { profiles: { chat: { model: 'gpt-4o', tools: ['search'] } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => {
+      callCount += 1
+      if (callCount === 1) {
+        return {
+          text: '',
+          metadata: {
+            provider: 'openai_compat',
+            toolCalls: [{ id: 'call-1', name: 'fetch', argumentsRaw: '{"url":"https://example.com"}' }],
+          },
+        }
+      }
+      return { text: 'answer after deny', metadata: { provider: 'openai_compat' } }
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  const result = await adapter.callAgent({
+    agent: 'chat',
+    prompt: 'find docs',
+    tools: { mode: 'governed', maxRounds: 3, allow: ['search'], denyOnUnknownTool: false },
+    event: { type: 'user_message', source: 'external' },
+  })
+
+  assert.equal(result.value, 'answer after deny')
+  assert.equal(result.metadata.tools.mode, 'governed')
+  assert.equal(result.metadata.tools.denyOnUnknownTool, false)
+  assert.equal(result.metadata.tools.deniedToolCalls, 1)
+})
+
+test('callAgent governed mode enforces timeoutMs', async () => {
+  const toolRuntime = createToolRuntime({
+    providers: [
+      {
+        search: async () => ({ ok: true }),
+      },
+    ],
+  })
+
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: new Set(['search']), aliases: {} },
+      agents: { profiles: { chat: { model: 'gpt-4o', tools: ['search'] } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      return {
+        text: '',
+        metadata: {
+          provider: 'openai_compat',
+          toolCalls: [{ id: 'call-1', name: 'search', argumentsRaw: '{"q":"slow"}' }],
+        },
+      }
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+    toolRuntime,
+  })
+
+  await assert.rejects(
+    () => adapter.callAgent({
+      agent: 'chat',
+      prompt: 'find docs',
+      tools: { mode: 'governed', maxRounds: 3, allow: ['search'], timeoutMs: 1 },
+      event: { type: 'user_message', source: 'external' },
+      state: {},
+      locals: {},
+      line: 1,
+      statement: 'answer = agent("chat", event.value)',
+    }),
+    /exceeded tools\.timeoutMs/,
+  )
+})

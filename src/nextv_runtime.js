@@ -12,6 +12,7 @@ const AGENT_NAMED_ARG_ALLOWLIST = new Set([
   'prompt',
   'instructions',
   'messages',
+  'tools',
   'format',
   'returns',
   'validate',
@@ -24,6 +25,7 @@ const MODEL_NAMED_ARG_ALLOWLIST = new Set([
   'prompt',
   'instructions',
   'messages',
+  'tools',
   'format',
   'returns',
   'validate',
@@ -1290,6 +1292,114 @@ function normalizeAgentReturnsValue(value, context) {
   return value
 }
 
+function normalizeAgentToolsPolicy(value, context, usageLabel = 'agent()') {
+  if (value == null) {
+    return {
+      mode: 'disabled',
+      maxRounds: 0,
+      allow: [],
+      timeoutMs: 0,
+      denyOnUnknownTool: true,
+    }
+  }
+  if (!isPlainObject(value)) {
+    throw nextvError({
+      line: context.line,
+      kind: 'runtime',
+      code: 'INVALID_AGENT_TOOLS',
+      statement: context.statement,
+      message: `${usageLabel} tools must be an object with mode/maxRounds/allow/timeoutMs/denyOnUnknownTool.`,
+    })
+  }
+
+  const modeRaw = String(value.mode ?? '').trim().toLowerCase() || 'disabled'
+  if (modeRaw !== 'disabled' && modeRaw !== 'governed') {
+    throw nextvError({
+      line: context.line,
+      kind: 'runtime',
+      code: 'INVALID_AGENT_TOOLS',
+      statement: context.statement,
+      message: `${usageLabel} tools.mode must be "disabled" or "governed"; received "${modeRaw}".`,
+    })
+  }
+
+  let maxRounds = 8
+  if (Object.prototype.hasOwnProperty.call(value, 'maxRounds')) {
+    const parsed = Number(value.maxRounds)
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      throw nextvError({
+        line: context.line,
+        kind: 'runtime',
+        code: 'INVALID_AGENT_TOOLS',
+        statement: context.statement,
+        message: `${usageLabel} tools.maxRounds must be a non-negative integer.`,
+      })
+    }
+    maxRounds = parsed
+  }
+
+  const allowRaw = value.allow
+  if (allowRaw != null && (!Array.isArray(allowRaw) || allowRaw.some((item) => typeof item !== 'string' || !item.trim()))) {
+    throw nextvError({
+      line: context.line,
+      kind: 'runtime',
+      code: 'INVALID_AGENT_TOOLS',
+      statement: context.statement,
+      message: `${usageLabel} tools.allow must be an array of non-empty strings.`,
+    })
+  }
+  const allow = Array.isArray(allowRaw)
+    ? [...new Set(allowRaw.map((name) => String(name).trim()).filter(Boolean))]
+    : []
+
+  let timeoutMs = 0
+  if (Object.prototype.hasOwnProperty.call(value, 'timeoutMs')) {
+    const parsed = Number(value.timeoutMs)
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      throw nextvError({
+        line: context.line,
+        kind: 'runtime',
+        code: 'INVALID_AGENT_TOOLS',
+        statement: context.statement,
+        message: `${usageLabel} tools.timeoutMs must be a non-negative integer.`,
+      })
+    }
+    timeoutMs = parsed
+  }
+
+  let denyOnUnknownTool = true
+  if (Object.prototype.hasOwnProperty.call(value, 'denyOnUnknownTool')) {
+    if (typeof value.denyOnUnknownTool !== 'boolean') {
+      throw nextvError({
+        line: context.line,
+        kind: 'runtime',
+        code: 'INVALID_AGENT_TOOLS',
+        statement: context.statement,
+        message: `${usageLabel} tools.denyOnUnknownTool must be a boolean.`,
+      })
+    }
+    denyOnUnknownTool = value.denyOnUnknownTool
+  }
+
+  if (modeRaw === 'governed' && allow.length === 0) {
+    throw nextvError({
+      line: context.line,
+      kind: 'runtime',
+      code: 'INVALID_AGENT_TOOLS',
+      statement: context.statement,
+      message: `${usageLabel} tools.allow must include at least one tool when mode is "governed".`,
+    })
+  }
+
+  return {
+    mode: modeRaw,
+    maxRounds,
+    allow,
+    timeoutMs,
+    denyOnUnknownTool,
+  }
+}
+
 function formatOutputContent(value, format, context) {
   if (format === 'interaction') {
     return toJsonText(value, context, 'output interaction')
@@ -2167,7 +2277,7 @@ function buildFunctions(options, runtimeContext) {
           kind: 'runtime',
           code: 'INVALID_AGENT_ARGUMENT',
           statement,
-          message: `agent() received unsupported named argument "${key}". Use: agent, prompt, instructions, messages, format, returns, validate, decide, retry_on_contract_violation, on_contract_violation.`,
+          message: `agent() received unsupported named argument "${key}". Use: agent, prompt, instructions, messages, tools, format, returns, validate, decide, retry_on_contract_violation, on_contract_violation.`,
         })
       }
 
@@ -2177,6 +2287,7 @@ function buildFunctions(options, runtimeContext) {
       const instructions = coerceTextValue(positional[2] ?? named?.instructions, context, 'agent() instructions').trim()
       const messages = normalizeAgentMessagesValue(named?.messages, context)
       const format = String(named?.format ?? '').trim().toLowerCase()
+      const toolsPolicy = normalizeAgentToolsPolicy(named?.tools ?? null, context, 'agent()')
 
       if (!agentName) {
         runtimeUnavailable('AGENT_NAME_REQUIRED', 'agent() requires an agent profile name.')
@@ -2285,6 +2396,7 @@ function buildFunctions(options, runtimeContext) {
           prompt,
           instructions: finalInstructions,
           messages,
+          tools: toolsPolicy,
           format: effectiveFormat,
           returns,
           validate,
@@ -2302,6 +2414,7 @@ function buildFunctions(options, runtimeContext) {
         prompt,
         instructions: finalInstructions,
         messages,
+        tools: toolsPolicy,
         format: effectiveFormat,
         returns,
         validate,
@@ -2315,6 +2428,9 @@ function buildFunctions(options, runtimeContext) {
         statement,
         sourcePath,
         sourceLine,
+        onGovernedToolEvent: async (toolEvent) => {
+          await runtimeContext.emitEvent(toolEvent, { line, sourcePath, sourceLine })
+        },
       })
 
       if (callResult && typeof callResult === 'object' && callResult.__nextv_contract_violation__ === true) {
@@ -2394,7 +2510,7 @@ function buildFunctions(options, runtimeContext) {
           kind: 'runtime',
           code: 'INVALID_MODEL_ARGUMENT',
           statement,
-          message: `model() received unsupported named argument "${key}". Use: model, prompt, instructions, messages, format, returns, validate, retry_on_contract_violation, on_contract_violation.`,
+          message: `model() received unsupported named argument "${key}". Use: model, prompt, instructions, messages, tools, format, returns, validate, retry_on_contract_violation, on_contract_violation.`,
         })
       }
 
@@ -2404,6 +2520,7 @@ function buildFunctions(options, runtimeContext) {
       const instructions = coerceTextValue(positional[2] ?? named?.instructions, context, 'model() instructions').trim()
       const messages = normalizeAgentMessagesValue(named?.messages, context)
       const format = String(named?.format ?? '').trim().toLowerCase()
+      const toolsPolicy = normalizeAgentToolsPolicy(named?.tools ?? null, context, 'model()')
 
       if (!modelName) {
         runtimeUnavailable('MODEL_NAME_REQUIRED', 'model() requires a model name as first argument.')
@@ -2472,6 +2589,7 @@ function buildFunctions(options, runtimeContext) {
           prompt,
           instructions,
           messages,
+          tools: toolsPolicy,
           format: effectiveFormat,
           returns,
           validate,
@@ -2488,6 +2606,7 @@ function buildFunctions(options, runtimeContext) {
         prompt,
         instructions,
         messages,
+        tools: toolsPolicy,
         format: effectiveFormat,
         returns,
         validate,
@@ -2500,6 +2619,9 @@ function buildFunctions(options, runtimeContext) {
         statement,
         sourcePath,
         sourceLine,
+        onGovernedToolEvent: async (toolEvent) => {
+          await runtimeContext.emitEvent(toolEvent, { line, sourcePath, sourceLine })
+        },
       })
 
       if (callResult && typeof callResult === 'object' && callResult.__nextv_contract_violation__ === true) {

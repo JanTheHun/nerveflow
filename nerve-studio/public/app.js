@@ -60,6 +60,7 @@ const storageKeys = {
   nextVIngressControlsVisible: 'local-agent.nextv.ingressControlsVisible',
   nextVRuntimeTarget: 'local-agent.nextv.runtimeTarget',
   nextVAttachWsUrl: 'local-agent.nextv.attachWsUrl',
+  nextVAttachStartOverride: 'local-agent.nextv.attachStartOverride',
   nextVGraphDirection: 'local-agent.nextv.graphDirection',
   nextVControlOverlay: 'local-agent.nextv.controlOverlay',
   nextVShowControlBranches: 'local-agent.nextv.showControlBranches',
@@ -358,7 +359,10 @@ const scriptOpenFileLabel = document.getElementById('script-open-file-label')
 const openFileTabs = document.getElementById('open-file-tabs')
 const toggleNextVFilesBtn = document.getElementById('toggle-nextv-files-btn')
 const nextVWorkspaceDirInput = document.getElementById('nextv-workspace-dir')
+const nextVOpenWorkspaceBtn = document.getElementById('nextv-open-workspace-btn')
 const nextVEntrypointInput = document.getElementById('nextv-entrypoint')
+const nextVAttachStartOverrideLabel = document.getElementById('nextv-attach-start-override-label')
+const nextVAttachStartOverrideInput = document.getElementById('nextv-attach-start-override')
 const nextVAutoSaveInput = document.getElementById('nextv-autosave')
 const nextVEventValueInput = document.getElementById('nextv-event-value')
 const nextVEventTypeInput = document.getElementById('nextv-event-type')
@@ -1074,6 +1078,10 @@ import {
   nextVAttachStatus,
   nextVAttachWsUrlInput,
   nextVAttachWsUrlLabel,
+  nextVAttachStartOverrideInput,
+  nextVAttachStartOverrideLabel,
+  nextVOpenWorkspaceBtn,
+  nextVWorkspaceDirInput,
   nextVRuntimeTargetInput,
   nextVRuntimeTargetState,
   nextVShowIngressToggle,
@@ -1531,6 +1539,54 @@ export function getNextVAttachWsUrl() {
   return normalizeNextVAttachWsUrl(nextVRuntimeTargetState.attachWsUrl)
 }
 
+export function isNextVAttachStartOverrideEnabled() {
+  return nextVAttachStartOverrideInput?.checked === true
+}
+
+function syncNextVAttachStartOverrideUi(showAttachControls) {
+  if (nextVAttachStartOverrideLabel) {
+    nextVAttachStartOverrideLabel.hidden = !showAttachControls
+  }
+}
+
+function syncNextVAttachRuntimeOwnershipUi() {
+  const isAttachMode = getNextVRuntimeTarget() === 'attach'
+  const lockToAttachedRuntime = isAttachMode && !isNextVAttachStartOverrideEnabled()
+  const lockHint = lockToAttachedRuntime
+    ? 'Controlled by attached runtime. Enable override to edit locally.'
+    : ''
+
+  if (nextVWorkspaceDirInput) {
+    nextVWorkspaceDirInput.readOnly = lockToAttachedRuntime
+    nextVWorkspaceDirInput.classList.toggle('attach-runtime-owned', lockToAttachedRuntime)
+    nextVWorkspaceDirInput.title = lockHint
+  }
+
+  if (nextVEntrypointInput) {
+    nextVEntrypointInput.readOnly = lockToAttachedRuntime
+    nextVEntrypointInput.classList.toggle('attach-runtime-owned', lockToAttachedRuntime)
+    nextVEntrypointInput.title = lockHint
+  }
+
+  if (nextVOpenWorkspaceBtn) {
+    nextVOpenWorkspaceBtn.disabled = lockToAttachedRuntime
+    nextVOpenWorkspaceBtn.title = lockHint
+  }
+}
+
+export function setNextVAttachStartOverrideEnabled(value, options = {}) {
+  const { persist = true } = options
+  const enabled = value === true
+  if (nextVAttachStartOverrideInput) {
+    nextVAttachStartOverrideInput.checked = enabled
+  }
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVAttachStartOverride, enabled ? '1' : '0')
+  }
+  syncNextVAttachRuntimeOwnershipUi()
+  setNextVRunControls()
+}
+
 export function syncNextVAttachWsUrlControls() {
   const showAttachControls = getNextVRuntimeTarget() === 'attach'
   if (nextVAttachWsUrlLabel) {
@@ -1544,6 +1600,8 @@ export function syncNextVAttachWsUrlControls() {
   if (nextVAttachControls) {
     nextVAttachControls.hidden = !showAttachControls
   }
+  syncNextVAttachStartOverrideUi(showAttachControls)
+  syncNextVAttachRuntimeOwnershipUi()
   syncNextVAttachSessionUi()
 }
 
@@ -1832,9 +1890,12 @@ export function updateRemoteModeBadge() {
 }
 
 export function setNextVRunControls() {
-  const hasEntrypoint = Boolean(normalizeRelativePath(nextVEntrypointInput?.value ?? ''))
   const isExternalMode = nextVRuntimeTargetState.target === 'external'
   const isAttachMode = nextVRuntimeTargetState.target === 'attach'
+  const attachOverrideEnabled = isNextVAttachStartOverrideEnabled()
+  const hasEntrypoint = isAttachMode && !attachOverrideEnabled
+    ? Boolean(normalizeRelativePath(remoteRuntimeEntrypointPath ?? ''))
+    : Boolean(normalizeRelativePath(nextVEntrypointInput?.value ?? ''))
   const attachBlocksControl = isAttachMode && nextVAttachSessionState.attached !== true
   const remoteBlocksControl = attachBlocksControl || (isRemoteMode && !isExternalMode && (!isRemoteControlMode || !isRemoteRuntimeConnected))
   
@@ -8952,6 +9013,9 @@ export function renderCanonicalNextVEvents(events) {
         `[nextv:tool_call] tool=${toolName}${detailSuffix} ${summarizeToolCallArgs(event.args)}`,
         'step'
       )
+      if (event.args != null) {
+        appendNextVDebugRow('[nextv:tool_call:args]', toPrettyJson(event.args))
+      }
       continue
     }
 
@@ -8989,6 +9053,9 @@ export function renderCanonicalNextVEvents(events) {
         `[nextv:tool_result] tool=${toolName} ${summarizeToolResultPayload(event.result)}`,
         'result'
       )
+      if (event.result != null) {
+        appendNextVDebugRow('[nextv:tool_result:detail]', toPrettyJson(event.result))
+      }
       continue
     }
 
@@ -9157,6 +9224,8 @@ import {
   nextVEventsPausedBuffer,
   nextVEventsOutput,
   outputSection,
+  remoteRuntimeEntrypointPath,
+  remoteRuntimeWorkspaceDir,
   remoteTransport,
   scriptSection,
   scriptVSplit1,
@@ -9172,6 +9241,7 @@ import {
   setNextVImagesOpen,
   buildNextVApiPath,
   getNextVAttachWsUrl,
+  isNextVAttachStartOverrideEnabled,
   syncNextVAttachSessionUi,
   getSelectedNextVInputChannel,
   setNextVMode,
@@ -9252,6 +9322,19 @@ function buildNextVAttachApiPath(pathname) {
   return `${pathname}?${params.toString()}`
 }
 
+function normalizeEntrypointForWorkspace(entrypointPathRaw, workspaceDirRaw) {
+  const entrypointPath = normalizeRelativePath(entrypointPathRaw)
+  if (!entrypointPath) return ''
+
+  const workspaceDir = normalizeNextVWorkspaceDir(workspaceDirRaw)
+  if (!workspaceDir) return entrypointPath
+  if (entrypointPath === workspaceDir) return ''
+  if (entrypointPath.startsWith(`${workspaceDir}/`)) {
+    return entrypointPath.slice(workspaceDir.length + 1)
+  }
+  return entrypointPath
+}
+
 function readToolErrorMessageFromRuntimeEvent(runtimeEvent) {
   if (!runtimeEvent || typeof runtimeEvent !== 'object') return ''
   if (String(runtimeEvent?.type ?? '').trim() !== 'tool_result') return ''
@@ -9301,12 +9384,13 @@ export async function attachNextVRuntime() {
     }
 
     const remoteWorkspaceDir = String(data?.remoteRuntimeWorkspaceDir ?? data?.workspaceDir ?? '').trim()
-    const remoteEntrypointPath = String(data?.remoteRuntimeEntrypointPath ?? data?.entrypointPath ?? '').trim()
+    const remoteEntrypointPathRaw = String(data?.remoteRuntimeEntrypointPath ?? data?.entrypointPath ?? '').trim()
     if (nextVWorkspaceDirInput && remoteWorkspaceDir) {
       nextVWorkspaceDirInput.value = remoteWorkspaceDir === '.' ? '' : remoteWorkspaceDir
     }
-    if (nextVEntrypointInput && remoteEntrypointPath) {
-      nextVEntrypointInput.value = remoteEntrypointPath
+    if (nextVEntrypointInput && remoteEntrypointPathRaw) {
+      const normalizedEntrypoint = normalizeEntrypointForWorkspace(remoteEntrypointPathRaw, remoteWorkspaceDir)
+      nextVEntrypointInput.value = normalizedEntrypoint
       saveNextVEntrypoint()
     }
 
@@ -9759,7 +9843,7 @@ export async function syncNextVRuntimeState() {
 
 export async function runNextVRuntime() {
   const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
-  const entrypointPath = normalizeRelativePath(nextVEntrypointInput?.value ?? '')
+  const entrypointPath = normalizeEntrypointForWorkspace(nextVEntrypointInput?.value ?? '', workspaceDir)
   if (!entrypointPath) {
     setStatus('nextv entrypoint required', 'responding')
     return
@@ -9816,8 +9900,13 @@ export async function killNextVRuntime() {
 }
 
 export async function startNextVRuntime() {
-  const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
-  const entrypointPath = normalizeRelativePath(nextVEntrypointInput?.value ?? '')
+  const isAttachLockedToRuntime = nextVRuntimeTargetState.target === 'attach' && !isNextVAttachStartOverrideEnabled()
+  const localWorkspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
+  const localEntrypointPath = normalizeEntrypointForWorkspace(nextVEntrypointInput?.value ?? '', localWorkspaceDir)
+  const runtimeWorkspaceDir = normalizeNextVWorkspaceDir(remoteRuntimeWorkspaceDir ?? '')
+  const runtimeEntrypointPath = normalizeEntrypointForWorkspace(remoteRuntimeEntrypointPath ?? '', runtimeWorkspaceDir)
+  const workspaceDir = isAttachLockedToRuntime ? (runtimeWorkspaceDir || localWorkspaceDir) : localWorkspaceDir
+  const entrypointPath = isAttachLockedToRuntime ? (runtimeEntrypointPath || localEntrypointPath) : localEntrypointPath
   const emitTrace = true
   const emitTraceState = true
   if (!entrypointPath) {
@@ -9835,7 +9924,9 @@ export async function startNextVRuntime() {
     clearTracePanel({ silent: true })
     clearNextVEventsOutput()
     clearNextVConsoleOutput()
-    await ensureNextVEntrypointVisible({ logLoaded: true, warnOnDirty: true })
+    if (!isAttachLockedToRuntime) {
+      await ensureNextVEntrypointVisible({ logLoaded: true, warnOnDirty: true })
+    }
     const res = await fetch(buildNextVApiPath('/api/nextv/start'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -12162,6 +12253,7 @@ import {
   setNextVIngressControlsVisible,
   setNextVRuntimeTarget,
   setNextVAttachWsUrl,
+  setNextVAttachStartOverrideEnabled,
   toggleNextVIngressControlsSetting,
   setDeclaredExternalChannels,
   setNextVInputTab,
@@ -12286,6 +12378,8 @@ export function initLayoutState() {
   setNextVIngressControlsVisible(ingressControlsVisible, { persist: false })
   setNextVRuntimeTarget(nextVRuntimeTargetState.target, { persist: false, sync: false })
   setNextVAttachWsUrl(nextVRuntimeTargetState.attachWsUrl, { persist: false, sync: false })
+  const attachOverrideStored = localStorage.getItem(storageKeys.nextVAttachStartOverride) === '1'
+  setNextVAttachStartOverrideEnabled(attachOverrideStored, { persist: false })
   const drawerStored = localStorage.getItem(storageKeys.nextVTreeDrawerOpen)
   setNextVFileDrawerOpen(drawerStored !== '0', { persist: false })
 
@@ -12376,6 +12470,7 @@ Object.assign(window, {
   setNextVStateDiffTab,
   setNextVRuntimeTarget,
   setNextVAttachWsUrl,
+  setNextVAttachStartOverrideEnabled,
   attachNextVRuntime,
   detachNextVRuntime,
   setUserIOPanelOpen,

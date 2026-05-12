@@ -40,6 +40,10 @@ import {
   nextVAttachStatus,
   nextVAttachWsUrlInput,
   nextVAttachWsUrlLabel,
+  nextVAttachStartOverrideInput,
+  nextVAttachStartOverrideLabel,
+  nextVOpenWorkspaceBtn,
+  nextVWorkspaceDirInput,
   nextVRuntimeTargetInput,
   nextVRuntimeTargetState,
   nextVShowIngressToggle,
@@ -497,6 +501,54 @@ export function getNextVAttachWsUrl() {
   return normalizeNextVAttachWsUrl(nextVRuntimeTargetState.attachWsUrl)
 }
 
+export function isNextVAttachStartOverrideEnabled() {
+  return nextVAttachStartOverrideInput?.checked === true
+}
+
+function syncNextVAttachStartOverrideUi(showAttachControls) {
+  if (nextVAttachStartOverrideLabel) {
+    nextVAttachStartOverrideLabel.hidden = !showAttachControls
+  }
+}
+
+function syncNextVAttachRuntimeOwnershipUi() {
+  const isAttachMode = getNextVRuntimeTarget() === 'attach'
+  const lockToAttachedRuntime = isAttachMode && !isNextVAttachStartOverrideEnabled()
+  const lockHint = lockToAttachedRuntime
+    ? 'Controlled by attached runtime. Enable override to edit locally.'
+    : ''
+
+  if (nextVWorkspaceDirInput) {
+    nextVWorkspaceDirInput.readOnly = lockToAttachedRuntime
+    nextVWorkspaceDirInput.classList.toggle('attach-runtime-owned', lockToAttachedRuntime)
+    nextVWorkspaceDirInput.title = lockHint
+  }
+
+  if (nextVEntrypointInput) {
+    nextVEntrypointInput.readOnly = lockToAttachedRuntime
+    nextVEntrypointInput.classList.toggle('attach-runtime-owned', lockToAttachedRuntime)
+    nextVEntrypointInput.title = lockHint
+  }
+
+  if (nextVOpenWorkspaceBtn) {
+    nextVOpenWorkspaceBtn.disabled = lockToAttachedRuntime
+    nextVOpenWorkspaceBtn.title = lockHint
+  }
+}
+
+export function setNextVAttachStartOverrideEnabled(value, options = {}) {
+  const { persist = true } = options
+  const enabled = value === true
+  if (nextVAttachStartOverrideInput) {
+    nextVAttachStartOverrideInput.checked = enabled
+  }
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVAttachStartOverride, enabled ? '1' : '0')
+  }
+  syncNextVAttachRuntimeOwnershipUi()
+  setNextVRunControls()
+}
+
 export function syncNextVAttachWsUrlControls() {
   const showAttachControls = getNextVRuntimeTarget() === 'attach'
   if (nextVAttachWsUrlLabel) {
@@ -510,6 +562,8 @@ export function syncNextVAttachWsUrlControls() {
   if (nextVAttachControls) {
     nextVAttachControls.hidden = !showAttachControls
   }
+  syncNextVAttachStartOverrideUi(showAttachControls)
+  syncNextVAttachRuntimeOwnershipUi()
   syncNextVAttachSessionUi()
 }
 
@@ -798,9 +852,12 @@ export function updateRemoteModeBadge() {
 }
 
 export function setNextVRunControls() {
-  const hasEntrypoint = Boolean(normalizeRelativePath(nextVEntrypointInput?.value ?? ''))
   const isExternalMode = nextVRuntimeTargetState.target === 'external'
   const isAttachMode = nextVRuntimeTargetState.target === 'attach'
+  const attachOverrideEnabled = isNextVAttachStartOverrideEnabled()
+  const hasEntrypoint = isAttachMode && !attachOverrideEnabled
+    ? Boolean(normalizeRelativePath(remoteRuntimeEntrypointPath ?? ''))
+    : Boolean(normalizeRelativePath(nextVEntrypointInput?.value ?? ''))
   const attachBlocksControl = isAttachMode && nextVAttachSessionState.attached !== true
   const remoteBlocksControl = attachBlocksControl || (isRemoteMode && !isExternalMode && (!isRemoteControlMode || !isRemoteRuntimeConnected))
   

@@ -32,6 +32,7 @@ import {
   setNextVIngressControlsVisible,
   setNextVRuntimeTarget,
   setNextVAttachWsUrl,
+  setNextVAttachStartOverrideEnabled,
   toggleNextVIngressControlsSetting,
   setDeclaredExternalChannels,
   setNextVInputTab,
@@ -156,6 +157,8 @@ export function initLayoutState() {
   setNextVIngressControlsVisible(ingressControlsVisible, { persist: false })
   setNextVRuntimeTarget(nextVRuntimeTargetState.target, { persist: false, sync: false })
   setNextVAttachWsUrl(nextVRuntimeTargetState.attachWsUrl, { persist: false, sync: false })
+  const attachOverrideStored = localStorage.getItem(storageKeys.nextVAttachStartOverride) === '1'
+  setNextVAttachStartOverrideEnabled(attachOverrideStored, { persist: false })
   const drawerStored = localStorage.getItem(storageKeys.nextVTreeDrawerOpen)
   setNextVFileDrawerOpen(drawerStored !== '0', { persist: false })
 
@@ -246,6 +249,7 @@ Object.assign(window, {
   setNextVStateDiffTab,
   setNextVRuntimeTarget,
   setNextVAttachWsUrl,
+  setNextVAttachStartOverrideEnabled,
   attachNextVRuntime,
   detachNextVRuntime,
   setUserIOPanelOpen,

@@ -28,6 +28,23 @@
           hx-on::after-request="onChatCleared(event)"
         >clear chat</button>
       </div>
+      <div class="nextv-attach-header-bar">
+        <input
+          id="nextv-attach-ws-url"
+          class="nextv-attach-url-input"
+          type="text"
+          placeholder="ws://127.0.0.1:4190/api/runtime/ws"
+          autocomplete="off"
+          spellcheck="false"
+          hidden
+          oninput="setNextVAttachWsUrl(this.value)"
+        />
+        <div id="nextv-attach-controls" class="nextv-attach-controls" hidden>
+          <button id="nextv-attach-btn" type="button" onclick="attachNextVRuntime()">attach</button>
+          <button id="nextv-detach-btn" type="button" onclick="detachNextVRuntime()" disabled>detach</button>
+          <span id="nextv-attach-status" class="nextv-attach-status" data-state="detached">detached</span>
+        </div>
+      </div>
       <details id="settings-menu" class="settings-menu">
         <summary id="settings-btn" class="settings-btn" title="settings" aria-label="settings">⚙</summary>
         <div class="settings-popover" role="menu" aria-label="settings">
@@ -38,21 +55,6 @@
             <option value="external">external runtime process</option>
             <option value="attach">attach WS runtime</option>
           </select>
-          <label id="nextv-attach-ws-url-label" class="settings-item" for="nextv-attach-ws-url">attach ws url</label>
-          <input
-            id="nextv-attach-ws-url"
-            class="settings-item"
-            type="text"
-            placeholder="ws://127.0.0.1:4190/api/runtime/ws"
-            autocomplete="off"
-            spellcheck="false"
-            oninput="setNextVAttachWsUrl(this.value)"
-          />
-          <div id="nextv-attach-controls" class="settings-item nextv-attach-controls" hidden>
-            <button id="nextv-attach-btn" type="button" onclick="attachNextVRuntime()">attach</button>
-            <button id="nextv-detach-btn" type="button" onclick="detachNextVRuntime()" disabled>detach</button>
-            <span id="nextv-attach-status" class="nextv-attach-status" data-state="detached">detached</span>
-          </div>
           <label class="settings-item" for="nextv-editor-tab-size">editor tab size</label>
           <select id="nextv-editor-tab-size" class="settings-item" onchange="setNextVEditorTabSize(this.value)">
             <option value="2">2 spaces</option>
@@ -89,9 +91,13 @@
         </div>
         <div class="footer-row nextv-config-row">
           <input id="nextv-workspace-dir" type="text" placeholder="workspace folder (optional)" autocomplete="off" spellcheck="false" />
-          <button type="button" onclick="openNextVWorkspace()">open</button>
+          <button type="button" id="nextv-open-workspace-btn" onclick="openNextVWorkspace()">open</button>
           <span class="row-label">entrypoint</span>
           <input id="nextv-entrypoint" type="text" placeholder="path/to/main.nrv (or .wfs)" autocomplete="off" spellcheck="false" />
+          <label id="nextv-attach-start-override-label" class="check-label nextv-attach-start-override" hidden>
+            <input id="nextv-attach-start-override" type="checkbox" onchange="setNextVAttachStartOverrideEnabled(this.checked)">
+            override attached path
+          </label>
           <button type="button" id="nextv-run-btn" onclick="runNextVRuntime()" hidden>run</button>
           <button type="button" id="nextv-start-btn" onclick="startNextVRuntime()">start</button>
           <button type="button" id="nextv-stop-btn" onclick="stopNextVRuntime()" disabled>stop</button>

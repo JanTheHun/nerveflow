@@ -64,6 +64,7 @@ export const storageKeys = {
   nextVIngressControlsVisible: 'local-agent.nextv.ingressControlsVisible',
   nextVRuntimeTarget: 'local-agent.nextv.runtimeTarget',
   nextVAttachWsUrl: 'local-agent.nextv.attachWsUrl',
+  nextVAttachStartOverride: 'local-agent.nextv.attachStartOverride',
   nextVGraphDirection: 'local-agent.nextv.graphDirection',
   nextVControlOverlay: 'local-agent.nextv.controlOverlay',
   nextVShowControlBranches: 'local-agent.nextv.showControlBranches',
@@ -363,7 +364,10 @@ export const scriptOpenFileLabel = document.getElementById('script-open-file-lab
 export const openFileTabs = document.getElementById('open-file-tabs')
 export const toggleNextVFilesBtn = document.getElementById('toggle-nextv-files-btn')
 export const nextVWorkspaceDirInput = document.getElementById('nextv-workspace-dir')
+export const nextVOpenWorkspaceBtn = document.getElementById('nextv-open-workspace-btn')
 export const nextVEntrypointInput = document.getElementById('nextv-entrypoint')
+export const nextVAttachStartOverrideLabel = document.getElementById('nextv-attach-start-override-label')
+export const nextVAttachStartOverrideInput = document.getElementById('nextv-attach-start-override')
 export const nextVAutoSaveInput = document.getElementById('nextv-autosave')
 export const nextVEventValueInput = document.getElementById('nextv-event-value')
 export const nextVEventTypeInput = document.getElementById('nextv-event-type')

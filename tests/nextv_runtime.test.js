@@ -1690,6 +1690,83 @@ test('agent() rejects unsupported named arguments such as validation', async () 
   )
 })
 
+test('agent() accepts tools policy and forwards it to host adapter', async () => {
+  const calls = []
+  await runNextVScript('result = agent("classifier", "route this", tools={ mode: "governed", maxRounds: 8, allow: ["search", "fetch"] })', {
+    callAgent: async ({ tools }) => {
+      calls.push({ tools })
+      return 'ok'
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].tools, {
+    mode: 'governed',
+    maxRounds: 8,
+    allow: ['search', 'fetch'],
+    timeoutMs: 0,
+    denyOnUnknownTool: true,
+  })
+})
+
+test('agent() tools mode defaults to disabled when omitted', async () => {
+  const calls = []
+  await runNextVScript('result = agent("classifier", "route this")', {
+    callAgent: async ({ tools }) => {
+      calls.push({ tools })
+      return 'ok'
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].tools, {
+    mode: 'disabled',
+    maxRounds: 0,
+    allow: [],
+    timeoutMs: 0,
+    denyOnUnknownTool: true,
+  })
+})
+
+test('agent() rejects invalid tools mode', async () => {
+  await assert.rejects(
+    () => runNextVScript('result = agent("classifier", "route this", tools={ mode: "delegated" })', {
+      callAgent: async () => 'ok',
+    }),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_AGENT_TOOLS')
+      return true
+    },
+  )
+})
+
+test('agent() rejects invalid tools timeoutMs', async () => {
+  await assert.rejects(
+    () => runNextVScript('result = agent("classifier", "route this", tools={ mode: "governed", allow: ["search"], timeoutMs: -1 })', {
+      callAgent: async () => 'ok',
+    }),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_AGENT_TOOLS')
+      return true
+    },
+  )
+})
+
+test('agent() rejects invalid tools denyOnUnknownTool type', async () => {
+  await assert.rejects(
+    () => runNextVScript('result = agent("classifier", "route this", tools={ mode: "governed", allow: ["search"], denyOnUnknownTool: "no" })', {
+      callAgent: async () => 'ok',
+    }),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_AGENT_TOOLS')
+      return true
+    },
+  )
+})
+
 test('agent() rejects non-object non-array returns contract', async () => {
   await assert.rejects(
     () => runNextVScript('result = agent("classifier", "route this", returns=42)', {

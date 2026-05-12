@@ -127,6 +127,76 @@ function normalizeAgentTransportResult(result) {
   }
 }
 
+function normalizeRequestedToolsPolicy(rawTools) {
+  if (!rawTools || typeof rawTools !== 'object' || Array.isArray(rawTools)) {
+    return {
+      mode: 'disabled',
+      maxRounds: 0,
+      allow: [],
+      timeoutMs: 0,
+      denyOnUnknownTool: true,
+    }
+  }
+
+  const mode = String(rawTools.mode ?? '').trim().toLowerCase() || 'disabled'
+  const maxRoundsRaw = Number(rawTools.maxRounds)
+  const maxRounds = Number.isInteger(maxRoundsRaw) && maxRoundsRaw >= 0 ? maxRoundsRaw : 8
+  const allow = Array.isArray(rawTools.allow)
+    ? [...new Set(rawTools.allow.map((name) => String(name ?? '').trim()).filter(Boolean))]
+    : []
+  const timeoutMsRaw = Number(rawTools.timeoutMs)
+  const timeoutMs = Number.isInteger(timeoutMsRaw) && timeoutMsRaw >= 0 ? timeoutMsRaw : 0
+  const denyOnUnknownTool = rawTools.denyOnUnknownTool === false ? false : true
+
+  return { mode, maxRounds, allow, timeoutMs, denyOnUnknownTool }
+}
+
+function buildGovernedToolDefinitions(toolNames) {
+  return toolNames.map((name) => ({
+    type: 'function',
+    function: {
+      name,
+      description: `Runtime governed tool: ${name}`,
+      parameters: {
+        type: 'object',
+        additionalProperties: true,
+      },
+    },
+  }))
+}
+
+function extractTransportToolCalls(transportResult) {
+  const toolCalls = transportResult?.metadata?.toolCalls
+  if (!Array.isArray(toolCalls)) return []
+  return toolCalls
+    .map((call, index) => {
+      if (!call || typeof call !== 'object') return null
+      const id = String(call.id ?? `tool-call-${index + 1}`).trim() || `tool-call-${index + 1}`
+      const name = String(call.name ?? '').trim()
+      if (!name) return null
+
+      const argsRaw = call.argumentsRaw != null
+        ? String(call.argumentsRaw)
+        : (call.argumentsText != null ? String(call.argumentsText) : '{}')
+
+      let args
+      try {
+        const parsed = JSON.parse(argsRaw || '{}')
+        args = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+      } catch {
+        args = {}
+      }
+
+      return {
+        id,
+        name,
+        argsRaw,
+        args,
+      }
+    })
+    .filter(Boolean)
+}
+
 /**
  * Creates a standard nextV host adapter for a given workspace session.
  *
@@ -310,7 +380,7 @@ export function createHostAdapter({
       throw new Error(`Tool "${toolName}" is not available in this host yet.`)
     },
 
-    callAgent: async ({ agent, model: modelRaw, prompt, instructions, messages, format, returns, validate, decide, retry_on_contract_violation, on_contract_violation, event, line, statement, sourcePath, sourceLine }) => {
+    callAgent: async ({ agent, model: modelRaw, prompt, instructions, messages, tools, format, returns, validate, decide, retry_on_contract_violation, on_contract_violation, state, locals, event, line, statement, sourcePath, sourceLine, onGovernedToolEvent }) => {
       const agentName = String(agent ?? '').trim()
       const directModel = String(modelRaw ?? '').trim()
 
@@ -362,6 +432,25 @@ export function createHostAdapter({
       const inputMessages = Array.isArray(messages) ? messages : []
 
       const retryLimit = Number.isInteger(retry_on_contract_violation) ? Math.max(0, retry_on_contract_violation) : 0
+      const requestedToolsPolicy = normalizeRequestedToolsPolicy(tools)
+
+      const profileAllowedTools = profileTools
+        .map((name) => String(name ?? '').trim())
+        .filter(Boolean)
+
+      const requestedAllow = requestedToolsPolicy.allow
+      const effectiveAllow = profileAllowedTools.length > 0
+        ? (requestedAllow.length > 0
+          ? requestedAllow.filter((name) => profileAllowedTools.includes(name))
+          : profileAllowedTools)
+        : requestedAllow
+
+      const governedToolsEnabled = requestedToolsPolicy.mode === 'governed' && effectiveAllow.length > 0
+      const governedMaxRounds = governedToolsEnabled ? requestedToolsPolicy.maxRounds : 0
+      const governedTimeoutMs = governedToolsEnabled ? requestedToolsPolicy.timeoutMs : 0
+      const governedDenyOnUnknownTool = governedToolsEnabled ? requestedToolsPolicy.denyOnUnknownTool !== false : true
+      const governedToolDefinitions = governedToolsEnabled ? buildGovernedToolDefinitions(effectiveAllow) : []
+
       let lastViolation = null
       let previousViolationKey = null
 
@@ -417,6 +506,7 @@ export function createHostAdapter({
               wirePayload: {
                 model: resolvedModel,
                 messages: chatMessages,
+                ...(governedToolsEnabled ? { tools: governedToolDefinitions } : {}),
                 ...(resolvedTransportConfig !== null ? { transport: resolvedTransportConfig } : {}),
               },
             }
@@ -459,12 +549,151 @@ export function createHostAdapter({
         }
 
         let transportResult
+        let resolvedOutput = null
+        const governedSummary = {
+          mode: governedToolsEnabled ? 'governed' : 'disabled',
+          maxRounds: governedMaxRounds,
+          timeoutMs: governedTimeoutMs,
+          denyOnUnknownTool: governedDenyOnUnknownTool,
+          rounds: 0,
+          toolCalls: 0,
+          deniedToolCalls: 0,
+          toolsUsed: [],
+        }
+        const chatHistory = [...chatMessages]
         try {
-          const callPayload = { model: resolvedModel, messages: chatMessages }
-          if (resolvedTransportConfig !== null) {
-            callPayload.transport = resolvedTransportConfig
+          if (!governedToolsEnabled) {
+            const callPayload = { model: resolvedModel, messages: chatMessages }
+            if (resolvedTransportConfig !== null) {
+              callPayload.transport = resolvedTransportConfig
+            }
+            transportResult = await callAgent(callPayload)
+            resolvedOutput = normalizeAgentTransportResult(transportResult)
+          } else {
+            for (let round = 0; round <= governedMaxRounds; round += 1) {
+              if (governedTimeoutMs > 0 && (Date.now() - callStartedAt) > governedTimeoutMs) {
+                throw new Error(`${callLabel} exceeded tools.timeoutMs (${governedTimeoutMs}).`)
+              }
+              governedSummary.rounds = round + 1
+              const callPayload = {
+                model: resolvedModel,
+                messages: chatHistory,
+                tools: governedToolDefinitions,
+              }
+              if (resolvedTransportConfig !== null) {
+                callPayload.transport = resolvedTransportConfig
+              }
+
+              transportResult = await callAgent(callPayload)
+              const currentOutput = normalizeAgentTransportResult(transportResult)
+              const toolCalls = extractTransportToolCalls(transportResult)
+
+              if (toolCalls.length === 0) {
+                resolvedOutput = currentOutput
+                break
+              }
+
+              if (round >= governedMaxRounds) {
+                throw new Error(`${callLabel} exceeded tools.maxRounds (${governedMaxRounds}).`)
+              }
+
+              const assistantToolCalls = []
+              const pendingToolMessages = []
+              for (const toolCall of toolCalls) {
+                governedSummary.toolCalls += 1
+                if (!effectiveAllow.includes(toolCall.name)) {
+                  governedSummary.deniedToolCalls += 1
+                  if (governedDenyOnUnknownTool) {
+                    throw new Error(`${callLabel} requested tool "${toolCall.name}" which is not allowed by tools policy.`)
+                  }
+
+                  assistantToolCalls.push({
+                    id: toolCall.id,
+                    type: 'function',
+                    function: {
+                      name: toolCall.name,
+                      arguments: toolCall.argsRaw,
+                    },
+                  })
+
+                  pendingToolMessages.push({
+                    role: 'tool',
+                    tool_call_id: toolCall.id,
+                    name: toolCall.name,
+                    content: JSON.stringify({ error: `Tool "${toolCall.name}" denied by runtime tools policy.` }),
+                  })
+                  continue
+                }
+
+                if (typeof onGovernedToolEvent === 'function') {
+                  await onGovernedToolEvent({
+                    type: 'tool_call',
+                    tool: toolCall.name,
+                    args: { positional: [], named: toolCall.args ?? {} },
+                    executionRole: 'agent-governed',
+                  })
+                }
+
+                const toolResult = await adapter.callTool({
+                  name: toolCall.name,
+                  args: toolCall.args,
+                  positional: [],
+                  state,
+                  event,
+                  locals,
+                  line,
+                  statement,
+                })
+
+                if (typeof onGovernedToolEvent === 'function') {
+                  await onGovernedToolEvent({
+                    type: 'tool_result',
+                    tool: toolCall.name,
+                    result: toolResult,
+                    executionRole: 'agent-governed',
+                  })
+                }
+
+                if (!governedSummary.toolsUsed.includes(toolCall.name)) {
+                  governedSummary.toolsUsed.push(toolCall.name)
+                }
+
+                assistantToolCalls.push({
+                  id: toolCall.id,
+                  type: 'function',
+                  function: {
+                    name: toolCall.name,
+                    arguments: toolCall.argsRaw,
+                  },
+                })
+
+                let toolResultContent
+                try {
+                  toolResultContent = JSON.stringify(toolResult)
+                } catch {
+                  toolResultContent = JSON.stringify({ result: String(toolResult ?? '') })
+                }
+
+                pendingToolMessages.push({
+                  role: 'tool',
+                  tool_call_id: toolCall.id,
+                  name: toolCall.name,
+                  content: toolResultContent,
+                })
+              }
+
+              chatHistory.push({
+                role: 'assistant',
+                content: currentOutput.text,
+                tool_calls: assistantToolCalls,
+              })
+              chatHistory.push(...pendingToolMessages)
+            }
+
+            if (!resolvedOutput) {
+              throw new Error(`${callLabel} did not produce a final response.`)
+            }
           }
-          transportResult = await callAgent(callPayload)
         } finally {
           if (slowWarningTimer) {
             clearTimeout(slowWarningTimer)
@@ -472,12 +701,30 @@ export function createHostAdapter({
         }
 
         const elapsedMs = Math.max(0, Date.now() - callStartedAt)
-        const { text: raw, metadata } = normalizeAgentTransportResult(transportResult)
-        const metadataWithTiming = (
-          metadata && typeof metadata === 'object'
-            ? { ...metadata, elapsedMs, slowWarningEmitted }
-            : (slowWarningEmitted ? { elapsedMs, slowWarningEmitted } : null)
-        )
+        const { text: raw, metadata } = resolvedOutput
+        const shouldAttachToolsSummary = governedToolsEnabled
+        const hasBaseMetadata = metadata && typeof metadata === 'object'
+        const metadataWithTiming = (hasBaseMetadata || slowWarningEmitted || shouldAttachToolsSummary)
+          ? {
+            ...((hasBaseMetadata) ? metadata : {}),
+            elapsedMs,
+            slowWarningEmitted,
+            ...(shouldAttachToolsSummary
+              ? {
+                tools: {
+                  mode: 'governed',
+                  maxRounds: governedMaxRounds,
+                  timeoutMs: governedTimeoutMs,
+                  denyOnUnknownTool: governedDenyOnUnknownTool,
+                  rounds: governedSummary.rounds,
+                  toolCalls: governedSummary.toolCalls,
+                  deniedToolCalls: governedSummary.deniedToolCalls,
+                  toolsUsed: governedSummary.toolsUsed,
+                },
+              }
+              : {}),
+          }
+          : null
         const metadataWithDebug = requestDebugPayload
           ? {
               ...(metadataWithTiming && typeof metadataWithTiming === 'object' ? metadataWithTiming : {}),

@@ -60,6 +60,7 @@ const storageKeys = {
   nextVIngressControlsVisible: 'local-agent.nextv.ingressControlsVisible',
   nextVRuntimeTarget: 'local-agent.nextv.runtimeTarget',
   nextVAttachWsUrl: 'local-agent.nextv.attachWsUrl',
+  nextVAttachStartOverride: 'local-agent.nextv.attachStartOverride',
   nextVGraphDirection: 'local-agent.nextv.graphDirection',
   nextVControlOverlay: 'local-agent.nextv.controlOverlay',
   nextVShowControlBranches: 'local-agent.nextv.showControlBranches',
@@ -358,7 +359,10 @@ const scriptOpenFileLabel = document.getElementById('script-open-file-label')
 const openFileTabs = document.getElementById('open-file-tabs')
 const toggleNextVFilesBtn = document.getElementById('toggle-nextv-files-btn')
 const nextVWorkspaceDirInput = document.getElementById('nextv-workspace-dir')
+const nextVOpenWorkspaceBtn = document.getElementById('nextv-open-workspace-btn')
 const nextVEntrypointInput = document.getElementById('nextv-entrypoint')
+const nextVAttachStartOverrideLabel = document.getElementById('nextv-attach-start-override-label')
+const nextVAttachStartOverrideInput = document.getElementById('nextv-attach-start-override')
 const nextVAutoSaveInput = document.getElementById('nextv-autosave')
 const nextVEventValueInput = document.getElementById('nextv-event-value')
 const nextVEventTypeInput = document.getElementById('nextv-event-type')

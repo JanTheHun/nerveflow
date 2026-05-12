@@ -157,6 +157,18 @@ header {
   gap: 8px;
 }
 
+.nextv-attach-header-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.nextv-attach-url-input {
+  width: 320px;
+  max-width: min(42vw, 520px);
+}
+
 .sep { color: var(--border); }
 
 /* Workspace layout */
@@ -3336,6 +3348,17 @@ body.mode-nextv #nextv-stop-btn:hover {
   color: var(--dim);
   cursor: pointer;
   white-space: nowrap;
+}
+
+.nextv-attach-start-override {
+  margin-left: 4px;
+  font-size: 11px;
+}
+
+body.mode-nextv .nextv-config-row input.attach-runtime-owned {
+  color: #9fb3c8;
+  border-color: #33485d;
+  background: #0e151c;
 }
 
 .dim { color: var(--dim); }

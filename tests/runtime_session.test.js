@@ -213,6 +213,66 @@ test('callAgent supports direct model calls without profile lookup', async () =>
   assert.equal(calls[0].messages[0].content, 'ping')
 })
 
+test('callAgent resolves direct model aliases through models.map and transports.map', async () => {
+  const calls = []
+  const adapter = createHostAdapter({
+    workspaceDir: {
+      absolutePath: '/workspace',
+      relativePath: '.',
+    },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: {} },
+      models: {
+        map: {
+          'gemini-model': { model: 'gemini-2.5-flash-lite', transport: 'gemini' },
+        },
+      },
+      transports: {
+        map: {
+          gemini: {
+            provider: 'openai_compat',
+            baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+            apiKey: 'test-key',
+          },
+        },
+      },
+      operators: { map: {} },
+    },
+    callAgent: async ({ model, messages, transport }) => {
+      calls.push({ model, messages, transport })
+      return 'pong'
+    },
+    defaultModel: 'default-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({
+      absolutePath: `${baseDir}/${pathRaw}`,
+      relativePath: pathRaw,
+    }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  const response = await adapter.callAgent({
+    model: 'gemini-model',
+    prompt: 'ping',
+  })
+
+  assert.deepEqual(response, { value: 'pong', metadata: null })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].model, 'gemini-2.5-flash-lite')
+  assert.equal(calls[0].messages.length, 1)
+  assert.equal(calls[0].messages[0].role, 'user')
+  assert.equal(calls[0].messages[0].content, 'ping')
+  assert.deepEqual(calls[0].transport, {
+    provider: 'openai_compat',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    apiKey: 'test-key',
+  })
+})
+
 test('callAgent includes images when event payload provides images', async () => {
   const calls = []
   const adapter = createHostAdapter({
@@ -704,8 +764,15 @@ test('callAgent includes request payload metadata when captureAgentRequestPayloa
 
   assert.equal(result.value, 'ok')
   assert.equal(result.metadata.provider, 'test')
+  assert.equal(result.metadata.request.targetKind, 'agent')
+  assert.equal(result.metadata.request.target, 'chat')
   assert.equal(result.metadata.request.model, 'llama3')
+  assert.equal(result.metadata.request.resolvedModel, 'llama3')
+  assert.equal(result.metadata.request.resolvedModelAlias, 'llama3')
   assert.equal(result.metadata.request.messageCount, 2)
+  assert.equal(result.metadata.request.instructions, 'profile instructions\n\ncall instructions')
+  assert.equal(result.metadata.request.prompt, 'play Nirvana')
+  assert.deepEqual(result.metadata.request.toolNames, [])
   assert.equal(Array.isArray(result.metadata.request.messages), true)
   assert.equal(result.metadata.request.messages[0].role, 'system')
   assert.match(result.metadata.request.messages[0].content, /profile instructions/)

@@ -339,6 +339,26 @@ export function createHostAdapter({
     return result
   }
 
+  function resolveDirectModelConfig(modelNameRaw) {
+    const modelName = String(modelNameRaw ?? '').trim()
+    if (!modelName) return null
+
+    const config = readWorkspaceConfig()
+    const modelsMap = config?.models?.map ?? {}
+    const transportsMap = config?.transports?.map ?? {}
+    const modelConfig = modelsMap[modelName]
+    if (!modelConfig || typeof modelConfig !== 'object') return null
+
+    const transportLabel = String(modelConfig?.transport ?? '').trim()
+    const modelId = String(modelConfig?.model ?? '').trim() || modelName
+    return {
+      name: modelName,
+      id: modelId,
+      transport: transportLabel,
+      transportConfig: transportLabel ? (transportsMap[transportLabel] ?? null) : null,
+    }
+  }
+
   const adapter = {
     clearConfigCache: () => {
       resolvedAgentConfigCache.clear()
@@ -385,9 +405,11 @@ export function createHostAdapter({
       const directModel = String(modelRaw ?? '').trim()
 
       let resolvedModel = directModel || defaultModel || ''
+      let resolvedModelAlias = directModel || ''
       let profileInstructions = ''
       let profileTools = []
       let resolvedTransportConfig = null
+      let resolvedTransportName = ''
       let configSource = 'env'
 
       if (agentName) {
@@ -404,9 +426,20 @@ export function createHostAdapter({
 
         if (resolved.source === 'config') {
           resolvedModel = resolved.model.id
+          resolvedModelAlias = resolved.model.name
           profileInstructions = resolved.agent.instructions
           profileTools = resolved.agent.tools
           resolvedTransportConfig = resolved.transportConfig
+          resolvedTransportName = resolved.model.transport
+          configSource = 'config'
+        }
+      } else if (directModel) {
+        const resolvedDirectModel = resolveDirectModelConfig(directModel)
+        if (resolvedDirectModel) {
+          resolvedModel = resolvedDirectModel.id
+          resolvedModelAlias = resolvedDirectModel.name
+          resolvedTransportConfig = resolvedDirectModel.transportConfig
+          resolvedTransportName = resolvedDirectModel.transport
           configSource = 'config'
         }
       }
@@ -496,11 +529,25 @@ export function createHostAdapter({
 
         const requestDebugPayload = captureAgentRequestPayload === true
           ? {
+              targetKind: agentName ? 'agent' : 'model',
+              target: agentName || directModel || resolvedModel,
               model: resolvedModel,
+              resolvedModel: resolvedModel,
+              resolvedModelAlias: resolvedModelAlias || undefined,
+              transportName: resolvedTransportName || undefined,
+              transportProvider: String(resolvedTransportConfig?.provider ?? '').trim() || undefined,
+              configSource,
               attempt: attemptNum + 1,
               retryLimit,
               messageCount: chatMessages.length,
+              instructions: baseInstructions,
               systemInstructions: baseSystemInstructions,
+              prompt: String(prompt ?? ''),
+              returns: returns ?? null,
+              decide: decide ?? null,
+              validate: String(validate ?? ''),
+              retry_on_contract_violation: retryLimit,
+              toolNames: governedToolsEnabled ? [...effectiveAllow] : [],
               contractGuidance,
               messages: chatMessages,
               wirePayload: {

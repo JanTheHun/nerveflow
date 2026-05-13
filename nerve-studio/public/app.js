@@ -239,11 +239,6 @@ const userOutputFilterState = {
 }
 
 // --- DOM helpers ---
-const transcript = document.getElementById('transcript')
-const promptInput = document.getElementById('prompt-input')
-const sendBtn = document.getElementById('send-btn')
-const imageCount = document.getElementById('image-count')
-const modelInput = document.getElementById('model-input')
 const scriptPathInput = document.getElementById('script-path')
 const scriptInputs = document.getElementById('script-inputs')
 const scriptLineGutter = document.getElementById('script-line-gutter')
@@ -1144,10 +1139,6 @@ import {
   ensureNextVEntrypointVisible
 } from './13_layout.js'
 
-export function isScriptMode() {
-  return document.body.classList.contains('mode-script')
-}
-
 export function isNextVMode() {
   return document.body.classList.contains('mode-nextv')
 }
@@ -1815,14 +1806,6 @@ export function setAppMode(mode) {
     applyStoredLeftPanelHeights()
     setNextVDevConsoleOpen(nextVPanelState.devConsoleOpen, { persist: false })
   })
-}
-
-export function setChatMode() {
-  setNextVMode({ ensureEntrypoint: false, refreshGraph: false })
-}
-
-export function setScriptMode() {
-  setNextVMode({ ensureEntrypoint: false, refreshGraph: false })
 }
 
 export function setNextVMode(options = {}) {
@@ -9232,11 +9215,9 @@ import {
   scriptVSplit2,
   splitter,
   storageKeys,
-  transcript,
   workspace
 } from './state.js'
 import {
-  isScriptMode,
   isNextVMode,
   setNextVImagesOpen,
   buildNextVApiPath,
@@ -10258,7 +10239,7 @@ export function setupSplitter() {
   if (!splitter || !workspace) return
 
   splitter.addEventListener('mousedown', (event) => {
-    if ((!isScriptMode() && !isNextVMode()) || window.innerWidth <= 760) return
+    if (!isNextVMode() || window.innerWidth <= 760) return
     _setIsResizing(true)
     document.body.classList.add('is-resizing')
     event.preventDefault()
@@ -10502,10 +10483,6 @@ export function setupVerticalSplitters() {
   })
 }
 
-export function scrollToBottom() {
-  transcript.scrollTop = transcript.scrollHeight
-}
-
 // Insert or append status bar just above footer
 export function ensureStatusBar() {
   let bar = document.getElementById('status-bar')
@@ -10531,15 +10508,12 @@ import {
   activeScriptRunId,
   dirtyEditsCache,
   editorLayoutState,
-  imageCount,
   isBusy,
-  modelInput,
   nextVAutoSaveInput,
   nextVEntrypointInput,
   nextVFileState,
   nextVWorkspaceDirInput,
   paneAssignments,
-  promptInput,
   scriptCache,
   scriptDirtyBadge,
   scriptEditorState,
@@ -10548,9 +10522,7 @@ import {
   scriptOutput,
   scriptPathInput,
   scriptView,
-  sendBtn,
   tracePanelState,
-  transcript,
   userInputText,
   workspace
 } from './state.js'
@@ -10558,16 +10530,13 @@ import {
   updateScriptRunControls,
   normalizeDeclaredEffectChannels,
   setDeclaredEffectChannels,
-  maybeRenderToolVisual,
   sendNextVUserText
 } from './02_user_output.js'
 import {
-  isScriptMode,
   isNextVMode,
   setActiveScriptRunId,
   normalizeDeclaredExternalChannels,
   setDeclaredExternalChannels,
-  setScriptMode,
   setNextVRunControls,
   clearNextVEventsOutput,
   clearNextVConsoleOutput
@@ -10628,7 +10597,6 @@ import {
   closeNextVStream
 } from './11_state_panels.js'
 import {
-  scrollToBottom,
   ensureStatusBar
 } from './12_stream.js'
 
@@ -10641,79 +10609,14 @@ export function setStatus(text, cls = '') {
 // --- Session init ---
 export async function loadSession() {
   try {
-    const res = await fetch('/api/session')
-    const data = await res.json()
-    if (data.model) modelInput.value = data.model
-    imageCount.textContent = `${data.imageCount} attached`
+    await fetch('/api/session')
   } catch {
     // best-effort
   }
 }
 
-// --- Transcript rendering ---
-export function appendUserTurn(prompt) {
-  const turn = document.createElement('div')
-  turn.className = 'turn'
-  turn.innerHTML = `<div class="turn-role user">you</div><div class="turn-content">${escapeHtml(prompt)}</div>`
-  transcript.appendChild(turn)
-  scrollToBottom()
-  return turn
-}
-
-export function appendAssistantTurn() {
-  const turn = document.createElement('div')
-  turn.className = 'turn'
-  const roleEl = document.createElement('div')
-  roleEl.className = 'turn-role assistant'
-  roleEl.textContent = 'assistant'
-  const contentEl = document.createElement('div')
-  contentEl.className = 'turn-content'
-  contentEl.id = 'active-content'
-  turn.appendChild(roleEl)
-  turn.appendChild(contentEl)
-  transcript.appendChild(turn)
-  scrollToBottom()
-  return contentEl
-}
-
-export function appendThinkingBlock() {
-  const block = document.createElement('div')
-  block.className = 'thinking-block'
-  block.id = 'active-thinking'
-  const label = document.createElement('div')
-  label.className = 'thinking-label'
-  label.textContent = 'thinking…'
-  const content = document.createElement('div')
-  content.id = 'active-thinking-content'
-  block.appendChild(label)
-  block.appendChild(content)
-  transcript.appendChild(block)
-  scrollToBottom()
-  return content
-}
-
-export function appendToolRow(name, args) {
-  const row = document.createElement('div')
-  row.className = 'tool-row'
-  row.id = `tool-${name}-pending`
-  const argsStr = typeof args === 'string' ? args : JSON.stringify(args)
-  row.innerHTML = `<span class="tool-name">${escapeHtml(name)}</span><span class="tool-args">${escapeHtml(argsStr)}</span>`
-  transcript.appendChild(row)
-  scrollToBottom()
-  return row
-}
-
-export function fillToolResult(name, result) {
-  const row = document.getElementById(`tool-${name}-pending`)
-  if (row) {
-    const resultEl = document.createElement('span')
-    resultEl.innerHTML = `<span class="tool-result-label">→</span> <span class="tool-result">${escapeHtml(result)}</span>`
-    row.appendChild(resultEl)
-    row.removeAttribute('id')
-  }
-}
-
-export function appendConfirmBlock(id, description, container = transcript) {
+export function appendConfirmBlock(id, description, container = scriptLogs) {
+  if (!container) return
   const block = document.createElement('div')
   block.className = 'confirm-block'
   block.id = `confirm-${id}`
@@ -10724,11 +10627,7 @@ export function appendConfirmBlock(id, description, container = transcript) {
       <button class="deny-btn" onclick="resolveConfirm('${escapeHtml(id)}', false, this)">deny</button>
     </div>`
   container.appendChild(block)
-  if (container === transcript) {
-    scrollToBottom()
-  } else {
-    container.scrollTop = container.scrollHeight
-  }
+  container.scrollTop = container.scrollHeight
 }
 
 export async function submitScriptInputResponse(scriptRunId, value, meta = {}) {
@@ -10774,11 +10673,24 @@ export function appendInputRequestNotice(payload) {
 }
 
 export function appendErrorRow(message) {
-  const row = document.createElement('div')
-  row.className = 'turn'
-  row.innerHTML = `<div class="turn-role system-msg">error</div><div class="turn-content">${escapeHtml(message)}</div>`
-  transcript.appendChild(row)
-  scrollToBottom()
+  appendScriptLogRow(`[error] ${String(message ?? 'unknown error')}`, 'error')
+}
+
+export async function resolveConfirm(id, allow, btn) {
+  const container = btn?.closest('.confirm-block')
+  container?.querySelectorAll('button')?.forEach((b) => { b.disabled = true })
+  try {
+    await fetch('/api/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, allow }),
+    })
+    const label = container?.querySelector('.confirm-desc')
+    if (label) label.textContent += allow ? ' -> allowed' : ' -> denied'
+    setStatus(allow ? 'confirmation sent: allowed' : 'confirmation sent: denied')
+  } catch (err) {
+    appendErrorRow(`Confirm failed: ${err.message}`)
+  }
 }
 
 export function appendScriptLogRow(line, cls = '') {
@@ -11316,278 +11228,6 @@ export function parseSSEBuffer(buffer) {
   return { events, remaining: buffer.slice(pos) }
 }
 
-export function tokenizeCommandArgs(rawArgs) {
-  const tokens = []
-  const source = String(rawArgs ?? '')
-  const regex = /"([^"]*)"|'([^']*)'|(\S+)/g
-  let match
-  while ((match = regex.exec(source)) !== null) {
-    tokens.push(match[1] ?? match[2] ?? match[3])
-  }
-  return tokens
-}
-
-export function parseScriptChatCommand(prompt) {
-  const text = String(prompt ?? '').trim()
-  if (!text.toLowerCase().startsWith('/script')) return null
-
-  const rest = text.slice('/script'.length).trim()
-  const tokens = tokenizeCommandArgs(rest)
-  if (tokens.length === 0) {
-    return { error: 'Usage: /script <path> [--yes|-y]' }
-  }
-
-  let autoAllow = false
-  const pathTokens = []
-  for (const token of tokens) {
-    const normalized = String(token).toLowerCase()
-    if (normalized === '--yes' || normalized === '-y') {
-      autoAllow = true
-      continue
-    }
-    pathTokens.push(token)
-  }
-
-  const filePath = pathTokens.join(' ').trim()
-  if (!filePath) {
-    return { error: 'Script path required. Usage: /script <path> [--yes|-y]' }
-  }
-
-  return { filePath, autoAllow }
-}
-
-// --- Chat submit ---
-export async function handleSubmit(e) {
-  e.preventDefault()
-  const prompt = promptInput.value.trim()
-  if (!prompt) return
-
-  const scriptCommand = parseScriptChatCommand(prompt)
-  if (scriptCommand) {
-    if (scriptCommand.error) {
-      setStatus(scriptCommand.error, 'responding')
-      return
-    }
-    if (isBusy) {
-      setStatus('busy: wait for current task', 'responding')
-      return
-    }
-
-    appendUserTurn(prompt)
-    promptInput.value = ''
-
-    const autoAllowInput = document.getElementById('script-autoallow')
-    const previousAutoAllow = Boolean(autoAllowInput?.checked)
-    if (scriptPathInput) {
-      scriptPathInput.value = scriptCommand.filePath
-    }
-    if (autoAllowInput) {
-      autoAllowInput.checked = scriptCommand.autoAllow
-    }
-
-    try {
-      await runScript()
-    } finally {
-      if (autoAllowInput) {
-        autoAllowInput.checked = previousAutoAllow
-      }
-    }
-    return
-  }
-
-  if (isBusy) return
-
-  _setIsBusy(true)
-  setNextVRunControls()
-  sendBtn.disabled = true
-  promptInput.disabled = true
-
-  appendUserTurn(prompt)
-  promptInput.value = ''
-
-  const contentEl = appendAssistantTurn()
-  let thinkingEl = null
-  let buffer = ''
-
-  try {
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt }),
-    })
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'request failed' }))
-      appendErrorRow(err.error ?? 'request failed')
-      return
-    }
-
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const { events, remaining } = parseSSEBuffer(buffer)
-      buffer = remaining
-
-      for (const { event, data } of events) {
-        let payload
-        try { payload = JSON.parse(data) } catch { continue }
-        handleSSEEvent(event, payload, contentEl, (el) => { thinkingEl = el })
-      }
-    }
-  } catch (err) {
-    appendErrorRow(err.message)
-  } finally {
-    _setIsBusy(false)
-    setNextVRunControls()
-    sendBtn.disabled = false
-    promptInput.disabled = false
-    promptInput.focus()
-    // Clean up any lingering thinking block
-    const activeThinking = document.getElementById('active-thinking')
-    if (activeThinking) activeThinking.removeAttribute('id')
-    setStatus('idle')
-  }
-}
-
-export function handleSSEEvent(event, payload, contentEl, setThinkingEl) {
-  switch (event) {
-    case 'status':
-      setStatus(payload.status ?? '', payload.status ?? '')
-      break
-    case 'thinking_start': {
-      const el = appendThinkingBlock()
-      setThinkingEl(el)
-      break
-    }
-    case 'thinking': {
-      const el = document.getElementById('active-thinking-content')
-      if (el) el.textContent += payload.chunk ?? ''
-      scrollToBottom()
-      break
-    }
-    case 'thinking_end': {
-      const block = document.getElementById('active-thinking')
-      if (block) block.removeAttribute('id')
-      break
-    }
-    case 'content':
-      if (contentEl) {
-        contentEl.textContent += payload.chunk ?? ''
-        scrollToBottom()
-      }
-      break
-    case 'tool_call':
-      appendToolRow(payload.name ?? 'tool', payload.args)
-      break
-    case 'tool_result':
-      fillToolResult(payload.name ?? 'tool', payload.result)
-      maybeRenderToolVisual(payload.name, payload.result)
-      break
-    case 'confirm_request':
-      appendConfirmBlock(payload.id, payload.description)
-      break
-    case 'error':
-      appendErrorRow(payload.message ?? 'unknown error')
-      break
-    case 'done':
-      // handled by finally
-      break
-  }
-}
-
-// --- Tool confirmation ---
-export async function resolveConfirm(id, allow, btn) {
-  btn.closest('.confirm-block').querySelectorAll('button').forEach(b => b.disabled = true)
-  try {
-    await fetch('/api/confirm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, allow }),
-    })
-    const label = btn.closest('.confirm-block').querySelector('.confirm-desc')
-    if (label) label.textContent += allow ? ' → allowed' : ' → denied'
-    setStatus(allow ? 'confirmation sent: allowed' : 'confirmation sent: denied')
-  } catch (err) {
-    appendErrorRow(`Confirm failed: ${err.message}`)
-  }
-}
-
-// --- Model ---
-export async function setModel() {
-  const model = modelInput.value.trim()
-  if (!model) return
-  try {
-    const res = await fetch('/api/model', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model }),
-    })
-    const data = await res.json()
-    if (data.model) modelInput.value = data.model
-    setStatus(`model: ${data.model ?? model}`)
-  } catch (err) {
-    appendErrorRow(`Model switch failed: ${err.message}`)
-  }
-}
-
-// --- htmx callbacks ---
-export function onChatCleared(event) {
-  if (event.detail.successful) {
-    transcript.innerHTML = ''
-    imageCount.textContent = '0 attached'
-    setStatus('chat cleared')
-    return
-  }
-
-  const xhr = event.detail?.xhr
-  if (!xhr || xhr.status !== 409) return
-
-  let payload = {}
-  try {
-    payload = JSON.parse(xhr.responseText || '{}')
-  } catch {
-    payload = {}
-  }
-
-  if (!payload?.requiresDiscard) {
-    setStatus('failed to clear chat', 'responding')
-    return
-  }
-
-  const shouldDiscard = window.confirm('Discard unsaved chat changes and clear session?')
-  if (!shouldDiscard) {
-    setStatus('clear cancelled')
-    return
-  }
-
-  fetch('/api/chat/clear', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ discardUnsaved: true }),
-  })
-    .then((res) => {
-      if (!res.ok) throw new Error('clear failed')
-      transcript.innerHTML = ''
-      imageCount.textContent = '0 attached'
-      setStatus('chat cleared')
-    })
-    .catch((err) => {
-      appendErrorRow(`Clear failed: ${err.message}`)
-      setStatus('failed to clear chat', 'responding')
-    })
-}
-
-export function onImagesCleared(event) {
-  if (event.detail.successful) {
-    imageCount.textContent = '0 attached'
-    setStatus('images cleared')
-  }
-}
-
 export function isValidScriptInputKey(key) {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(key ?? ''))
 }
@@ -11648,37 +11288,6 @@ export function collectScriptInputVars() {
   return vars
 }
 
-// --- Image upload ---
-export async function uploadImage(input) {
-  const file = input.files?.[0]
-  if (!file) return
-  input.value = ''
-  const reader = new FileReader()
-  reader.onload = async (e) => {
-    const dataUrl = e.target.result
-    // Strip the data URI prefix: data:<mime>;base64,<data>
-    const base64 = dataUrl.split(',')[1]
-    if (!base64) return appendErrorRow('Could not read image data.')
-    try {
-      const res = await fetch('/api/images/add', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ base64, name: file.name }),
-      })
-      const data = await res.json()
-      if (res.ok) {
-        imageCount.textContent = `${data.imageCount} attached`
-        setStatus(`image added: ${file.name}`)
-      } else {
-        appendErrorRow(data.error ?? 'Image upload failed.')
-      }
-    } catch (err) {
-      appendErrorRow(`Image upload failed: ${err.message}`)
-    }
-  }
-  reader.readAsDataURL(file)
-}
-
 export async function loadScriptPreview() {
   const filePath = scriptPathInput.value.trim()
   if (!filePath) {
@@ -11691,7 +11300,6 @@ export async function loadScriptPreview() {
     return
   }
 
-  setScriptMode()
   setStatus('loading script…', 'thinking')
 
   try {
@@ -11820,14 +11428,9 @@ export async function runScript(runOptions = {}) {
   try {
     _setIsBusy(true)
     setNextVRunControls()
-    sendBtn.disabled = true
-    promptInput.disabled = true
     _setActiveScriptAbortController(new AbortController())
     setActiveScriptRunId('')
     updateScriptRunControls()
-    if (!isNextVMode()) {
-      setScriptMode()
-    }
     clearScriptLogs()
     _setActiveScriptLine(null)
 
@@ -11936,19 +11539,8 @@ export async function runScript(runOptions = {}) {
     updateScriptRunControls()
     _setIsBusy(false)
     setNextVRunControls()
-    sendBtn.disabled = false
-    promptInput.disabled = false
-    promptInput.focus()
   }
 }
-
-// --- Keyboard shortcut ---
-promptInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    if (!isBusy) document.getElementById('chat-form').dispatchEvent(new Event('submit', { cancelable: true }))
-  }
-})
 
 if (userInputText) {
   userInputText.addEventListener('keydown', (e) => {
@@ -12191,15 +11783,10 @@ if (nextVAutoSaveInput) {
   })
 }
 
-// Model input: Enter = set
-modelInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') setModel()
-})
-
 document.addEventListener('keydown', (e) => {
   const key = String(e.key ?? '').toLowerCase()
   if (key !== 's' || (!e.ctrlKey && !e.metaKey)) return
-  if (!isScriptMode() && !isNextVMode()) return
+  if (!isNextVMode()) return
   e.preventDefault()
   if (isNextVMode()) {
     if (e.shiftKey) {
@@ -12209,7 +11796,6 @@ document.addEventListener('keydown', (e) => {
     saveNextVEntrypoint()
     return
   }
-  saveScriptBuffer()
 })
 
 window.addEventListener('beforeunload', () => {
@@ -12336,15 +11922,13 @@ import {
   openNextVWorkspace,
   addScriptInputRow,
   cancelScriptRun,
+  resolveConfirm,
   clearOutputPanel,
   clearScriptLogsPanel,
   loadScriptPreview,
   runScript,
   saveNextVEntrypoint,
   saveScriptBuffer,
-  setModel,
-  handleSubmit,
-  uploadImage
 } from './13_layout.js'
 
 export function initLayoutState() {
@@ -12512,6 +12096,7 @@ Object.assign(window, {
   // 13_layout.js
   addScriptInputRow,
   cancelScriptRun,
+  resolveConfirm,
   clearOutputPanel,
   clearScriptLogsPanel,
   loadScriptPreview,
@@ -12519,8 +12104,4 @@ Object.assign(window, {
   runScript,
   saveNextVEntrypoint,
   saveScriptBuffer,
-  setModel,
-  // 13_layout.js (additional)
-  handleSubmit,
-  uploadImage,
 })

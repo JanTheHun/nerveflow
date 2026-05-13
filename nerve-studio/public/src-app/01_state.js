@@ -239,11 +239,6 @@ const userOutputFilterState = {
 }
 
 // --- DOM helpers ---
-const transcript = document.getElementById('transcript')
-const promptInput = document.getElementById('prompt-input')
-const sendBtn = document.getElementById('send-btn')
-const imageCount = document.getElementById('image-count')
-const modelInput = document.getElementById('model-input')
 const scriptPathInput = document.getElementById('script-path')
 const scriptInputs = document.getElementById('script-inputs')
 const scriptLineGutter = document.getElementById('script-line-gutter')

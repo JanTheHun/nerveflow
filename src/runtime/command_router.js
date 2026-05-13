@@ -80,6 +80,11 @@ export function createRuntimeCommandRouter({
         data = runtimeCore.enqueue(payload)
       } else if (command.type === 'dispatch_ingress') {
         data = await runtimeCore.dispatchIngress(payload)
+      } else if (command.type === 'call_inspector_execute') {
+        if (typeof runtimeCore.callInspectorExecute !== 'function') {
+          throw new Error('call inspector execution is not available in this runtime host')
+        }
+        data = await runtimeCore.callInspectorExecute(payload)
       } else if (command.type === 'snapshot') {
         const snapshot = runtimeCore.getSnapshot()
         const status = typeof runtimeCore.getStatus === 'function'

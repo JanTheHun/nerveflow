@@ -16,6 +16,7 @@
  * - stop: Halt runtime
  * - enqueue_event: Feed input event to runtime
  * - dispatch_ingress: Dispatch ingress connector output into runtime queue
+ * - call_inspector_execute: Execute a structured direct model/agent call
  * - snapshot: Get current runtime state
  * - subscribe: Attach surface to runtime events
  * - unsubscribe: Detach surface from runtime events
@@ -48,6 +49,7 @@ const HOST_COMMAND_TYPES = Object.freeze([
   'stop',
   'enqueue_event',
   'dispatch_ingress',
+  'call_inspector_execute',
   'snapshot',
   'subscribe',
   'unsubscribe',

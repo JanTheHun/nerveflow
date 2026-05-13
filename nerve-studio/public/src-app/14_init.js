@@ -41,6 +41,8 @@ import {
   setNextVStateDiffTab,
   setUserIOPanelOpen,
   toggleNextVDevConsole,
+  initNextVCallInspectorPanelChrome,
+  toggleNextVCallInspectorPanel,
   toggleNextVFileDrawer,
   toggleNextVImagesOpen,
   toggleUserIOPanel
@@ -106,6 +108,9 @@ import {
   refreshNextVSnapshot,
   handleNextVImageInput,
   reloadNextVRuntimeConfig,
+  executeNextVCallInspector,
+  insertNextVCallInspectorSnippet,
+  initNextVCallInspector,
 } from './12_stream.js'
 import {
   loadSession,
@@ -115,15 +120,13 @@ import {
   openNextVWorkspace,
   addScriptInputRow,
   cancelScriptRun,
+  resolveConfirm,
   clearOutputPanel,
   clearScriptLogsPanel,
   loadScriptPreview,
   runScript,
   saveNextVEntrypoint,
   saveScriptBuffer,
-  setModel,
-  handleSubmit,
-  uploadImage
 } from './13_layout.js'
 
 export function initLayoutState() {
@@ -227,6 +230,8 @@ setupNextVUserIOSplitter()
 setupNextVImageDropzone()
 updateNextVEventImageUI()
 setupVerticalSplitters()
+initNextVCallInspectorPanelChrome()
+initNextVCallInspector()
 setupNextVEventsScrollListener()
 initLayoutState()
 initFileTreeCtxMenu()
@@ -254,6 +259,7 @@ Object.assign(window, {
   detachNextVRuntime,
   setUserIOPanelOpen,
   toggleNextVDevConsole,
+  toggleNextVCallInspectorPanel,
   toggleNextVFileDrawer,
   toggleNextVImagesOpen,
   toggleNextVIngressControlsSetting,
@@ -288,9 +294,12 @@ Object.assign(window, {
   sendNextVIngress,
   startNextVRuntime,
   stopNextVRuntime,
+  executeNextVCallInspector,
+  insertNextVCallInspectorSnippet,
   // 13_layout.js
   addScriptInputRow,
   cancelScriptRun,
+  resolveConfirm,
   clearOutputPanel,
   clearScriptLogsPanel,
   loadScriptPreview,
@@ -298,8 +307,4 @@ Object.assign(window, {
   runScript,
   saveNextVEntrypoint,
   saveScriptBuffer,
-  setModel,
-  // 13_layout.js (additional)
-  handleSubmit,
-  uploadImage,
 })

@@ -5,6 +5,7 @@ import {
   _setRemoteRuntimeWorkspaceDir,
   activeScriptRunId,
   fileManagerShell,
+  workspace,
   inputPanelState,
   isBusy,
   isRemoteControlMode,
@@ -54,6 +55,8 @@ import {
   nextVStateSnapshotPane,
   nextVStopBtn,
   nextVTabConsole,
+  nextVViewCallInspector,
+  nextVCallInspectorPanel,
   nextVTabEvents,
   nextVTabTrace,
   nextVUserIOSplitter,
@@ -105,10 +108,6 @@ import {
 import {
   ensureNextVEntrypointVisible
 } from './13_layout.js'
-
-export function isScriptMode() {
-  return document.body.classList.contains('mode-script')
-}
 
 export function isNextVMode() {
   return document.body.classList.contains('mode-nextv')
@@ -393,6 +392,190 @@ export function toggleNextVDevConsole() {
   setNextVDevConsoleOpen(!nextVPanelState.devConsoleOpen)
 }
 
+function getNextVCallInspectorPanelShell() {
+  if (workspace) return workspace
+  if (fileManagerShell) return fileManagerShell
+  return null
+}
+
+function getNextVCallInspectorPanelDefaultLayout() {
+  return { left: 12, top: 12, width: 760, height: 860 }
+}
+
+let nextVCallInspectorPanelLayoutState = null
+
+function readStoredNextVCallInspectorPanelLayout() {
+  const raw = String(localStorage.getItem(storageKeys.nextVCallInspectorPanelLayout) ?? '').trim()
+  if (!raw) return null
+
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
+function clampNextVCallInspectorPanelLayout(rect) {
+  const shell = getNextVCallInspectorPanelShell()
+  if (!shell) return null
+  const shellWidth = Math.max(320, shell.clientWidth || 0)
+  const shellHeight = Math.max(280, shell.clientHeight || 0)
+
+  const width = Math.max(520, Math.min(Number(rect?.width ?? 760), shellWidth - 8))
+  const height = Math.max(560, Math.min(Number(rect?.height ?? 860), shellHeight - 8))
+
+  // Keep part of the panel visible while allowing larger panels to move freely.
+  const minVisibleX = 120
+  const minVisibleY = 52
+  const minLeft = Math.min(0, shellWidth - width)
+  const maxLeft = Math.max(0, shellWidth - minVisibleX)
+  const minTop = Math.min(0, shellHeight - height)
+  const maxTop = Math.max(0, shellHeight - minVisibleY)
+  const left = Math.max(minLeft, Math.min(Number(rect?.left ?? 12), maxLeft))
+  const top = Math.max(minTop, Math.min(Number(rect?.top ?? 12), maxTop))
+
+  return { left, top, width, height }
+}
+
+function applyNextVCallInspectorPanelLayout(rect) {
+  if (!nextVCallInspectorPanel) return
+  const clamped = clampNextVCallInspectorPanelLayout(rect)
+  if (!clamped) return
+  nextVCallInspectorPanelLayoutState = { ...clamped }
+
+  nextVCallInspectorPanel.style.left = `${clamped.left}px`
+  nextVCallInspectorPanel.style.top = `${clamped.top}px`
+  nextVCallInspectorPanel.style.width = `${clamped.width}px`
+  nextVCallInspectorPanel.style.height = `${clamped.height}px`
+  nextVCallInspectorPanel.style.right = 'auto'
+}
+
+function persistNextVCallInspectorPanelLayout() {
+  const fallbackLayout = nextVCallInspectorPanelLayoutState || getNextVCallInspectorPanelDefaultLayout()
+  let layout = fallbackLayout
+
+  if (nextVCallInspectorPanel && !nextVCallInspectorPanel.hidden) {
+    const shell = getNextVCallInspectorPanelShell()
+    if (shell) {
+      const shellRect = shell.getBoundingClientRect()
+      const panelRect = nextVCallInspectorPanel.getBoundingClientRect()
+      layout = clampNextVCallInspectorPanelLayout({
+        left: panelRect.left - shellRect.left,
+        top: panelRect.top - shellRect.top,
+        width: panelRect.width,
+        height: panelRect.height,
+      }) || fallbackLayout
+    }
+  }
+
+  if (!layout) return
+  nextVCallInspectorPanelLayoutState = { ...layout }
+  localStorage.setItem(storageKeys.nextVCallInspectorPanelLayout, JSON.stringify(layout))
+}
+
+function restoreNextVCallInspectorPanelLayout() {
+  const storedLayout = readStoredNextVCallInspectorPanelLayout()
+  if (!storedLayout) {
+    applyNextVCallInspectorPanelLayout(getNextVCallInspectorPanelDefaultLayout())
+    return
+  }
+
+  applyNextVCallInspectorPanelLayout(storedLayout)
+}
+
+export function initNextVCallInspectorPanelChrome() {
+  if (!nextVCallInspectorPanel || nextVCallInspectorPanel.dataset.panelChromeBound === '1') return
+  nextVCallInspectorPanel.dataset.panelChromeBound = '1'
+
+  restoreNextVCallInspectorPanelLayout()
+
+  const header = nextVCallInspectorPanel.querySelector('.nextv-call-inspector-header')
+  if (header) {
+    header.style.cursor = 'grab'
+    header.addEventListener('mousedown', (event) => {
+      if (event.target.closest('button')) return
+      const shell = getNextVCallInspectorPanelShell()
+      if (!shell) return
+
+      const panelRect = nextVCallInspectorPanel.getBoundingClientRect()
+      const startOffsetX = event.clientX - panelRect.left
+      const startOffsetY = event.clientY - panelRect.top
+      nextVCallInspectorPanel.classList.add('is-dragging')
+      event.preventDefault()
+
+      const onMove = (moveEvent) => {
+        const shellRect = shell.getBoundingClientRect()
+        const nextLeft = moveEvent.clientX - shellRect.left - startOffsetX
+        const nextTop = moveEvent.clientY - shellRect.top - startOffsetY
+        applyNextVCallInspectorPanelLayout({
+          left: nextLeft,
+          top: nextTop,
+          width: nextVCallInspectorPanel.offsetWidth,
+          height: nextVCallInspectorPanel.offsetHeight,
+        })
+      }
+
+      const onUp = () => {
+        nextVCallInspectorPanel.classList.remove('is-dragging')
+        persistNextVCallInspectorPanelLayout()
+        document.removeEventListener('mousemove', onMove)
+        document.removeEventListener('mouseup', onUp)
+      }
+
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onUp)
+    })
+  }
+
+  if (typeof ResizeObserver === 'function') {
+    const observer = new ResizeObserver(() => {
+      if (nextVCallInspectorPanel.hidden) return
+      persistNextVCallInspectorPanelLayout()
+    })
+    observer.observe(nextVCallInspectorPanel)
+  }
+
+  window.addEventListener('resize', () => {
+    const storedLayout = readStoredNextVCallInspectorPanelLayout()
+    if (!storedLayout) return
+    applyNextVCallInspectorPanelLayout(storedLayout)
+  })
+
+  window.addEventListener('beforeunload', () => {
+    persistNextVCallInspectorPanelLayout()
+  })
+
+  window.requestAnimationFrame(() => {
+    restoreNextVCallInspectorPanelLayout()
+  })
+}
+
+export function toggleNextVCallInspectorPanel() {
+  if (!nextVCallInspectorPanel) return
+  initNextVCallInspectorPanelChrome()
+  const isOpen = !nextVCallInspectorPanel.hidden
+  if (isOpen) {
+    persistNextVCallInspectorPanelLayout()
+  }
+  nextVCallInspectorPanel.hidden = isOpen
+  nextVCallInspectorPanel.classList.toggle('is-active', !isOpen)
+  if (!isOpen) {
+    window.requestAnimationFrame(() => {
+      restoreNextVCallInspectorPanelLayout()
+    })
+  }
+  
+  if (nextVViewCallInspector) {
+    nextVViewCallInspector.classList.toggle('active', !isOpen)
+    nextVViewCallInspector.setAttribute('aria-selected', !isOpen ? 'true' : 'false')
+  }
+  
+  if (!isOpen) {
+    // Panel is now open, set focus
+    nextVCallInspectorPanel.focus()
+  }
+}
+
 export function clampNextVUserIOWidth(value) {
   const numeric = Number(value)
   const maxWidth = Math.max(340, Math.min(860, Math.round(window.innerWidth * 0.72)))
@@ -652,16 +835,22 @@ export function setNextVRuntimeTarget(value, options = {}) {
 }
 
 export function buildNextVApiPath(pathname) {
-  const params = new URLSearchParams()
+  const url = new URL(String(pathname ?? ''), window.location.origin)
+  const params = url.searchParams
   const runtimeTarget = getNextVRuntimeTarget()
   params.set('runtimeTarget', runtimeTarget)
-  if (runtimeTarget === 'attach' && nextVAttachSessionState.attached === true) {
+  if (runtimeTarget === 'attach') {
     const attachWsUrl = getNextVAttachWsUrl()
     if (attachWsUrl) {
       params.set('attachWsUrl', attachWsUrl)
+    } else {
+      params.delete('attachWsUrl')
     }
+  } else {
+    params.delete('attachWsUrl')
   }
-  return `${pathname}?${params.toString()}`
+  const query = params.toString()
+  return query ? `${url.pathname}?${query}` : url.pathname
 }
 
 export function normalizeDeclaredExternalChannels(rawChannels) {
@@ -779,14 +968,6 @@ export function setAppMode(mode) {
   })
 }
 
-export function setChatMode() {
-  setNextVMode({ ensureEntrypoint: false, refreshGraph: false })
-}
-
-export function setScriptMode() {
-  setNextVMode({ ensureEntrypoint: false, refreshGraph: false })
-}
-
 export function setNextVMode(options = {}) {
   const { ensureEntrypoint = true, refreshGraph = true, preserveViewport = false } = options
   setAppMode('nextv')
@@ -803,6 +984,11 @@ export function updateRemoteRuntimeIdentity(data, options = {}) {
   if (clear) {
     _setRemoteRuntimeWorkspaceDir('')
     _setRemoteRuntimeEntrypointPath('')
+    if (workspace) {
+      workspace.dispatchEvent(new CustomEvent('nextv:remote-workspace-identity', {
+        detail: { workspaceDir: '', entrypointPath: '' },
+      }))
+    }
     return
   }
 
@@ -813,8 +999,25 @@ export function updateRemoteRuntimeIdentity(data, options = {}) {
     data?.remoteRuntimeEntrypointPath ?? data?.entrypointPath ?? data?.snapshot?.entrypointPath ?? ''
   ).trim()
 
-  if (nextWorkspaceDir) _setRemoteRuntimeWorkspaceDir(nextWorkspaceDir)
+  if (nextWorkspaceDir) {
+    _setRemoteRuntimeWorkspaceDir(nextWorkspaceDir)
+    if (nextVRuntimeTargetState.target === 'attach' && nextVWorkspaceDirInput) {
+      const normalizedValue = nextWorkspaceDir === '.' ? '' : nextWorkspaceDir
+      if (String(nextVWorkspaceDirInput.value ?? '').trim() !== normalizedValue) {
+        nextVWorkspaceDirInput.value = normalizedValue
+      }
+    }
+  }
   if (nextEntrypointPath) _setRemoteRuntimeEntrypointPath(nextEntrypointPath)
+
+  if (workspace && (nextWorkspaceDir || nextEntrypointPath)) {
+    workspace.dispatchEvent(new CustomEvent('nextv:remote-workspace-identity', {
+      detail: {
+        workspaceDir: nextWorkspaceDir,
+        entrypointPath: nextEntrypointPath,
+      },
+    }))
+  }
 }
 
 export function updateRemoteModeBadge() {

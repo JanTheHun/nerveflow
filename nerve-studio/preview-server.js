@@ -17,6 +17,9 @@ import { fileURLToPath } from 'node:url'
 import {
   NextVEventRunner,
   appendAgentFormatInstructions,
+  buildAgentRetryPrompt,
+  buildDecideGuidance,
+  buildDecideRetryPrompt,
   buildAgentReturnContractGuidance,
   detectCycles,
   extractEventGraph,
@@ -24,6 +27,7 @@ import {
   parseNextVScript,
   runNextVScriptFromFile,
   validateAgentReturnContract,
+  validateDecideOutput,
   validateOutputContract,
 } from '../src/index.js'
 import {
@@ -547,6 +551,58 @@ function buildRemoteModeMetadata(runtimeTarget = 'embedded', url = null) {
   }
 }
 
+function buildResolvedCallSummary({
+  targetKind = 'agent',
+  target = '',
+  prompt = '',
+  instructions = '',
+  validate = 'coerce',
+  retryOnViolation = 0,
+  returnsContract = null,
+  decideContract = null,
+  requestMetadata = null,
+} = {}) {
+  const request = requestMetadata && typeof requestMetadata === 'object' ? requestMetadata : {}
+  const wirePayload = request.wirePayload && typeof request.wirePayload === 'object'
+    ? request.wirePayload
+    : {}
+  const wireTransport = wirePayload.transport && typeof wirePayload.transport === 'object'
+    ? wirePayload.transport
+    : {}
+
+  const resolvedModel = String(request.resolvedModel ?? request.model ?? wirePayload.model ?? '').trim()
+  const resolvedModelAlias = String(request.resolvedModelAlias ?? '').trim()
+  const transportName = String(request.transportName ?? '').trim()
+  const transportProvider = String(request.transportProvider ?? wireTransport.provider ?? '').trim()
+  const toolNames = Array.isArray(request.toolNames)
+    ? request.toolNames.map((value) => String(value ?? '').trim()).filter(Boolean)
+    : []
+  const messageCountRaw = Number(request.messageCount)
+  const messageCount = Number.isFinite(messageCountRaw)
+    ? Math.max(0, Math.round(messageCountRaw))
+    : undefined
+
+  return {
+    type: targetKind === 'model' ? 'model_call' : 'agent_call',
+    targetKind,
+    target: String(request.target ?? target ?? '').trim(),
+    resolvedModel,
+    ...(resolvedModelAlias && resolvedModelAlias !== resolvedModel ? { resolvedModelAlias } : {}),
+    ...(transportName ? { transport: transportName } : {}),
+    ...(transportProvider ? { transportProvider } : {}),
+    instructions: String(request.instructions ?? instructions ?? '').trim(),
+    prompt: String(request.prompt ?? prompt ?? ''),
+    ...(typeof messageCount === 'number' ? { messageCount } : {}),
+    validate: String(request.validate ?? validate ?? 'coerce').trim() || 'coerce',
+    retry_on_contract_violation: Number.isInteger(Number(request.retry_on_contract_violation))
+      ? Math.max(0, Math.min(8, Number(request.retry_on_contract_violation)))
+      : Math.max(0, Math.min(8, Number(retryOnViolation) || 0)),
+    ...(returnsContract != null ? { returns: returnsContract } : {}),
+    ...(Array.isArray(decideContract) && decideContract.length > 0 ? { decide: decideContract } : {}),
+    ...(toolNames.length > 0 ? { toolNames } : {}),
+  }
+}
+
 function mapRemoteCommandErrorStatus(errorCode) {
   const code = String(errorCode ?? '').trim().toLowerCase()
   if (code === 'not_active') return 404
@@ -706,10 +762,9 @@ function resolveWorkspaceDirectory(inputPath) {
   if (!candidate) {
     return { absolutePath: REPO_ROOT, relativePath: '.' }
   }
-  if (isAbsolute(candidate)) {
-    throw new Error('Only workspace-relative paths are allowed')
-  }
-  const absolutePath = resolve(REPO_ROOT, candidate)
+  const absolutePath = isAbsolute(candidate)
+    ? resolve(candidate)
+    : resolve(REPO_ROOT, candidate)
   const rel = relative(REPO_ROOT, absolutePath)
   if (rel.startsWith('..') || isAbsolute(rel)) {
     throw new Error('Path is outside workspace')
@@ -1240,12 +1295,31 @@ async function handleApi(req, res, url) {
       })
       const declaredExternals = getConfiguredExternalsCore(workspaceConfig)
       const declaredEffects = Object.keys(getDeclaredEffectChannelsCore(workspaceConfig))
+      const configuredAgentProfiles = workspaceConfig?.agents?.profiles && typeof workspaceConfig.agents.profiles === 'object'
+        ? workspaceConfig.agents.profiles
+        : {}
+      const configuredModelConfigs = workspaceConfig?.models?.map && typeof workspaceConfig.models.map === 'object'
+        ? workspaceConfig.models.map
+        : {}
+      const transportsMap = workspaceConfig?.transports?.map && typeof workspaceConfig.transports.map === 'object'
+        ? workspaceConfig.transports.map
+        : {}
+      const configuredTransportProviders = Object.fromEntries(
+        Object.entries(transportsMap).map(([name, transport]) => [name, String(transport?.provider ?? '').trim()])
+      )
+      const configuredAgents = Object.keys(configuredAgentProfiles).sort((left, right) => left.localeCompare(right))
+      const configuredModels = Object.keys(configuredModelConfigs).sort((left, right) => left.localeCompare(right))
       return sendJson(res, 200, {
         ok: true,
         entrypointPath: String(workspaceConfig.nextv.config?.entrypointPath ?? '').trim(),
         baselineStatePath: String(workspaceConfig.nextv.config?.baselineStatePath ?? '').trim(),
         declaredExternals,
         declaredEffects,
+        configuredAgents,
+        configuredModels,
+        configuredAgentProfiles,
+        configuredModelConfigs,
+        configuredTransportProviders,
         timers: Array.isArray(workspaceConfig.nextv.timers)
           ? workspaceConfig.nextv.timers.map((timer) => ({
               event: timer.event,
@@ -1626,6 +1700,233 @@ async function handleApi(req, res, url) {
     }
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/nextv/call-inspector/execute') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (runtimeTarget === 'remote-observe') {
+      return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
+    }
+
+    let body
+    try {
+      body = await readRequestBody(req)
+    } catch (err) {
+      return sendJson(res, 400, { error: err.message })
+    }
+
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
+      let runtimeBridge
+      let response
+      try {
+        runtimeBridge = getRuntimeControlBridge(runtimeTarget, url, { required: true })
+        if (!runtimeBridge?.sendCommand) {
+          return sendRemoteConnectionUnavailable(res, 'remote runtime bridge is not configured', runtimeTarget)
+        }
+        const status = runtimeBridge.getStatus()
+        if (!status.connected) {
+          return sendRemoteConnectionUnavailable(res, 'remote runtime websocket is not connected', runtimeTarget)
+        }
+        response = await runtimeBridge.sendCommand({
+          type: 'call_inspector_execute',
+          payload: body,
+        })
+      } catch (err) {
+        if (String(err?.code ?? '') === 'validation_error') {
+          return sendJson(res, 400, { ok: false, error: String(err?.message ?? err), ...buildRemoteModeMetadata(runtimeTarget) })
+        }
+        return sendRemoteConnectionUnavailable(res, String(err?.message ?? err), runtimeTarget)
+      }
+
+      const errorResponse = sendRemoteCommandResponse(res, response, 'failed to execute call inspector request', runtimeTarget)
+      if (errorResponse) return errorResponse
+
+      return sendJson(res, 200, {
+        ok: true,
+        ...(response?.data ?? {}),
+        ...buildRemoteModeMetadata(runtimeTarget, url),
+      })
+    }
+
+    const rawWorkspaceDir = String(body?.workspaceDir ?? '').trim()
+    const targetKindRaw = String(body?.targetKind ?? 'agent').trim().toLowerCase()
+    const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+    const agentName = String(body?.agent ?? '').trim()
+    const modelName = String(body?.model ?? '').trim()
+    const prompt = String(body?.prompt ?? '')
+    const instructions = String(body?.instructions ?? '')
+    const validateModeRaw = String(body?.validate ?? '').trim().toLowerCase()
+    const validateMode = ['strict', 'coerce', 'none'].includes(validateModeRaw) ? validateModeRaw : 'coerce'
+    const retryOnViolationRaw = Number(body?.retry_on_contract_violation)
+    const retryOnViolation = Number.isInteger(retryOnViolationRaw)
+      ? Math.max(0, Math.min(8, retryOnViolationRaw))
+      : 0
+
+    const normalizedMessages = Array.isArray(body?.messages)
+      ? body.messages
+        .map((entry) => {
+          if (!entry || typeof entry !== 'object') return null
+          const role = String(entry.role ?? '').trim()
+          const content = String(entry.content ?? '').trim()
+          if (!role || !content) return null
+          const normalized = { role, content }
+          if (Array.isArray(entry.images) && entry.images.length > 0) {
+            normalized.images = entry.images.map((value) => String(value ?? '').trim()).filter(Boolean)
+          }
+          return normalized
+        })
+        .filter(Boolean)
+      : []
+
+    let returnsContract = null
+    if (body && Object.prototype.hasOwnProperty.call(body, 'returns')) {
+      const rawReturns = body.returns
+      if (typeof rawReturns === 'string') {
+        const trimmed = rawReturns.trim()
+        if (trimmed) {
+          try {
+            returnsContract = JSON.parse(trimmed)
+          } catch {
+            return sendJson(res, 400, { error: 'returns must be valid JSON when provided as text' })
+          }
+        }
+      } else if (rawReturns != null) {
+        returnsContract = rawReturns
+      }
+    }
+
+    let decideContract = null
+    if (body && Object.prototype.hasOwnProperty.call(body, 'decide')) {
+      const rawDecide = body.decide
+      if (Array.isArray(rawDecide)) {
+        decideContract = rawDecide.map((value) => String(value ?? '').trim()).filter(Boolean)
+      } else if (typeof rawDecide === 'string') {
+        decideContract = rawDecide
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean)
+      }
+      if (Array.isArray(decideContract) && decideContract.length === 0) {
+        decideContract = null
+      }
+    }
+
+    if (targetKind === 'agent' && !agentName) {
+      return sendJson(res, 400, { error: 'agent target is required when targetKind is "agent"' })
+    }
+    if (targetKind === 'model' && !modelName) {
+      return sendJson(res, 400, { error: 'model target is required when targetKind is "model"' })
+    }
+    if (!prompt.trim() && normalizedMessages.length === 0) {
+      return sendJson(res, 400, { error: 'prompt or messages is required' })
+    }
+    if (returnsContract != null && decideContract != null) {
+      return sendJson(res, 400, { error: 'returns and decide cannot both be set for the same call' })
+    }
+
+    const startedAt = Date.now()
+
+    try {
+      const workspaceDir = resolveWorkspaceDirectory(rawWorkspaceDir)
+      const workspaceConfig = loadWorkspaceNextVConfigCore({
+        workspaceDir,
+        toWorkspaceDisplayPath,
+        resolvePathFromBaseDirectory,
+        readJsonObjectFile,
+      })
+
+      const hostAdapter = createHostAdapter({
+        workspaceDir,
+        workspaceConfig,
+        getWorkspaceConfig: () => workspaceConfig,
+        callAgent: ollamaTransport,
+        defaultModel: process.env.OLLAMA_MODEL ?? '',
+        captureAgentRequestPayload: true,
+        slowAgentWarningMs: 15000,
+        resolvePathFromBaseDirectory,
+        existsSync,
+        runNextVScriptFromFile,
+        validateOutputContract,
+        appendAgentFormatInstructions,
+        normalizeAgentFormattedOutput,
+        validateAgentReturnContract,
+        buildAgentReturnContractGuidance,
+        buildAgentRetryPrompt,
+        buildDecideGuidance,
+        buildDecideRetryPrompt,
+        validateDecideOutput,
+        toolRuntime: dynamicToolRuntime,
+      })
+
+      const callResult = await hostAdapter.callAgent({
+        agent: targetKind === 'agent' ? agentName : '',
+        model: targetKind === 'model' ? modelName : '',
+        prompt,
+        instructions,
+        messages: normalizedMessages,
+        returns: returnsContract,
+        decide: decideContract,
+        validate: validateMode,
+        retry_on_contract_violation: retryOnViolation,
+        on_contract_violation: {
+          source: 'call-inspector',
+          mode: 'report',
+        },
+        state: {},
+        locals: {},
+        event: {
+          type: 'call_inspector.execute',
+          source: 'call-inspector',
+          value: prompt,
+          payload: {},
+        },
+      })
+
+      const elapsedMs = Math.max(0, Date.now() - startedAt)
+      const isViolation = callResult && callResult.__nextv_contract_violation__ === true
+      const requestMetadata = callResult?.metadata?.request ?? null
+
+      return sendJson(res, 200, {
+        ok: true,
+        call: {
+          targetKind,
+          target: targetKind === 'agent' ? agentName : modelName,
+          validate: validateMode,
+          retry_on_contract_violation: retryOnViolation,
+        },
+        resolvedCall: buildResolvedCallSummary({
+          targetKind,
+          target: targetKind === 'agent' ? agentName : modelName,
+          prompt,
+          instructions,
+          validate: validateMode,
+          retryOnViolation,
+          returnsContract,
+          decideContract,
+          requestMetadata,
+        }),
+        result: {
+          value: isViolation ? null : (callResult?.value ?? null),
+          metadata: callResult?.metadata ?? null,
+          violation: isViolation ? (callResult?.violation ?? null) : null,
+          hadContractViolation: isViolation,
+        },
+        elapsedMs,
+        ...buildRemoteModeMetadata(runtimeTarget, url),
+      })
+    } catch (err) {
+      const errorCode = String(err?.code ?? '').trim()
+      const statusCode = errorCode === 'AGENT_RETURN_CONTRACT_VIOLATION' ? 422 : 400
+      return sendJson(res, statusCode, {
+        ok: false,
+        error: String(err?.message ?? err),
+        code: errorCode || 'runtime_error',
+        line: Number.isFinite(Number(err?.line)) ? Number(err.line) : null,
+        sourcePath: String(err?.sourcePath ?? ''),
+        statement: String(err?.statement ?? ''),
+        ...buildRemoteModeMetadata(runtimeTarget, url),
+      })
+    }
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/nextv/snapshot') {
     const runtimeTarget = resolveRuntimeTarget(url)
     if (runtimeTarget === 'remote-observe') {
@@ -1798,10 +2099,6 @@ async function handleRequest(req, res) {
 
   if (url.pathname === '/health') {
     return sendJson(res, 200, { ok: true, mode: 'preview' })
-  }
-
-  if (url.pathname === '/htmx.js') {
-    return sendText(res, 200, '// htmx is intentionally stubbed in preview mode', 'text/javascript; charset=utf-8')
   }
 
   if (url.pathname.startsWith('/api/')) {

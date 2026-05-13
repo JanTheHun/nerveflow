@@ -140,6 +140,7 @@ test('protocol constants include required v1 values', () => {
     'stop',
     'enqueue_event',
     'dispatch_ingress',
+    'call_inspector_execute',
     'snapshot',
     'subscribe',
     'unsubscribe',

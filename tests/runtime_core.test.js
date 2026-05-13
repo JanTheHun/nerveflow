@@ -150,6 +150,67 @@ test('runtime command router handles dispatch_ingress command', async () => {
   assert.deepEqual(runtime.dispatchIngressCalls, [{ name: 'mqtt_bridge', value: 'hello' }])
 })
 
+test('runtime command router handles call_inspector_execute command', async () => {
+  const runtime = {
+    callInspectorExecuteCalls: [],
+    async callInspectorExecute(payload) {
+      this.callInspectorExecuteCalls.push(payload)
+      return {
+        call: {
+          targetKind: 'model',
+          target: 'test-model',
+          validate: 'coerce',
+          retry_on_contract_violation: 0,
+        },
+        result: {
+          value: { ok: true },
+          metadata: null,
+          violation: null,
+          hadContractViolation: false,
+        },
+        elapsedMs: 1,
+      }
+    },
+    async start() {
+      throw new Error('not used')
+    },
+    stop() {
+      throw new Error('not used')
+    },
+    enqueue() {
+      throw new Error('not used')
+    },
+    getSnapshot() {
+      return { running: true }
+    },
+    isActive() {
+      return true
+    },
+  }
+
+  const router = createRuntimeCommandRouter({
+    runtimeCore: runtime,
+    sessionId: 'runtime-test-session',
+  })
+
+  const payload = {
+    targetKind: 'model',
+    model: 'test-model',
+    prompt: 'hello',
+  }
+  const response = await router.handleRawCommand({
+    type: 'call_inspector_execute',
+    requestId: 'call-1',
+    payload,
+  })
+
+  assert.equal(response.ok, true)
+  assert.equal(response.requestId, 'call-1')
+  assert.equal(response.data.call.targetKind, 'model')
+  assert.equal(response.data.call.target, 'test-model')
+  assert.deepEqual(runtime.callInspectorExecuteCalls, [payload])
+})
+
 test('controller startup exposes configured models in nextv_started event', async () => {
   const runtime = createRuntimeCore({
     resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),

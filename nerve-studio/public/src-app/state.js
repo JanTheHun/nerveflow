@@ -68,6 +68,8 @@ export const storageKeys = {
   nextVGraphDirection: 'local-agent.nextv.graphDirection',
   nextVControlOverlay: 'local-agent.nextv.controlOverlay',
   nextVShowControlBranches: 'local-agent.nextv.showControlBranches',
+  nextVCallInspectorPanelLayout: 'local-agent.nextv.callInspectorPanelLayout',
+  nextVCallInspectorResultTab: 'local-agent.nextv.callInspectorResultTab',
   nextVEditorGridSplit: 'local-agent.nextv.editorGridSplit',
   nextVEditorLayout: 'local-agent.nextv.editorLayout',
   nextVEditorTabSize: 'local-agent.nextv.editorTabSize',
@@ -244,11 +246,6 @@ export const userOutputFilterState = {
 }
 
 // --- DOM helpers ---
-export const transcript = document.getElementById('transcript')
-export const promptInput = document.getElementById('prompt-input')
-export const sendBtn = document.getElementById('send-btn')
-export const imageCount = document.getElementById('image-count')
-export const modelInput = document.getElementById('model-input')
 export const scriptPathInput = document.getElementById('script-path')
 export const scriptInputs = document.getElementById('script-inputs')
 export const scriptLineGutter = document.getElementById('script-line-gutter')
@@ -353,9 +350,11 @@ export const nextVDevTabs = document.getElementById('nextv-dev-tabs')
 export const nextVTabEvents = document.getElementById('nextv-tab-events')
 export const nextVTabTrace = document.getElementById('nextv-tab-trace')
 export const nextVTabConsole = document.getElementById('nextv-tab-console')
+export const nextVTabCallInspector = document.getElementById('nextv-view-call-inspector')
 export const nextVPrimaryTabs = document.getElementById('nextv-primary-tabs')
 export const nextVViewEditor = document.getElementById('nextv-view-editor')
 export const nextVViewGraph = document.getElementById('nextv-view-graph')
+export const nextVViewCallInspector = document.getElementById('nextv-view-call-inspector')
 export const toggleNextVDevConsoleBtn = document.getElementById('toggle-nextv-dev-console-btn')
 export const toggleUserIOBtn = document.getElementById('toggle-user-io-btn')
 export const nextVInputTabs = document.getElementById('nextv-input-tabs')
@@ -372,6 +371,19 @@ export const nextVAutoSaveInput = document.getElementById('nextv-autosave')
 export const nextVEventValueInput = document.getElementById('nextv-event-value')
 export const nextVEventTypeInput = document.getElementById('nextv-event-type')
 export const nextVEventSourceInput = document.getElementById('nextv-event-source')
+export const nextVCallTargetKindInput = document.getElementById('nextv-call-target-kind')
+export const nextVCallTargetAgentInput = document.getElementById('nextv-call-target-agent')
+export const nextVCallTargetInput = document.getElementById('nextv-call-target')
+export const nextVCallValidateInput = document.getElementById('nextv-call-validate')
+export const nextVCallRetryInput = document.getElementById('nextv-call-retry')
+export const nextVCallInstructionsInput = document.getElementById('nextv-call-instructions')
+export const nextVCallPromptInput = document.getElementById('nextv-call-prompt')
+export const nextVCallReturnsInput = document.getElementById('nextv-call-returns')
+export const nextVCallDecideInput = document.getElementById('nextv-call-decide')
+export const nextVCallTargetConfigLabel = document.getElementById('nextv-call-target-config-label')
+export const nextVCallTargetConfigOutput = document.getElementById('nextv-call-target-config')
+export const nextVCallResolvedLabel = document.getElementById('nextv-call-resolved-label')
+export const nextVCallResolvedOutput = document.getElementById('nextv-call-resolved')
 export const nextVIngressNameInput = document.getElementById('nextv-ingress-name')
 export const nextVIngressValueInput = document.getElementById('nextv-ingress-value')
 export const nextVIngressControlsRow = document.getElementById('nextv-ingress-controls-row')
@@ -420,6 +432,19 @@ export const nextVStateFilterInput = document.getElementById('nextv-state-filter
 export const nextVStateDiffTabDiff = document.getElementById('nextv-state-diff-tab-diff')
 export const nextVStateDiffTabState = document.getElementById('nextv-state-diff-tab-state')
 export const nextVConsoleOutput = document.getElementById('nextv-console-output')
+export const nextVCallInspectorPanel = document.getElementById('nextv-call-inspector-panel')
+export const nextVCallGeneratedCode = document.getElementById('nextv-call-generated-code')
+export const nextVCallResultTabs = document.getElementById('nextv-call-result-tabs')
+export const nextVCallResultTabRaw = document.getElementById('nextv-call-result-tab-raw')
+export const nextVCallResultTabParsed = document.getElementById('nextv-call-result-tab-parsed')
+export const nextVCallResultTabValidation = document.getElementById('nextv-call-result-tab-validation')
+export const nextVCallResultTabRetry = document.getElementById('nextv-call-result-tab-retry')
+export const nextVCallResultTabMetadata = document.getElementById('nextv-call-result-tab-metadata')
+export const nextVCallResultRaw = document.getElementById('nextv-call-result-raw')
+export const nextVCallResultParsed = document.getElementById('nextv-call-result-parsed')
+export const nextVCallResultValidation = document.getElementById('nextv-call-result-validation')
+export const nextVCallResultRetry = document.getElementById('nextv-call-result-retry')
+export const nextVCallResultMetadata = document.getElementById('nextv-call-result-metadata')
 export const settingsMenu = document.getElementById('settings-menu')
 export const scriptEditorPanel = document.getElementById('script-editor-panel')
 export const nextVInputExternalPane = document.getElementById('nextv-input-external-pane')

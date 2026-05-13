@@ -256,6 +256,7 @@ Supported WebSocket command types map directly to protocol v1 commands:
 - `stop`
 - `enqueue_event`
 - `dispatch_ingress`
+- `call_inspector_execute`
 - `snapshot`
 - `subscribe`
 - `unsubscribe`

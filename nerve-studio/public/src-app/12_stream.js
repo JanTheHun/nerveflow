@@ -32,6 +32,30 @@ import {
   nextVEventSourceInput,
   nextVEventTypeInput,
   nextVEventValueInput,
+  nextVCallTargetKindInput,
+  nextVCallTargetAgentInput,
+  nextVCallTargetInput,
+  nextVCallValidateInput,
+  nextVCallRetryInput,
+  nextVCallInstructionsInput,
+  nextVCallPromptInput,
+  nextVCallReturnsInput,
+  nextVCallDecideInput,
+  nextVCallTargetConfigLabel,
+  nextVCallTargetConfigOutput,
+  nextVCallResolvedLabel,
+  nextVCallResolvedOutput,
+  nextVCallGeneratedCode,
+  nextVCallResultTabRaw,
+  nextVCallResultTabParsed,
+  nextVCallResultTabValidation,
+  nextVCallResultTabRetry,
+  nextVCallResultTabMetadata,
+  nextVCallResultRaw,
+  nextVCallResultParsed,
+  nextVCallResultValidation,
+  nextVCallResultRetry,
+  nextVCallResultMetadata,
   nextVGraphState,
   nextVHasLiveRuntimeEvents,
   nextVImageCount,
@@ -45,6 +69,7 @@ import {
   nextVManagedProcessRunning,
   nextVPanelState,
   nextVRuntimeRunning,
+  activePaneId,
   nextVAttachSessionState,
   nextVRuntimeTargetState,
   nextVWorkspaceDirInput,
@@ -62,11 +87,9 @@ import {
   scriptVSplit2,
   splitter,
   storageKeys,
-  transcript,
   workspace
 } from './state.js'
 import {
-  isScriptMode,
   isNextVMode,
   setNextVImagesOpen,
   buildNextVApiPath,
@@ -117,6 +140,9 @@ import {
   persistNextVConfig
 } from './09_editor.js'
 import {
+  getPaneTextarea
+} from './09_editor.js'
+import {
   pathBasename,
   formatNextVStartLine,
   formatWorkspaceConfigStatus,
@@ -139,7 +165,8 @@ import {
   setStatus,
   appendErrorRow,
   ensureNextVEntrypointVisible,
-  saveNextVEntrypoint
+  saveNextVEntrypoint,
+  openNextVWorkspace
 } from './13_layout.js'
 
 function buildNextVAttachApiPath(pathname) {
@@ -213,8 +240,20 @@ export async function attachNextVRuntime() {
       throw new Error(data.error ?? 'attach failed')
     }
 
-    const remoteWorkspaceDir = String(data?.remoteRuntimeWorkspaceDir ?? data?.workspaceDir ?? '').trim()
-    const remoteEntrypointPathRaw = String(data?.remoteRuntimeEntrypointPath ?? data?.entrypointPath ?? '').trim()
+    const remoteWorkspaceDir = String(
+      data?.remoteRuntimeWorkspaceDir
+      ?? data?.workspaceDir
+      ?? data?.remoteConnection?.workspaceDir
+      ?? data?.snapshot?.workspaceDir
+      ?? ''
+    ).trim()
+    const remoteEntrypointPathRaw = String(
+      data?.remoteRuntimeEntrypointPath
+      ?? data?.entrypointPath
+      ?? data?.remoteConnection?.entrypointPath
+      ?? data?.snapshot?.entrypointPath
+      ?? ''
+    ).trim()
     if (nextVWorkspaceDirInput && remoteWorkspaceDir) {
       nextVWorkspaceDirInput.value = remoteWorkspaceDir === '.' ? '' : remoteWorkspaceDir
     }
@@ -223,6 +262,18 @@ export async function attachNextVRuntime() {
       nextVEntrypointInput.value = normalizedEntrypoint
       saveNextVEntrypoint()
     }
+
+    // Hydrate tree/editor/graph automatically from attached runtime identity.
+    updateRemoteRuntimeIdentity(data)
+    if (remoteWorkspaceDir && isNextVMode()) {
+      try {
+        await openNextVWorkspace()
+      } catch (workspaceErr) {
+        appendNextVErrorLog(workspaceErr, '[nextv:attach:workspace:auto-open:error]')
+      }
+    }
+
+    await refreshNextVCallInspectorAgents({ quiet: true })
 
     nextVAttachSessionState.attached = true
     nextVAttachSessionState.connecting = false
@@ -965,6 +1016,542 @@ export async function sendNextVIngress() {
   }
 }
 
+export async function executeNextVCallInspector() {
+  const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
+  const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  await refreshNextVCallInspectorAgents({ quiet: true })
+  const target = getNextVCallInspectorTargetValue(targetKind)
+  const instructions = String(nextVCallInstructionsInput?.value ?? '')
+  const prompt = String(nextVCallPromptInput?.value ?? '')
+  const returnsText = String(nextVCallReturnsInput?.value ?? '').trim()
+  const decideText = String(nextVCallDecideInput?.value ?? '').trim()
+  const validateRaw = String(nextVCallValidateInput?.value ?? 'coerce').trim().toLowerCase()
+  const validate = ['strict', 'coerce', 'none'].includes(validateRaw) ? validateRaw : 'coerce'
+  const retryRaw = Number(nextVCallRetryInput?.value)
+  const retryCount = Number.isInteger(retryRaw) ? Math.max(0, Math.min(8, retryRaw)) : 0
+
+  if (!target) {
+    setStatus('call inspector target is required', 'responding')
+    return
+  }
+  if (!prompt.trim()) {
+    setStatus('call inspector prompt is required', 'responding')
+    return
+  }
+  if (returnsText && decideText) {
+    setStatus('use either returns or decide, not both', 'responding')
+    return
+  }
+
+  const requestBody = {
+    workspaceDir: normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? ''),
+    targetKind,
+    instructions,
+    prompt,
+    validate,
+    retry_on_contract_violation: retryCount,
+  }
+  if (targetKind === 'agent') {
+    requestBody.agent = target
+  } else {
+    requestBody.model = target
+  }
+
+  if (returnsText) {
+    try {
+      requestBody.returns = JSON.parse(returnsText)
+    } catch {
+      setStatus('returns contract must be valid JSON', 'responding')
+      return
+    }
+  }
+  if (decideText) {
+    requestBody.decide = decideText
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean)
+  }
+
+  renderNextVCallInspectorResolvedCall({ status: 'resolving runtime invocation...' })
+  renderNextVCallInspectorResult({ status: 'running call inspector request...' })
+  setStatus('executing call inspector...', 'responding')
+
+  try {
+    const res = await fetch(buildNextVApiPath('/api/nextv/call-inspector/execute'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'call inspector execution failed')
+    }
+
+    renderNextVCallInspectorResolvedCall(data?.resolvedCall ?? { status: 'resolved call unavailable' })
+    renderNextVCallInspectorResult(data)
+
+    const targetLabel = targetKind === 'agent'
+      ? `agent=${requestBody.agent}`
+      : `model=${requestBody.model}`
+    appendNextVLogRow(`[nextv:call-inspector] executed ${targetLabel}`, 'step')
+    setStatus('call inspector completed')
+  } catch (err) {
+    appendNextVErrorLog(err)
+    renderNextVCallInspectorResolvedCall({ error: 'execution failed before resolved call was available' })
+    renderNextVCallInspectorResult({ error: String(err?.message ?? err) })
+    setStatus('call inspector failed', 'responding')
+  }
+}
+
+function stringifyInspectorPane(value) {
+  if (value == null) return 'null'
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+const nextVCallInspectorProjectConfig = {
+  agentsByName: {},
+  modelsByName: {},
+  transportProvidersByName: {},
+}
+
+function setNextVCallInspectorProjectConfig(payload = {}) {
+  const agentsByName = payload?.agentsByName
+  const modelsByName = payload?.modelsByName
+  const transportProvidersByName = payload?.transportProvidersByName
+
+  nextVCallInspectorProjectConfig.agentsByName = agentsByName && typeof agentsByName === 'object' && !Array.isArray(agentsByName)
+    ? agentsByName
+    : {}
+  nextVCallInspectorProjectConfig.modelsByName = modelsByName && typeof modelsByName === 'object' && !Array.isArray(modelsByName)
+    ? modelsByName
+    : {}
+  nextVCallInspectorProjectConfig.transportProvidersByName = transportProvidersByName && typeof transportProvidersByName === 'object' && !Array.isArray(transportProvidersByName)
+    ? transportProvidersByName
+    : {}
+}
+
+function renderNextVCallInspectorTargetConfig() {
+  if (!nextVCallTargetConfigOutput || !nextVCallTargetConfigLabel) return
+
+  const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
+  const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  const targetName = getNextVCallInspectorTargetValue(targetKind)
+
+  if (!targetName) {
+    nextVCallTargetConfigLabel.textContent = 'project config'
+    nextVCallTargetConfigOutput.textContent = '(select a configured target)'
+    return
+  }
+
+  if (targetKind === 'agent') {
+    const profile = nextVCallInspectorProjectConfig.agentsByName[targetName]
+    nextVCallTargetConfigLabel.textContent = `project config · agent.${targetName}`
+    if (!profile || typeof profile !== 'object') {
+      nextVCallTargetConfigOutput.textContent = stringifyInspectorPane({ status: 'agent not found in workspace config' })
+      return
+    }
+
+    const modelName = String(profile?.model ?? profile?.modelId ?? '').trim()
+    const model = modelName ? nextVCallInspectorProjectConfig.modelsByName[modelName] : null
+    const transportName = String(model?.transport ?? '').trim()
+    const provider = transportName
+      ? String(nextVCallInspectorProjectConfig.transportProvidersByName[transportName] ?? '').trim()
+      : ''
+
+    nextVCallTargetConfigOutput.textContent = stringifyInspectorPane({
+      agent: profile,
+      model: model
+        ? {
+            name: modelName,
+            ...model,
+            transportProvider: provider || undefined,
+          }
+        : (modelName
+          ? {
+              name: modelName,
+              status: 'model referenced by agent not found in workspace config',
+            }
+          : {
+              status: 'agent does not declare a model',
+            }),
+    })
+    return
+  }
+
+  const model = nextVCallInspectorProjectConfig.modelsByName[targetName]
+  const transportName = String(model?.transport ?? '').trim()
+  const provider = transportName
+    ? String(nextVCallInspectorProjectConfig.transportProvidersByName[transportName] ?? '').trim()
+    : ''
+  nextVCallTargetConfigLabel.textContent = `project config · model.${targetName}`
+  nextVCallTargetConfigOutput.textContent = stringifyInspectorPane(model
+    ? {
+        ...model,
+        transportProvider: provider || undefined,
+      }
+    : { status: 'model not found in workspace config' })
+}
+
+function renderNextVCallInspectorResolvedCall(resolvedCall = null) {
+  if (!nextVCallResolvedOutput || !nextVCallResolvedLabel) return
+
+  nextVCallResolvedLabel.textContent = 'resolved call'
+  nextVCallResolvedOutput.textContent = resolvedCall
+    ? stringifyInspectorPane(resolvedCall)
+    : '(run call to inspect resolved invocation)'
+}
+
+function getNextVCallInspectorTargetValue(targetKind) {
+  const normalizedTargetKind = String(targetKind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  if (normalizedTargetKind === 'agent') {
+    return String(nextVCallTargetAgentInput?.value ?? '').trim()
+  }
+  return String(nextVCallTargetInput?.value ?? '').trim()
+}
+
+function syncNextVCallInspectorTargetMode() {
+  const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
+  const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  const isAgentMode = targetKind === 'agent'
+
+  if (nextVCallTargetAgentInput) {
+    nextVCallTargetAgentInput.hidden = !isAgentMode
+    nextVCallTargetAgentInput.disabled = !isAgentMode
+  }
+  if (nextVCallTargetInput) {
+    nextVCallTargetInput.hidden = isAgentMode
+    nextVCallTargetInput.disabled = isAgentMode
+  }
+}
+
+function setNextVCallInspectorAgentOptions(agentNames, options = {}) {
+  if (!nextVCallTargetAgentInput) return
+  const emptyLabel = String(options?.emptyLabel ?? '(no configured agents)')
+
+  const names = Array.isArray(agentNames) ? agentNames.filter(Boolean).map((value) => String(value).trim()).filter(Boolean) : []
+  const currentValue = String(nextVCallTargetAgentInput.value ?? '').trim()
+  nextVCallTargetAgentInput.innerHTML = ''
+
+  if (names.length === 0) {
+    const emptyOption = document.createElement('option')
+    emptyOption.value = ''
+    emptyOption.textContent = emptyLabel
+    nextVCallTargetAgentInput.appendChild(emptyOption)
+    return
+  }
+
+  for (const name of names) {
+    const option = document.createElement('option')
+    option.value = name
+    option.textContent = name
+    nextVCallTargetAgentInput.appendChild(option)
+  }
+
+  if (currentValue && names.includes(currentValue)) {
+    nextVCallTargetAgentInput.value = currentValue
+  } else {
+    nextVCallTargetAgentInput.value = names[0]
+  }
+}
+
+function setNextVCallInspectorModelOptions(modelNames, options = {}) {
+  if (!nextVCallTargetInput) return
+  const emptyLabel = String(options?.emptyLabel ?? '(no configured models)')
+
+  const names = Array.isArray(modelNames) ? modelNames.filter(Boolean).map((value) => String(value).trim()).filter(Boolean) : []
+  const currentValue = String(nextVCallTargetInput.value ?? '').trim()
+  nextVCallTargetInput.innerHTML = ''
+
+  if (names.length === 0) {
+    const emptyOption = document.createElement('option')
+    emptyOption.value = ''
+    emptyOption.textContent = emptyLabel
+    nextVCallTargetInput.appendChild(emptyOption)
+    return
+  }
+
+  for (const name of names) {
+    const option = document.createElement('option')
+    option.value = name
+    option.textContent = name
+    nextVCallTargetInput.appendChild(option)
+  }
+
+  if (currentValue && names.includes(currentValue)) {
+    nextVCallTargetInput.value = currentValue
+  } else {
+    nextVCallTargetInput.value = names[0]
+  }
+}
+
+export async function refreshNextVCallInspectorAgents(options = {}) {
+  const quiet = options?.quiet === true
+  const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
+  const noAgentsLabel = workspaceDir
+    ? '(no configured agents)'
+    : '(set workspace folder to load agents)'
+  const noModelsLabel = workspaceDir
+    ? '(no configured models)'
+    : '(set workspace folder to load models)'
+
+  try {
+    const query = workspaceDir ? `?workspaceDir=${encodeURIComponent(workspaceDir)}` : ''
+    const res = await fetch(buildNextVApiPath(`/api/nextv/workspace-config${query}`))
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'failed to load workspace config')
+    }
+
+    const configuredAgents = Array.isArray(data?.configuredAgents) ? data.configuredAgents : []
+    const configuredModels = Array.isArray(data?.configuredModels) ? data.configuredModels : []
+    setNextVCallInspectorProjectConfig({
+      agentsByName: data?.configuredAgentProfiles,
+      modelsByName: data?.configuredModelConfigs,
+      transportProvidersByName: data?.configuredTransportProviders,
+    })
+    setNextVCallInspectorAgentOptions(configuredAgents, { emptyLabel: noAgentsLabel })
+    setNextVCallInspectorModelOptions(configuredModels, { emptyLabel: noModelsLabel })
+    syncNextVCallInspectorTargetMode()
+    renderNextVCallInspectorTargetConfig()
+    renderNextVCallInspectorSnippet()
+  } catch (err) {
+    setNextVCallInspectorProjectConfig({})
+    setNextVCallInspectorAgentOptions([], {
+      emptyLabel: workspaceDir ? '(workspace config unavailable)' : noAgentsLabel,
+    })
+    setNextVCallInspectorModelOptions([], {
+      emptyLabel: workspaceDir ? '(workspace config unavailable)' : noModelsLabel,
+    })
+    syncNextVCallInspectorTargetMode()
+    renderNextVCallInspectorTargetConfig()
+    if (!quiet) {
+      appendNextVErrorLog(err)
+      setStatus('could not load configured agents', 'responding')
+    }
+  }
+}
+
+export function setNextVCallInspectorResultTab(tab) {
+  const nextTab = ['raw', 'parsed', 'validation', 'retry', 'metadata'].includes(String(tab ?? '').trim())
+    ? String(tab).trim()
+    : 'raw'
+
+  const buttons = {
+    raw: nextVCallResultTabRaw,
+    parsed: nextVCallResultTabParsed,
+    validation: nextVCallResultTabValidation,
+    retry: nextVCallResultTabRetry,
+    metadata: nextVCallResultTabMetadata,
+  }
+  const panes = {
+    raw: nextVCallResultRaw,
+    parsed: nextVCallResultParsed,
+    validation: nextVCallResultValidation,
+    retry: nextVCallResultRetry,
+    metadata: nextVCallResultMetadata,
+  }
+
+  for (const key of Object.keys(buttons)) {
+    const button = buttons[key]
+    const active = key === nextTab
+    if (button) {
+      button.classList.toggle('active', active)
+      button.setAttribute('aria-selected', active ? 'true' : 'false')
+    }
+    const pane = panes[key]
+    if (pane) {
+      pane.hidden = !active
+    }
+  }
+
+  localStorage.setItem(storageKeys.nextVCallInspectorResultTab, nextTab)
+}
+
+function getStoredNextVCallInspectorResultTab() {
+  const stored = String(localStorage.getItem(storageKeys.nextVCallInspectorResultTab) ?? '').trim()
+  return ['raw', 'parsed', 'validation', 'retry', 'metadata'].includes(stored)
+    ? stored
+    : 'raw'
+}
+
+export function renderNextVCallInspectorResult(data, options = {}) {
+  const response = data && typeof data === 'object' ? data : { value: data }
+  const call = response?.call ?? null
+  const result = response?.result ?? null
+  const metadata = result?.metadata ?? null
+
+  if (nextVCallResultRaw) {
+    nextVCallResultRaw.textContent = stringifyInspectorPane(response)
+  }
+  if (nextVCallResultParsed) {
+    nextVCallResultParsed.textContent = stringifyInspectorPane(result?.value ?? null)
+  }
+  if (nextVCallResultValidation) {
+    nextVCallResultValidation.textContent = stringifyInspectorPane({
+      hadContractViolation: result?.hadContractViolation === true,
+      violation: result?.violation ?? null,
+      validate: call?.validate ?? null,
+    })
+  }
+  if (nextVCallResultRetry) {
+    nextVCallResultRetry.textContent = stringifyInspectorPane({
+      configuredRetries: Number(call?.retry_on_contract_violation ?? 0),
+      attempt: Number(metadata?.request?.attempt ?? 1),
+      retryLimit: Number(metadata?.request?.retryLimit ?? call?.retry_on_contract_violation ?? 0),
+      note: 'Per-attempt transcript is not yet included in the host response payload.',
+    })
+  }
+  if (nextVCallResultMetadata) {
+    nextVCallResultMetadata.textContent = stringifyInspectorPane(metadata)
+  }
+
+  const forceTab = String(options?.forceTab ?? '').trim()
+  setNextVCallInspectorResultTab(forceTab || getStoredNextVCallInspectorResultTab())
+}
+
+export function buildNextVCallInspectorSnippet() {
+  const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
+  const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  const target = getNextVCallInspectorTargetValue(targetKind)
+  const instructions = String(nextVCallInstructionsInput?.value ?? '').trim()
+  const prompt = String(nextVCallPromptInput?.value ?? '').trim()
+  const returnsText = String(nextVCallReturnsInput?.value ?? '').trim()
+  const decideText = String(nextVCallDecideInput?.value ?? '').trim()
+  const validateRaw = String(nextVCallValidateInput?.value ?? 'coerce').trim().toLowerCase()
+  const validate = ['strict', 'coerce', 'none'].includes(validateRaw) ? validateRaw : 'coerce'
+  const retryRaw = Number(nextVCallRetryInput?.value)
+  const retryCount = Number.isInteger(retryRaw) ? Math.max(0, Math.min(8, retryRaw)) : 0
+
+  const lines = []
+  const head = target || (targetKind === 'agent' ? 'router' : 'model-id')
+  lines.push(`result = ${targetKind}(`)
+  lines.push(`  ${JSON.stringify(head)},`)
+  lines.push(`  ${JSON.stringify(prompt || 'prompt')},`)
+  if (instructions) {
+    lines.push(`  instructions=${JSON.stringify(instructions)},`)
+  }
+  if (returnsText) {
+    lines.push(`  returns=${returnsText},`)
+  }
+  if (decideText) {
+    const decideList = decideText
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .map((value) => JSON.stringify(value))
+      .join(',')
+    lines.push(`  decide=[${decideList}],`)
+  }
+  if (validate !== 'coerce') {
+    lines.push(`  validate=${JSON.stringify(validate)},`)
+  }
+  if (retryCount > 0) {
+    lines.push(`  retry_on_contract_violation=${retryCount},`)
+  }
+  lines.push(')')
+  return lines.join('\n')
+}
+
+export function renderNextVCallInspectorSnippet() {
+  renderNextVCallInspectorTargetConfig()
+  if (!nextVCallGeneratedCode) return
+  nextVCallGeneratedCode.textContent = buildNextVCallInspectorSnippet()
+}
+
+export function insertNextVCallInspectorSnippet() {
+  const textarea = getPaneTextarea(activePaneId)
+  if (!textarea) {
+    setStatus('open an editor pane before inserting code', 'responding')
+    return
+  }
+
+  const snippet = buildNextVCallInspectorSnippet()
+  const start = Number(textarea.selectionStart ?? 0)
+  const end = Number(textarea.selectionEnd ?? start)
+  const original = String(textarea.value ?? '')
+  const prefix = start > 0 && !original.slice(0, start).endsWith('\n') ? '\n' : ''
+  const suffix = end < original.length && !original.slice(end).startsWith('\n') ? '\n' : ''
+  const insertion = `${prefix}${snippet}${suffix}`
+  textarea.value = `${original.slice(0, start)}${insertion}${original.slice(end)}`
+  const caret = start + insertion.length
+  textarea.setSelectionRange(caret, caret)
+  textarea.focus()
+  textarea.dispatchEvent(new Event('input', { bubbles: true }))
+  appendNextVLogRow('[nextv:call-inspector] inserted generated code into active editor pane', 'step')
+  setStatus('call inspector code inserted')
+}
+
+export function initNextVCallInspector() {
+  const controls = [
+    nextVCallTargetKindInput,
+    nextVCallTargetAgentInput,
+    nextVCallTargetInput,
+    nextVCallValidateInput,
+    nextVCallRetryInput,
+    nextVCallInstructionsInput,
+    nextVCallPromptInput,
+    nextVCallReturnsInput,
+    nextVCallDecideInput,
+  ]
+  for (const control of controls) {
+    if (!control || control.dataset.callInspectorBound === '1') continue
+    control.dataset.callInspectorBound = '1'
+    const rerender = () => {
+      if (control === nextVCallTargetKindInput) {
+        syncNextVCallInspectorTargetMode()
+        if (String(nextVCallTargetKindInput?.value ?? '').trim().toLowerCase() !== 'model') {
+          refreshNextVCallInspectorAgents({ quiet: true })
+        }
+      }
+      renderNextVCallInspectorSnippet()
+    }
+    control.addEventListener('input', rerender)
+    control.addEventListener('change', rerender)
+  }
+
+  if (nextVWorkspaceDirInput && nextVWorkspaceDirInput.dataset.callInspectorWorkspaceBound !== '1') {
+    nextVWorkspaceDirInput.dataset.callInspectorWorkspaceBound = '1'
+    const refresh = () => {
+      refreshNextVCallInspectorAgents({ quiet: true })
+    }
+    nextVWorkspaceDirInput.addEventListener('change', refresh)
+    nextVWorkspaceDirInput.addEventListener('blur', refresh)
+  }
+
+  if (workspace && workspace.dataset.callInspectorRuntimeIdentityBound !== '1') {
+    workspace.dataset.callInspectorRuntimeIdentityBound = '1'
+    workspace.addEventListener('nextv:remote-workspace-identity', () => {
+      refreshNextVCallInspectorAgents({ quiet: true })
+    })
+  }
+
+  const tabButtons = [
+    ['raw', nextVCallResultTabRaw],
+    ['parsed', nextVCallResultTabParsed],
+    ['validation', nextVCallResultTabValidation],
+    ['retry', nextVCallResultTabRetry],
+    ['metadata', nextVCallResultTabMetadata],
+  ]
+  for (const [tabId, button] of tabButtons) {
+    if (!button || button.dataset.callInspectorTabBound === '1') continue
+    button.dataset.callInspectorTabBound = '1'
+    button.addEventListener('click', () => {
+      setNextVCallInspectorResultTab(tabId)
+    })
+  }
+
+  syncNextVCallInspectorTargetMode()
+  refreshNextVCallInspectorAgents({ quiet: true })
+  renderNextVCallInspectorSnippet()
+  renderNextVCallInspectorResolvedCall(null)
+  renderNextVCallInspectorResult({ status: 'call inspector ready' }, { forceTab: getStoredNextVCallInspectorResultTab() })
+}
+
 export function updateNextVEventImageUI() {
   if (nextVImageCount) {
     const count = nextVInputImageState.entries.length
@@ -1088,7 +1675,7 @@ export function setupSplitter() {
   if (!splitter || !workspace) return
 
   splitter.addEventListener('mousedown', (event) => {
-    if ((!isScriptMode() && !isNextVMode()) || window.innerWidth <= 760) return
+    if (!isNextVMode() || window.innerWidth <= 760) return
     _setIsResizing(true)
     document.body.classList.add('is-resizing')
     event.preventDefault()
@@ -1330,10 +1917,6 @@ export function setupVerticalSplitters() {
     if (activeVerticalResize) return
     applyStoredLeftPanelHeights()
   })
-}
-
-export function scrollToBottom() {
-  transcript.scrollTop = transcript.scrollHeight
 }
 
 // Insert or append status bar just above footer

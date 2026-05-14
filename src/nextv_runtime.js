@@ -32,6 +32,8 @@ const MODEL_NAMED_ARG_ALLOWLIST = new Set([
   'retry_on_contract_violation',
   'on_contract_violation',
 ])
+const TRY_ALLOWED_CALLS = new Set(['tool', 'agent', 'model', 'script', 'operator', 'try_bind'])
+const TRY_SUPPRESSIBLE_ERROR_CODES = new Set(['FUNCTION_CALL_ERROR', 'AGENT_RETURN_CONTRACT_VIOLATION'])
 
 function isoNow() {
   return new Date().toISOString()
@@ -529,6 +531,24 @@ function parseTerm(raw, line, statement) {
       return { type: 'call', name: elemMatch[1], args: callArgs }
     })
     return { type: 'parallel', elements }
+  }
+
+  const tryMatch = /^try\s+([\s\S]+)$/.exec(text)
+  if (tryMatch) {
+    const innerExpr = parseExpression(tryMatch[1].trim(), line, statement)
+    if (innerExpr?.type !== 'call' || !TRY_ALLOWED_CALLS.has(innerExpr.name)) {
+      throw nextvError({
+        line,
+        kind: 'parse',
+        code: 'INVALID_TRY_TARGET',
+        statement,
+        message: 'try requires a direct call expression: tool(), agent(), model(), script(), operator(), or try_bind().',
+      })
+    }
+    return {
+      type: 'try_expr',
+      expr: innerExpr,
+    }
   }
 
   const fnMatch = /^([A-Za-z_][A-Za-z0-9_]*)\(([\s\S]*)\)$/.exec(text)
@@ -1528,6 +1548,41 @@ async function runParallelTasks(taskFns, maxConcurrency) {
   return results
 }
 
+function assertTryWrappedAgentModelConfig(name, named, context) {
+  if (name !== 'agent' && name !== 'model') return
+
+  if (named?.on_contract_violation != null) {
+    throw nextvError({
+      line: context.line,
+      sourcePath: context.sourcePath,
+      sourceLine: context.sourceLine,
+      kind: 'runtime',
+      code: 'INVALID_CALL_CONFIG',
+      statement: context.statement,
+      message: `${name}() with try does not allow on_contract_violation in Phase 1.`,
+    })
+  }
+}
+
+function isTrySuppressibleError(err) {
+  return TRY_SUPPRESSIBLE_ERROR_CODES.has(String(err?.code ?? '').trim())
+}
+
+function toTryFailureEnvelope(err) {
+  const code = String(err?.code ?? '').trim().toLowerCase()
+  const error = {
+    type: code || 'operation_failure',
+    message: String(err?.message ?? 'Operation failed.'),
+  }
+  if (Object.prototype.hasOwnProperty.call(err ?? {}, 'output')) {
+    error.output = err.output
+  }
+  return {
+    ok: false,
+    error,
+  }
+}
+
 async function evaluateExpression(expr, context) {
   if (expr.type === 'number' || expr.type === 'boolean' || expr.type === 'null') return expr.value
 
@@ -1646,6 +1701,18 @@ async function evaluateExpression(expr, context) {
     return settled.map((entry) => entry.value)
   }
 
+  if (expr.type === 'try_expr') {
+    try {
+      return {
+        ok: true,
+        value: await executeFunctionCall(expr.expr.name, expr.expr.args, context, 'expression', { wrappedInTry: true }),
+      }
+    } catch (err) {
+      if (!isTrySuppressibleError(err)) throw err
+      return toTryFailureEnvelope(err)
+    }
+  }
+
   if (expr.type === 'call') {
     return executeFunctionCall(expr.name, expr.args, context, 'expression')
   }
@@ -1723,7 +1790,7 @@ function getRoleWarningForOutput(executionRole, format) {
   return null
 }
 
-async function executeFunctionCall(name, args, context, origin) {
+async function executeFunctionCall(name, args, context, origin, callOptions = null) {
   const fn = context.functions[name]
   if (typeof fn !== 'function') {
     throw nextvError({
@@ -1736,6 +1803,9 @@ async function executeFunctionCall(name, args, context, origin) {
   }
 
   const { positional, named } = await evaluateCallArgs(args, context)
+  if (callOptions?.wrappedInTry === true) {
+    assertTryWrappedAgentModelConfig(name, named, context)
+  }
 
   if (context.emitTraceCall) {
     await context.emitTraceCall({
@@ -2759,11 +2829,12 @@ function buildFunctions(options, runtimeContext) {
         })
       }
       let parsed = value
+      const originalOutput = typeof value === 'string' ? value : undefined
       if (typeof value === 'string') {
         try {
           parsed = normalizeAgentFormattedOutput(value, 'json')
         } catch (parseErr) {
-          return { ok: false, error: { type: 'json_parse_error', message: String(parseErr?.message ?? 'JSON parse error'), raw: value } }
+          return { ok: false, error: { type: 'json_parse_error', message: String(parseErr?.message ?? 'JSON parse error'), output: value } }
         }
       }
       try {
@@ -2775,6 +2846,7 @@ function buildFunctions(options, runtimeContext) {
           error: {
             type: 'contract_violation',
             message: String(err?.message ?? ''),
+            ...(originalOutput !== undefined ? { output: originalOutput } : {}),
             field: String(err?.path ?? ''),
             expected: String(err?.expected ?? ''),
             actual: String(err?.actual ?? ''),

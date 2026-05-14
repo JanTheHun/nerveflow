@@ -161,6 +161,11 @@ function walkExpr(expr, visitor) {
     return
   }
 
+  if (expr.type === 'try_expr') {
+    walkExpr(expr.expr, visitor)
+    return
+  }
+
   if (expr.type === 'call') {
     for (const arg of expr.args ?? []) {
       walkExpr(arg?.expr, visitor)

@@ -583,6 +583,67 @@ test('extractEventGraph marks mixed provenance when branching on both bound and 
   }
 })
 
+test('extractEventGraph marks try envelope ok-branch control as operational', () => {
+  const ast = parseNextVScript([
+    'on "route"',
+    '  result = try tool("search", q=event.value)',
+    '  if result.ok',
+    '    emit("ok", result.value)',
+    '  else',
+    '    emit("fallback", result.error)',
+    '  end',
+    'end',
+  ].join('\n'))
+
+  const graph = extractEventGraph(ast)
+  assert.equal(graph.controlEdges.length, 2)
+  for (const edge of graph.controlEdges) {
+    assert.equal(edge.provenance, 'operational')
+    assert.equal(edge.boundedControl, false)
+    assert.equal(edge.operationalControl, true)
+  }
+})
+
+test('extractEventGraph marks mixed provenance when combining try envelope and bounded contract control', () => {
+  const ast = parseNextVScript([
+    'on "route"',
+    '  decision = agent("router", event.value, returns={ intent: "" })',
+    '  attempt = try tool("search", q=event.value)',
+    '  if decision.intent == "search" && attempt.ok',
+    '    emit("ok", event.value)',
+    '  end',
+    'end',
+  ].join('\n'))
+
+  const graph = extractEventGraph(ast)
+  assert.equal(graph.controlEdges.length, 2)
+  for (const edge of graph.controlEdges) {
+    assert.equal(edge.provenance, 'mixed')
+    assert.equal(edge.boundedControl, false)
+    assert.equal(edge.operationalControl, false)
+  }
+})
+
+test('extractEventGraph records try boundary metadata on transitions', () => {
+  const ast = parseNextVScript([
+    'on "route"',
+    '  result = try tool("search", q=event.value)',
+    'end',
+  ].join('\n'))
+
+  const graph = extractEventGraph(ast)
+  const transition = graph.transitions.find((item) => item.eventType === 'route')
+  assert.ok(transition, 'expected route transition')
+  assert.deepEqual(transition.tryBoundaries, [
+    {
+      kind: 'try',
+      operation: 'tool',
+      target: 'result',
+      line: 2,
+    },
+  ])
+})
+
 test('compileAST sets unbound=true on agent_call when validate="none" is a static literal', () => {
   const ir = compileAST(parseNextVScript([
     'on "route"',

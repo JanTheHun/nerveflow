@@ -7,6 +7,7 @@ const BUILTIN_OUTPUT_CHANNELS = new Set(['text', 'json', 'voice', 'console', 'vi
 
 const PROVENANCE_BOUNDED = 'bounded'
 const PROVENANCE_UNBOUNDED = 'unbounded'
+const PROVENANCE_OPERATIONAL = 'operational'
 const PROVENANCE_MIXED = 'mixed'
 const PROVENANCE_UNKNOWN = 'unknown'
 
@@ -80,6 +81,10 @@ function inferExprProvenance(expr, labelsByPath) {
     return merged || PROVENANCE_UNKNOWN
   }
 
+  if (expr.type === 'try_expr') {
+    return PROVENANCE_OPERATIONAL
+  }
+
   let merged = null
   walkExpr(expr, (node) => {
     if (!node || node === expr) return
@@ -119,6 +124,10 @@ function collectHandlerControlEdges(ir, bodyStart, bodyEnd, eventType) {
     }
 
     if (instr.op === 'assign') {
+      if (instr.src?.type === 'try_expr') {
+        setPathLabel(instr.dst, PROVENANCE_OPERATIONAL)
+        continue
+      }
       const provenance = inferExprProvenance(instr.src, labelsByPath) || PROVENANCE_UNKNOWN
       setPathLabel(instr.dst, provenance)
       continue
@@ -138,6 +147,7 @@ function collectHandlerControlEdges(ir, bodyStart, bodyEnd, eventType) {
         branch: 'if_true',
         provenance,
         boundedControl: provenance === PROVENANCE_BOUNDED,
+        operationalControl: provenance === PROVENANCE_OPERATIONAL,
         line: Number.isFinite(Number(instr.line)) ? Number(instr.line) : null,
         statement: String(instr.statement ?? ''),
         ...(sourcePath ? { sourcePath } : {}),
@@ -152,6 +162,7 @@ function collectHandlerControlEdges(ir, bodyStart, bodyEnd, eventType) {
         branch: 'if_false',
         provenance,
         boundedControl: provenance === PROVENANCE_BOUNDED,
+        operationalControl: provenance === PROVENANCE_OPERATIONAL,
         line: Number.isFinite(Number(instr.line)) ? Number(instr.line) : null,
         statement: String(instr.statement ?? ''),
         ...(sourcePath ? { sourcePath } : {}),
@@ -204,6 +215,11 @@ function walkExpr(expr, visitor) {
     for (const element of expr.elements ?? []) {
       walkExpr(element, visitor)
     }
+    return
+  }
+
+  if (expr.type === 'try_expr') {
+    walkExpr(expr.expr, visitor)
     return
   }
 
@@ -324,6 +340,19 @@ function collectTransitionSignals(instr, state) {
     state.agentEntries.push({ name, line: Number.isFinite(Number(lineRaw)) ? Number(lineRaw) : null })
   }
 
+  const pushTryBoundary = (targetPath, wrappedExpr, lineRaw = null) => {
+    if (!Array.isArray(targetPath) || targetPath.length === 0) return
+    if (!wrappedExpr || wrappedExpr.type !== 'call') return
+    const operation = String(wrappedExpr.name ?? '').trim()
+    if (!operation) return
+    state.tryBoundaries.push({
+      kind: 'try',
+      operation,
+      target: pathToKey(targetPath),
+      line: Number.isFinite(Number(lineRaw)) ? Number(lineRaw) : null,
+    })
+  }
+
   const visitExpr = (expr) => {
     walkExpr(expr, (node) => {
       if (node?.type === 'parallel') {
@@ -391,6 +420,9 @@ function collectTransitionSignals(instr, state) {
   }
 
   if (instr?.op === 'assign') {
+    if (instr.src?.type === 'try_expr') {
+      pushTryBoundary(instr.dst, instr.src.expr, instr.line)
+    }
     visitExpr(instr.src)
   }
 
@@ -520,6 +552,7 @@ export function extractEventGraph(astOrIR, options = {}) {
       tools: [],
       outputs: [],
       callOrder: [],
+      tryBoundaries: [],
     }
     let hasExternalComplexity = false
 
@@ -574,6 +607,7 @@ export function extractEventGraph(astOrIR, options = {}) {
       ...(transitionState.hasParallelAgents ? { hasParallelAgents: true } : {}),
       tools: transitionState.tools,
       outputs: transitionState.outputs,
+      ...(transitionState.tryBoundaries.length > 0 ? { tryBoundaries: transitionState.tryBoundaries } : {}),
       ...(hasMixedCallOrder ? { callOrder: transitionState.callOrder } : {}),
       warnings,
     })

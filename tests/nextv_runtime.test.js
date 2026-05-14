@@ -1352,6 +1352,147 @@ test('tool() surfaces hostAdapter policy errors', async () => {
   )
 })
 
+test('try tool() returns success envelope', async () => {
+  const result = await runNextVScript('response = try tool("get_time")', {
+    callTool: async () => '2026-04-14T00:00:00.000Z',
+  })
+
+  assert.deepEqual(result.locals.response, {
+    ok: true,
+    value: '2026-04-14T00:00:00.000Z',
+  })
+})
+
+test('try tool() converts operational failure to envelope', async () => {
+  const result = await runNextVScript('response = try tool("search", { q: "ping" })', {
+    callTool: async () => {
+      throw new Error('timeout from provider')
+    },
+  })
+
+  assert.equal(result.locals.response.ok, false)
+  assert.equal(result.locals.response.error.type, 'function_call_error')
+  assert.match(result.locals.response.error.message, /tool\(\) failed/i)
+})
+
+test('try agent() returns success envelope for uncontracted call', async () => {
+  const result = await runNextVScript('response = try agent("router", "hello")', {
+    callAgent: async () => 'ok',
+  })
+
+  assert.deepEqual(result.locals.response, {
+    ok: true,
+    value: 'ok',
+  })
+})
+
+test('try model() with returns is allowed and returns success envelope', async () => {
+  const result = await runNextVScript('response = try model("m", "q", returns={ text: "" })', {
+    callAgent: async () => ({ text: 'ok' }),
+  })
+
+  assert.deepEqual(result.locals.response, {
+    ok: true,
+    value: { text: 'ok' },
+  })
+})
+
+test('try agent() with decide converts mismatch to failure envelope', async () => {
+  const result = await runNextVScript('response = try agent("router", "q", decide=["yes", "no"])', {
+    callAgent: async () => 'maybe',
+  })
+
+  assert.equal(result.locals.response.ok, false)
+  assert.equal(result.locals.response.error.type, 'agent_return_contract_violation')
+  assert.match(result.locals.response.error.message, /decide contract violation/i)
+})
+
+test('try failure envelope includes original output when provided on contract error', async () => {
+  const result = await runNextVScript('response = try agent("router", "q", decide=["yes", "no"])', {
+    callAgent: async () => {
+      const err = new Error('decide contract violation: output "garbage" does not match any allowed value.')
+      err.code = 'AGENT_RETURN_CONTRACT_VIOLATION'
+      err.output = 'garbage'
+      throw err
+    },
+  })
+
+  assert.equal(result.locals.response.ok, false)
+  assert.equal(result.locals.response.error.type, 'agent_return_contract_violation')
+  assert.equal(result.locals.response.error.output, 'garbage')
+})
+
+test('try agent() with returns and retry converts retry-exhausted contract failure to envelope', async () => {
+  const calls = []
+  const result = await runNextVScript('response = try agent("router", "q", returns={ intent: ["play", "unclear"] }, retry_on_contract_violation=2)', {
+    callAgent: async (args) => {
+      calls.push(args)
+      const err = new Error('retry exhausted: contract mismatch')
+      err.code = 'AGENT_RETURN_CONTRACT_VIOLATION'
+      throw err
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].retry_on_contract_violation, 2)
+  assert.equal(result.locals.response.ok, false)
+  assert.equal(result.locals.response.error.type, 'agent_return_contract_violation')
+  assert.match(result.locals.response.error.message, /retry exhausted/i)
+})
+
+test('try model() with returns and retry converts retry-exhausted contract failure to envelope', async () => {
+  const calls = []
+  const result = await runNextVScript('response = try model("mini", "q", returns={ intent: ["play", "unclear"] }, retry_on_contract_violation=1)', {
+    callAgent: async (args) => {
+      calls.push(args)
+      const err = new Error('retry exhausted: contract mismatch')
+      err.code = 'AGENT_RETURN_CONTRACT_VIOLATION'
+      throw err
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].retry_on_contract_violation, 1)
+  assert.equal(result.locals.response.ok, false)
+  assert.equal(result.locals.response.error.type, 'agent_return_contract_violation')
+  assert.match(result.locals.response.error.message, /retry exhausted/i)
+})
+
+test('try agent() with on_contract_violation is rejected as INVALID_CALL_CONFIG', async () => {
+  await assert.rejects(
+    () => runNextVScript('result = try agent("router", "q", on_contract_violation=emit("bad", violation))', {
+      callAgent: async () => 'yes',
+    }),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_CALL_CONFIG')
+      return true
+    },
+  )
+})
+
+test('try does not suppress invalid workflow semantics', async () => {
+  await assert.rejects(
+    () => runNextVScript('result = try not_a_real_function()'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_TRY_TARGET')
+      return true
+    },
+  )
+})
+
+test('try requires a supported direct call target', async () => {
+  await assert.rejects(
+    () => runNextVScript('result = try (1 + 2)'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_TRY_TARGET')
+      return true
+    },
+  )
+})
+
 test('agent() delegates to runtime agent hook', async () => {
   const calls = []
   const result = await runNextVScript('summary = agent("research", "summarize this")', {
@@ -3109,6 +3250,7 @@ test('try_bind() returns ok=false with json_parse_error on invalid JSON string',
   ].join('\n'), {})
   assert.equal(result.locals.bound.ok, false)
   assert.equal(result.locals.bound.error.type, 'json_parse_error')
+  assert.equal(result.locals.bound.error.output, 'not json at all')
 })
 
 test('try_bind() returns ok=false with contract_violation on schema mismatch', async () => {
@@ -3117,6 +3259,17 @@ test('try_bind() returns ok=false with contract_violation on schema mismatch', a
   ].join('\n'), {})
   assert.equal(result.locals.bound.ok, false)
   assert.equal(result.locals.bound.error.type, 'contract_violation')
+  assert.equal(result.locals.bound.error.field, 'confidence')
+})
+
+test('try_bind() preserves original string input as error.output on contract mismatch', async () => {
+  const result = await runNextVScript([
+    'raw = "{\"intent\":\"search\"}"',
+    'bound = try_bind(raw, { intent: "", confidence: 0 })',
+  ].join('\n'), {})
+  assert.equal(result.locals.bound.ok, false)
+  assert.equal(result.locals.bound.error.type, 'contract_violation')
+  assert.equal(result.locals.bound.error.output, '{"intent":"search"}')
   assert.equal(result.locals.bound.error.field, 'confidence')
 })
 

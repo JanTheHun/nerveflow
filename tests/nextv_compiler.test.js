@@ -154,3 +154,10 @@ test('strict compilation rejects forbidden calls nested in arithmetic expression
     (err) => err.code === 'STRICT_MODE_VIOLATION',
   )
 })
+
+test('try parser rejects unsupported call targets', () => {
+  assert.throws(
+    () => parseNextVScript('x = try input()'),
+    (err) => err.code === 'INVALID_TRY_TARGET',
+  )
+})

@@ -159,6 +159,7 @@ test('runtime command router handles call_inspector_execute command', async () =
         call: {
           targetKind: 'model',
           target: 'test-model',
+          mode: 'try',
           validate: 'coerce',
           retry_on_contract_violation: 0,
         },
@@ -195,6 +196,7 @@ test('runtime command router handles call_inspector_execute command', async () =
 
   const payload = {
     targetKind: 'model',
+    mode: 'try',
     model: 'test-model',
     prompt: 'hello',
   }
@@ -208,6 +210,7 @@ test('runtime command router handles call_inspector_execute command', async () =
   assert.equal(response.requestId, 'call-1')
   assert.equal(response.data.call.targetKind, 'model')
   assert.equal(response.data.call.target, 'test-model')
+  assert.equal(response.data.call.mode, 'try')
   assert.deepEqual(runtime.callInspectorExecuteCalls, [payload])
 })
 

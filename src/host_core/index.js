@@ -45,6 +45,7 @@ export {
 } from './workspace_config.js'
 
 export {
+  buildInactiveCandidateStatus,
   buildInactiveSnapshot,
   createNextVRuntimeController,
 } from './runtime_controller.js'

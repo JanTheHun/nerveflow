@@ -169,6 +169,39 @@ import {
   openNextVWorkspace
 } from './13_layout.js'
 
+let bufferedRuntimeEventsForExecution = []
+
+function toExecutionEventKey(event) {
+  if (!event || typeof event !== 'object') return ''
+  const type = String(event.type ?? '').trim()
+  const timestamp = String(event.timestamp ?? '').trim()
+  const tool = String(event.tool ?? '').trim()
+  const agent = String(event.agent ?? '').trim()
+  const sourcePath = String(event.sourcePath ?? '').trim()
+  const sourceLine = Number.isFinite(Number(event.sourceLine)) ? String(Number(event.sourceLine)) : ''
+  const line = Number.isFinite(Number(event.line)) ? String(Number(event.line)) : ''
+  return [type, timestamp, tool, agent, sourcePath, sourceLine, line].join('|')
+}
+
+function mergeExecutionEventsWithLiveRuntimeEvents(executionEvents, runtimeEvents) {
+  const left = Array.isArray(executionEvents) ? executionEvents : []
+  const right = Array.isArray(runtimeEvents) ? runtimeEvents : []
+  if (right.length === 0) return left
+  if (left.length === 0) return right
+
+  const merged = []
+  const seen = new Set()
+
+  for (const event of [...left, ...right]) {
+    const key = toExecutionEventKey(event)
+    if (key && seen.has(key)) continue
+    if (key) seen.add(key)
+    merged.push(event)
+  }
+
+  return merged
+}
+
 function buildNextVAttachApiPath(pathname) {
   const params = new URLSearchParams()
   params.set('runtimeTarget', 'attach')
@@ -337,6 +370,7 @@ export function openNextVStream() {
   nextVEventSource.addEventListener('nextv_started', (evt) => {
     try {
       const payload = JSON.parse(evt.data)
+      bufferedRuntimeEventsForExecution = []
       _setNextVHasLiveRuntimeEvents(false)
       resetNextVGraphRuntimeState({ keepExternalNodes: false })
       applyNextVGraphRuntimeVisuals()
@@ -371,6 +405,11 @@ export function openNextVStream() {
       const runtimeEvent = payload?.runtimeEvent
       if (!runtimeEvent || typeof runtimeEvent !== 'object') return
 
+      bufferedRuntimeEventsForExecution.push(runtimeEvent)
+      if (bufferedRuntimeEventsForExecution.length > 500) {
+        bufferedRuntimeEventsForExecution = bufferedRuntimeEventsForExecution.slice(-500)
+      }
+
       _setNextVHasLiveRuntimeEvents(true)
       handleNextVGraphRuntimeEvent(runtimeEvent)
       renderCanonicalNextVEvents([runtimeEvent])
@@ -395,12 +434,16 @@ export function openNextVStream() {
       const eventType = String(payload?.event?.type ?? '')
       const source = String(payload?.event?.source ?? '')
       const executionEvents = Array.isArray(payload?.events) ? payload.events : []
+      const mergedExecutionEvents = mergeExecutionEventsWithLiveRuntimeEvents(
+        executionEvents,
+        bufferedRuntimeEventsForExecution,
+      )
       const shouldRenderFromExecution = !nextVHasLiveRuntimeEvents
       const shouldUseTimerExecutionSupplement = false
       
       // Prefer live runtime events. Fall back to execution event replay only when live events were not observed.
       const runtimeEventsForGraph = shouldRenderFromExecution
-        ? executionEvents
+        ? mergedExecutionEvents
         : []
       
       const eventsForGraphProcessing = runtimeEventsForGraph
@@ -477,7 +520,10 @@ export function openNextVStream() {
 
       // Build and render execution group (newest-first)
       nextVExecutionCounter += 1
-      const group = buildExecutionGroup(payload, nextVExecutionCounter)
+      const group = buildExecutionGroup({
+        ...payload,
+        events: mergedExecutionEvents,
+      }, nextVExecutionCounter)
 
       if (nextVEventsLiveMode) {
         // Live mode: prepend to groups and render
@@ -503,6 +549,7 @@ export function openNextVStream() {
       const diffAfter = payload?.snapshot?.state ?? {}
       appendNextVStateDiffEntry(eventType, buildStateDiff(diffBefore, diffAfter))
       renderNextVSnapshot(payload.snapshot)
+      bufferedRuntimeEventsForExecution = []
       _setNextVHasLiveRuntimeEvents(false)
       setStatus('nextv execution complete')
     } catch {

@@ -141,7 +141,9 @@ test('protocol constants include required v1 values', () => {
     'enqueue_event',
     'dispatch_ingress',
     'call_inspector_execute',
+    'submit_candidate',
     'snapshot',
+    'definition_status',
     'subscribe',
     'unsubscribe',
   ])
@@ -164,5 +166,8 @@ test('protocol constants include required v1 values', () => {
     'nextv_event_queued',
     'nextv_ingress_dispatched',
     'nextv_effect_realized',
+    'nextv_candidate_validation_started',
+    'nextv_candidate_validation_failed',
+    'nextv_candidate_promotable',
   ])
 })

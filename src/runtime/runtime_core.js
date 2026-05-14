@@ -245,6 +245,14 @@ export function createRuntimeCore({
     return await runtimeController.dispatchIngress(payload)
   }
 
+  function submitCandidate() {
+    return runtimeController.submitCandidate()
+  }
+
+  function getDefinitionStatus() {
+    return runtimeController.getDefinitionStatus()
+  }
+
   function buildResolvedCallSummary({
     targetKind = 'agent',
     target = '',
@@ -492,6 +500,8 @@ export function createRuntimeCore({
     stop,
     enqueue,
     dispatchIngress,
+    submitCandidate,
+    getDefinitionStatus,
     callInspectorExecute,
     getSnapshot,
     attachSurface,

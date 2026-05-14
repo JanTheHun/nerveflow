@@ -27,6 +27,8 @@ Configured assets:
 - `contracts/`: structured decision/output contracts
 - `prompts/`: prompt files for classifier and summarizer
 
+For the remote classifier models, copy `examples/news-agent/.env.example` to `examples/news-agent/.env` and set `GROQ_API_KEY`, `GEMINI_API_KEY`, and `OPENAI_API_KEY` as needed.
+
 ## Required Host Tools
 
 This workflow expects host tool implementations for:

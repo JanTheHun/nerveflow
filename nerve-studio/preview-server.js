@@ -1578,6 +1578,47 @@ async function handleApi(req, res, url) {
     }
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/nextv/definition-status') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (runtimeTarget === 'remote-observe') {
+      return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
+    }
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
+      return sendJson(res, 405, { error: 'definition status is currently supported only in embedded runtime mode' })
+    }
+
+    if (!runtimeController.isActive()) {
+      return sendJson(res, 404, { error: 'nextV runtime not active' })
+    }
+
+    try {
+      return sendJson(res, 200, { ok: true, ...runtimeController.getDefinitionStatus() })
+    } catch (err) {
+      return sendJson(res, 400, { error: String(err?.message ?? err) })
+    }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/nextv/submit-candidate') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (runtimeTarget === 'remote-observe') {
+      return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
+    }
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
+      return sendJson(res, 405, { error: 'candidate submission is currently supported only in embedded runtime mode' })
+    }
+
+    if (!runtimeController.isActive()) {
+      return sendJson(res, 404, { error: 'nextV runtime not active' })
+    }
+
+    try {
+      const payload = runtimeController.submitCandidate()
+      return sendJson(res, 200, { ok: true, candidate: payload })
+    } catch (err) {
+      return sendJson(res, 400, { error: String(err?.message ?? err) })
+    }
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/nextv/event') {
     const runtimeTarget = resolveRuntimeTarget(url)
     if (runtimeTarget === 'remote-observe') {

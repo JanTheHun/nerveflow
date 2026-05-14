@@ -8,6 +8,17 @@ export function buildInactiveSnapshot() {
   }
 }
 
+export function buildInactiveCandidateStatus() {
+  return {
+    status: 'none',
+    policy: 'warn',
+    submittedAt: null,
+    workspaceDir: '',
+    entrypointPath: '',
+    issues: [],
+  }
+}
+
 export function createNextVRuntimeController({
   eventBus,
   createRunner,
@@ -63,6 +74,7 @@ export function createNextVRuntimeController({
   let nextVWorkspaceDirResolved = null
   let nextVWorkspaceConfig = null
   let nextVRuntimeCallHooks = null
+  let nextVCandidateStatus = buildInactiveCandidateStatus()
 
   function normalizeRuntimeEventSourcePath(pathValue) {
     const raw = String(pathValue ?? '').trim()
@@ -108,7 +120,90 @@ export function createNextVRuntimeController({
     nextVRuntimeCallHooks = null
     nextVWorkspaceConfig = null
     nextVWorkspaceDirResolved = null
+    nextVCandidateStatus = buildInactiveCandidateStatus()
     return snapshot
+  }
+
+  function summarizeWorkspaceConfig(workspaceConfig) {
+    return {
+      models: workspaceConfig?.models?.status || 'not-loaded',
+      agents: workspaceConfig?.agents?.status || 'not-loaded',
+      tools: workspaceConfig?.tools?.status || 'not-loaded',
+      nextv: workspaceConfig?.nextv?.status || 'not-loaded',
+      operators: workspaceConfig?.operators?.status || 'not-loaded',
+      modelsSource: workspaceConfig?.models?.source || null,
+      agentsSource: workspaceConfig?.agents?.source || null,
+      toolsSource: workspaceConfig?.tools?.source || null,
+      nextvSource: workspaceConfig?.nextv?.file || null,
+      operatorsSource: workspaceConfig?.operators?.source || null,
+    }
+  }
+
+  function collectCandidateIssues({ workspaceConfig, effectsPolicy }) {
+    const declaredEffectChannels = getDeclaredEffectChannels(workspaceConfig)
+    const requiredCapabilities = getRequiredCapabilities(workspaceConfig)
+    const configuredModules = getConfiguredModules(workspaceConfig)
+
+    const issues = []
+
+    const effectBindingIssues = validateDeclaredEffectBindings({
+      declaredEffectChannels,
+      validateEffectBindings,
+    })
+    if (effectBindingIssues.length > 0) {
+      issues.push({
+        code: 'UNSUPPORTED_EFFECT_BINDING',
+        message: `Detected ${effectBindingIssues.length} unsupported declared effect binding(s).`,
+        severity: effectsPolicy === 'strict' ? 'error' : 'warning',
+        details: effectBindingIssues,
+      })
+    }
+
+    const capabilityBindingIssues = validateRequiredCapabilityBindings({
+      requiredCapabilities,
+      configuredModules,
+      validateCapabilityBindings,
+    })
+    if (capabilityBindingIssues.length > 0) {
+      issues.push({
+        code: 'UNSUPPORTED_CAPABILITY_BINDING',
+        message: `Detected ${capabilityBindingIssues.length} unsupported required capability binding(s).`,
+        severity: effectsPolicy === 'strict' ? 'error' : 'warning',
+        details: capabilityBindingIssues,
+      })
+    }
+
+    const configRefIssues = validateConfigReferences(workspaceConfig)
+    const transportIssues = configRefIssues.filter((entry) => entry.code === 'TRANSPORT_NOT_FOUND')
+    if (transportIssues.length > 0) {
+      issues.push({
+        code: 'TRANSPORT_NOT_FOUND',
+        message: `Detected ${transportIssues.length} transport configuration error(s).`,
+        severity: 'error',
+        details: transportIssues,
+      })
+    }
+    const otherConfigRefIssues = configRefIssues.filter((entry) => entry.code !== 'TRANSPORT_NOT_FOUND')
+    if (otherConfigRefIssues.length > 0) {
+      issues.push({
+        code: 'CONFIG_REFERENCE_ERROR',
+        message: `Detected ${otherConfigRefIssues.length} config reference issue(s).`,
+        severity: effectsPolicy === 'strict' ? 'error' : 'warning',
+        details: otherConfigRefIssues,
+      })
+    }
+
+    const forbiddenFieldIssues = validateNoForbiddenAgentFields(workspaceConfig)
+    if (forbiddenFieldIssues.length > 0) {
+      issues.push({
+        code: 'FORBIDDEN_AGENT_FIELD',
+        message: `Detected ${forbiddenFieldIssues.length} forbidden agent field(s).`,
+        severity: effectsPolicy === 'strict' ? 'error' : 'warning',
+        details: forbiddenFieldIssues,
+      })
+    }
+
+    return issues
   }
 
   async function start(body = {}) {
@@ -550,20 +645,46 @@ export function createNextVRuntimeController({
     const payload = {
       workspaceDir: workspaceDir.relativePath,
       entrypointPath: nextVEntrypointPath,
-      workspaceConfig: {
-        models: workspaceConfig?.models?.status || 'not-loaded',
-        agents: workspaceConfig?.agents?.status || 'not-loaded',
-        tools: workspaceConfig?.tools?.status || 'not-loaded',
-        nextv: workspaceConfig?.nextv?.status || 'not-loaded',
-        operators: workspaceConfig?.operators?.status || 'not-loaded',
-        modelsSource: workspaceConfig?.models?.source || null,
-        agentsSource: workspaceConfig?.agents?.source || null,
-        toolsSource: workspaceConfig?.tools?.source || null,
-        nextvSource: workspaceConfig?.nextv?.file || null,
-        operatorsSource: workspaceConfig?.operators?.source || null,
-      },
+      workspaceConfig: summarizeWorkspaceConfig(workspaceConfig),
     }
     eventBus.publish('nextv_config_reloaded', payload)
+    return payload
+  }
+
+  function submitCandidate() {
+    if (!nextVRunner) {
+      throw new Error('nextV runtime not active')
+    }
+
+    const workspaceDir = nextVWorkspaceDirResolved || resolveWorkspaceDirectory(nextVWorkspaceDir)
+    const workspaceConfig = loadWorkspaceConfig(workspaceDir)
+    const effectsPolicy = normalizeEffectsPolicy(workspaceConfig?.nextv?.config?.effectsPolicy)
+
+    eventBus.publish('nextv_candidate_validation_started', {
+      workspaceDir: workspaceDir.relativePath,
+      entrypointPath: nextVEntrypointPath,
+      policy: effectsPolicy,
+    })
+
+    const issues = collectCandidateIssues({ workspaceConfig, effectsPolicy })
+    const rejected = issues.some((issue) => issue.severity === 'error')
+    const payload = {
+      status: rejected ? 'rejected' : 'promotable',
+      policy: effectsPolicy,
+      submittedAt: new Date().toISOString(),
+      workspaceDir: workspaceDir.relativePath,
+      entrypointPath: nextVEntrypointPath,
+      workspaceConfig: summarizeWorkspaceConfig(workspaceConfig),
+      issues,
+    }
+    nextVCandidateStatus = payload
+
+    if (rejected) {
+      eventBus.publish('nextv_candidate_validation_failed', payload)
+    } else {
+      eventBus.publish('nextv_candidate_promotable', payload)
+    }
+
     return payload
   }
 
@@ -641,14 +762,27 @@ export function createNextVRuntimeController({
     return nextVRunner ? nextVRunner.getSnapshot() : null
   }
 
+  function getDefinitionStatus() {
+    return {
+      active: {
+        running: Boolean(nextVRunner),
+        workspaceDir: nextVWorkspaceDir,
+        entrypointPath: nextVEntrypointPath,
+      },
+      candidate: nextVCandidateStatus,
+    }
+  }
+
   return {
     start,
     stop,
     reloadConfig,
+    submitCandidate,
     enqueue,
     dispatchIngress,
     getSnapshot,
     getActiveSnapshot,
+    getDefinitionStatus,
     isActive: () => Boolean(nextVRunner),
     getWorkspaceDir: () => nextVWorkspaceDir,
     getEntrypointPath: () => nextVEntrypointPath,

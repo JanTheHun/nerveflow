@@ -1046,6 +1046,31 @@ body.mode-nextv .nextv-primary-view.active-primary-view {
   display: flex;
 }
 
+body.mode-nextv.nextv-primary-editor #script-section {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  grid-template-columns: 1fr auto;
+}
+
+body.mode-nextv.nextv-primary-editor #script-section > .panel-header {
+  grid-column: 1 / -1;
+}
+
+body.mode-nextv.nextv-primary-editor #file-manager-shell {
+  min-width: 0;
+}
+
+body.mode-nextv.nextv-primary-editor #nextv-graph-shell {
+  display: flex;
+}
+
+body.mode-nextv.nextv-primary-editor #nextv-graph-output,
+body.mode-nextv.nextv-primary-editor #nextv-floating-code-panel,
+body.mode-nextv.nextv-primary-editor #nextv-floating-code-panel-2,
+body.mode-nextv.nextv-primary-editor #nextv-floating-panel-chooser {
+  display: none !important;
+}
+
 .nextv-graph-shell {
   flex-direction: row;
   background: #0f1216;

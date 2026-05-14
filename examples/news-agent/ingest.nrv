@@ -19,8 +19,8 @@ on "ingest_poll_batch"
 end
 
 on "ingest_classify_batch"
-  priority_batch = agent(
-    "priority-slow",
+  priority_batch = model(
+    "openai-model",
     concat(
       "Favorite topics: ",
       to_json(state.favoriteTopics),

@@ -14,6 +14,27 @@
       "format": "json"
     }
   },
+  "transports": {
+    "ollama": {
+      "provider": "ollama",
+      "keep_alive": "30m"
+    },
+    "openai": {
+      "provider": "openai_compat",
+      "baseUrl": "https://api.openai.com",
+      "apiKey": "${env:OPENAI_API_KEY}"
+    },
+    "groq": {
+      "provider": "openai_compat",
+      "baseUrl": "https://api.groq.com/openai",
+      "apiKey": "${env:GROQ_API_KEY}"
+    },
+    "gemini": {
+      "provider": "openai_compat",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "apiKey": "${env:GEMINI_API_KEY}"
+    }
+  },
   "models": {
     "priority-model": {
       "model": "phi3:mini-128k",
@@ -22,6 +43,18 @@
     "summarizer-model": {
       "model": "cogito:3b",
       "transport": "ollama"
+    },
+    "openai-model": {
+      "model": "gpt-4o-mini",
+      "transport": "openai"
+    },
+    "groq-model": {
+      "model": "openai/gpt-oss-20b",
+      "transport": "groq"
+    },
+    "gemini-model": {
+      "model": "gemini-2.5-flash-lite",
+      "transport": "gemini"
     }
   },
   "agents": {

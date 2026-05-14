@@ -20,7 +20,8 @@ on external "user_message"
 	  "intent-4",
 	  event.value,
 	  instructions="Classify user intent. Choose from declared possibilities.\nReturn exactly one.\nIf not sure, choose unclear.",
-		decide=["play", "unclear"]
+		decide=["play", "unclear"],
+  	retry_on_contract_violation=1
 	)
 
 	output json result

@@ -71,6 +71,28 @@ test('runtime command router returns protocol responses', async () => {
   assert.equal(snapshotResponse.ok, true)
   assert.equal(snapshotResponse.data.running, true)
 
+  const candidateResponse = await router.handleRawCommand({
+    type: 'submit_candidate',
+    requestId: 'candidate-1',
+    payload: {},
+  })
+
+  assert.equal(candidateResponse.ok, true)
+  assert.equal(
+    candidateResponse.data.status === 'promotable' || candidateResponse.data.status === 'rejected',
+    true,
+  )
+
+  const definitionStatusResponse = await router.handleRawCommand({
+    type: 'definition_status',
+    requestId: 'defs-1',
+    payload: {},
+  })
+
+  assert.equal(definitionStatusResponse.ok, true)
+  assert.equal(definitionStatusResponse.data.active.running, true)
+  assert.equal(typeof definitionStatusResponse.data.candidate?.status, 'string')
+
   const unsubscribeResponse = await router.handleRawCommand({
     type: 'unsubscribe',
     requestId: 'u-1',

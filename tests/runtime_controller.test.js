@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createEventBus } from '../src/host_core/event_bus.js'
 import {
+  buildInactiveCandidateStatus,
   buildInactiveSnapshot,
   createNextVRuntimeController,
 } from '../src/host_core/runtime_controller.js'
@@ -79,6 +80,7 @@ function createController(options = {}) {
     ingressRuntime = null,
     effectRuntime = null,
     validateConfigReferences = () => [],
+    validateNoForbiddenAgentFields = () => [],
     loadWorkspaceConfig = () => workspaceConfig,
   } = options
 
@@ -105,6 +107,7 @@ function createController(options = {}) {
     normalizeEffectsPolicy,
     validateDeclaredEffectBindings,
     validateRequiredCapabilityBindings,
+    validateNoForbiddenAgentFields,
     areJsonStatesEqual: (left, right) => JSON.stringify(left) === JSON.stringify(right),
     hasMeaningfulNextVExecutionEvents: (events) => Array.isArray(events) && events.length > 0,
     normalizeInputEvent: (event) => event,
@@ -131,6 +134,17 @@ test('buildInactiveSnapshot returns deterministic shape', () => {
     pendingEvents: 0,
     state: {},
     locals: {},
+  })
+})
+
+test('buildInactiveCandidateStatus returns deterministic shape', () => {
+  assert.deepEqual(buildInactiveCandidateStatus(), {
+    status: 'none',
+    policy: 'warn',
+    submittedAt: null,
+    workspaceDir: '',
+    entrypointPath: '',
+    issues: [],
   })
 })
 
@@ -186,6 +200,15 @@ test('controller reloadConfig throws when runtime is inactive', () => {
   )
 })
 
+test('controller submitCandidate throws when runtime is inactive', () => {
+  const { controller } = createController()
+
+  assert.throws(
+    () => controller.submitCandidate(),
+    /nextV runtime not active/,
+  )
+})
+
 test('controller reloadConfig refreshes live config and clears adapter cache', async () => {
   const configA = {
     agents: { status: 'loaded', source: 'agents.json', profiles: { alpha: { model: 'm1' } } },
@@ -225,6 +248,61 @@ test('controller reloadConfig refreshes live config and clears adapter cache', a
   assert.equal(reloaded.workspaceConfig.agentsSource, 'agents.v2.json')
   assert.equal(clearConfigCacheCount, 1)
   assert.equal(published.some((entry) => entry.eventName === 'nextv_config_reloaded'), true)
+})
+
+test('controller submitCandidate reports rejected candidate without mutating active routing', async () => {
+  const configStart = {
+    agents: { status: 'loaded', source: 'agents.json', profiles: {} },
+    tools: { status: 'loaded', source: 'tools.json', allow: null, aliases: {} },
+    nextv: { status: 'loaded', file: 'nextv.json', config: { effectsPolicy: 'strict' }, timers: [], timersSource: '' },
+    operators: { status: 'missing', source: '', map: {} },
+  }
+  const configCandidate = {
+    agents: {
+      status: 'loaded',
+      source: 'agents.bad.json',
+      profiles: {},
+      map: {
+        planner: {
+          model: 'default',
+          transport: 'should-not-be-here',
+        },
+      },
+    },
+    tools: { status: 'loaded', source: 'tools.json', allow: null, aliases: {} },
+    nextv: { status: 'loaded', file: 'nextv.json', config: { effectsPolicy: 'strict' }, timers: [], timersSource: '' },
+    operators: { status: 'missing', source: '', map: {} },
+  }
+
+  const loadedConfigs = [configStart, configCandidate]
+  let loadIndex = 0
+  const { controller, published } = createController({
+    loadWorkspaceConfig: () => loadedConfigs[Math.min(loadIndex++, loadedConfigs.length - 1)],
+    validateNoForbiddenAgentFields: (workspaceConfig) => {
+      if (workspaceConfig?.agents?.source !== 'agents.bad.json') return []
+      return [{ code: 'FORBIDDEN_AGENT_FIELD', message: 'transport is forbidden on agent profile planner' }]
+    },
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  const queuedBefore = controller.enqueue({ type: 'user_message', value: 'before-candidate' })
+  const candidate = controller.submitCandidate()
+  const queuedAfter = controller.enqueue({ type: 'user_message', value: 'after-candidate' })
+
+  assert.equal(candidate.status, 'rejected')
+  assert.equal(candidate.workspaceConfig.agentsSource, 'agents.bad.json')
+  assert.equal(candidate.issues.some((issue) => issue.code === 'FORBIDDEN_AGENT_FIELD'), true)
+  assert.equal(queuedBefore.snapshot.running, true)
+  assert.equal(queuedAfter.snapshot.running, true)
+  assert.equal(queuedAfter.snapshot.pendingEvents, queuedBefore.snapshot.pendingEvents + 1)
+  assert.equal(
+    published.some((entry) => entry.eventName === 'nextv_candidate_validation_failed' && entry.payload?.status === 'rejected'),
+    true,
+  )
+
+  const status = controller.getDefinitionStatus()
+  assert.equal(status.active.running, true)
+  assert.equal(status.candidate.status, 'rejected')
 })
 
 test('controller start warns for unsupported declared effects in warn mode and continues startup', async () => {

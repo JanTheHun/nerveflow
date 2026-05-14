@@ -85,6 +85,11 @@ export function createRuntimeCommandRouter({
           throw new Error('call inspector execution is not available in this runtime host')
         }
         data = await runtimeCore.callInspectorExecute(payload)
+      } else if (command.type === 'submit_candidate') {
+        if (typeof runtimeCore.submitCandidate !== 'function') {
+          throw new Error('candidate validation is not available in this runtime host')
+        }
+        data = runtimeCore.submitCandidate(payload)
       } else if (command.type === 'snapshot') {
         const snapshot = runtimeCore.getSnapshot()
         const status = typeof runtimeCore.getStatus === 'function'
@@ -96,6 +101,11 @@ export function createRuntimeCommandRouter({
           workspaceDir: String(status?.workspaceDir ?? ''),
           entrypointPath: String(status?.entrypointPath ?? ''),
         }
+      } else if (command.type === 'definition_status') {
+        if (typeof runtimeCore.getDefinitionStatus !== 'function') {
+          throw new Error('definition status is not available in this runtime host')
+        }
+        data = runtimeCore.getDefinitionStatus()
       } else if (command.type === 'subscribe') {
         if (typeof onSubscribe === 'function') onSubscribe(command)
         data = {

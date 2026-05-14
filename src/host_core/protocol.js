@@ -17,7 +17,9 @@
  * - enqueue_event: Feed input event to runtime
  * - dispatch_ingress: Dispatch ingress connector output into runtime queue
  * - call_inspector_execute: Execute a structured direct model/agent call
+ * - submit_candidate: Validate a candidate workflow/config without mutating active runtime
  * - snapshot: Get current runtime state
+ * - definition_status: Get active/candidate definition status
  * - subscribe: Attach surface to runtime events
  * - unsubscribe: Detach surface from runtime events
  * 
@@ -32,6 +34,9 @@
  * - nextv_event_queued: Event added to queue
  * - nextv_ingress_dispatched: Ingress dispatch routed and enqueued
  * - nextv_effect_realized: Declared effect channel realized by host
+ * - nextv_candidate_validation_started: Candidate validation pipeline started
+ * - nextv_candidate_validation_failed: Candidate rejected during validation
+ * - nextv_candidate_promotable: Candidate validated as promotable
  * 
  * Error codes indicate protocol or policy violations:
  * - policy_denied: Tool/effect not allowed
@@ -50,7 +55,9 @@ const HOST_COMMAND_TYPES = Object.freeze([
   'enqueue_event',
   'dispatch_ingress',
   'call_inspector_execute',
+  'submit_candidate',
   'snapshot',
+  'definition_status',
   'subscribe',
   'unsubscribe',
 ])
@@ -66,6 +73,9 @@ const HOST_EVENT_NAMES = Object.freeze([
   'nextv_event_queued',
   'nextv_ingress_dispatched',
   'nextv_effect_realized',
+  'nextv_candidate_validation_started',
+  'nextv_candidate_validation_failed',
+  'nextv_candidate_promotable',
 ])
 
 const HOST_ERROR_CODES = Object.freeze([

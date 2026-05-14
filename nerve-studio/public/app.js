@@ -1038,6 +1038,7 @@ import {
   _setRemoteRuntimeWorkspaceDir,
   activeScriptRunId,
   fileManagerShell,
+  workspace,
   inputPanelState,
   isBusy,
   isRemoteControlMode,
@@ -1087,6 +1088,8 @@ import {
   nextVStateSnapshotPane,
   nextVStopBtn,
   nextVTabConsole,
+  nextVViewCallInspector,
+  nextVCallInspectorPanel,
   nextVTabEvents,
   nextVTabTrace,
   nextVUserIOSplitter,
@@ -1225,6 +1228,8 @@ export function setNextVPrimaryView(view, options = {}) {
   }
 
   nextVViewState.currentView = nextView
+  document.body.classList.toggle('nextv-primary-editor', nextView === 'editor')
+  document.body.classList.toggle('nextv-primary-graph', nextView === 'graph')
 
   if (nextVViewEditor) {
     nextVViewEditor.classList.toggle('active', nextView === 'editor')
@@ -1420,6 +1425,190 @@ export function setNextVDevConsoleOpen(open, options = {}) {
 
 export function toggleNextVDevConsole() {
   setNextVDevConsoleOpen(!nextVPanelState.devConsoleOpen)
+}
+
+function getNextVCallInspectorPanelShell() {
+  if (workspace) return workspace
+  if (fileManagerShell) return fileManagerShell
+  return null
+}
+
+function getNextVCallInspectorPanelDefaultLayout() {
+  return { left: 12, top: 12, width: 760, height: 860 }
+}
+
+let nextVCallInspectorPanelLayoutState = null
+
+function readStoredNextVCallInspectorPanelLayout() {
+  const raw = String(localStorage.getItem(storageKeys.nextVCallInspectorPanelLayout) ?? '').trim()
+  if (!raw) return null
+
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
+function clampNextVCallInspectorPanelLayout(rect) {
+  const shell = getNextVCallInspectorPanelShell()
+  if (!shell) return null
+  const shellWidth = Math.max(320, shell.clientWidth || 0)
+  const shellHeight = Math.max(280, shell.clientHeight || 0)
+
+  const width = Math.max(520, Math.min(Number(rect?.width ?? 760), shellWidth - 8))
+  const height = Math.max(560, Math.min(Number(rect?.height ?? 860), shellHeight - 8))
+
+  // Keep part of the panel visible while allowing larger panels to move freely.
+  const minVisibleX = 120
+  const minVisibleY = 52
+  const minLeft = Math.min(0, shellWidth - width)
+  const maxLeft = Math.max(0, shellWidth - minVisibleX)
+  const minTop = Math.min(0, shellHeight - height)
+  const maxTop = Math.max(0, shellHeight - minVisibleY)
+  const left = Math.max(minLeft, Math.min(Number(rect?.left ?? 12), maxLeft))
+  const top = Math.max(minTop, Math.min(Number(rect?.top ?? 12), maxTop))
+
+  return { left, top, width, height }
+}
+
+function applyNextVCallInspectorPanelLayout(rect) {
+  if (!nextVCallInspectorPanel) return
+  const clamped = clampNextVCallInspectorPanelLayout(rect)
+  if (!clamped) return
+  nextVCallInspectorPanelLayoutState = { ...clamped }
+
+  nextVCallInspectorPanel.style.left = `${clamped.left}px`
+  nextVCallInspectorPanel.style.top = `${clamped.top}px`
+  nextVCallInspectorPanel.style.width = `${clamped.width}px`
+  nextVCallInspectorPanel.style.height = `${clamped.height}px`
+  nextVCallInspectorPanel.style.right = 'auto'
+}
+
+function persistNextVCallInspectorPanelLayout() {
+  const fallbackLayout = nextVCallInspectorPanelLayoutState || getNextVCallInspectorPanelDefaultLayout()
+  let layout = fallbackLayout
+
+  if (nextVCallInspectorPanel && !nextVCallInspectorPanel.hidden) {
+    const shell = getNextVCallInspectorPanelShell()
+    if (shell) {
+      const shellRect = shell.getBoundingClientRect()
+      const panelRect = nextVCallInspectorPanel.getBoundingClientRect()
+      layout = clampNextVCallInspectorPanelLayout({
+        left: panelRect.left - shellRect.left,
+        top: panelRect.top - shellRect.top,
+        width: panelRect.width,
+        height: panelRect.height,
+      }) || fallbackLayout
+    }
+  }
+
+  if (!layout) return
+  nextVCallInspectorPanelLayoutState = { ...layout }
+  localStorage.setItem(storageKeys.nextVCallInspectorPanelLayout, JSON.stringify(layout))
+}
+
+function restoreNextVCallInspectorPanelLayout() {
+  const storedLayout = readStoredNextVCallInspectorPanelLayout()
+  if (!storedLayout) {
+    applyNextVCallInspectorPanelLayout(getNextVCallInspectorPanelDefaultLayout())
+    return
+  }
+
+  applyNextVCallInspectorPanelLayout(storedLayout)
+}
+
+export function initNextVCallInspectorPanelChrome() {
+  if (!nextVCallInspectorPanel || nextVCallInspectorPanel.dataset.panelChromeBound === '1') return
+  nextVCallInspectorPanel.dataset.panelChromeBound = '1'
+
+  restoreNextVCallInspectorPanelLayout()
+
+  const header = nextVCallInspectorPanel.querySelector('.nextv-call-inspector-header')
+  if (header) {
+    header.style.cursor = 'grab'
+    header.addEventListener('mousedown', (event) => {
+      if (event.target.closest('button')) return
+      const shell = getNextVCallInspectorPanelShell()
+      if (!shell) return
+
+      const panelRect = nextVCallInspectorPanel.getBoundingClientRect()
+      const startOffsetX = event.clientX - panelRect.left
+      const startOffsetY = event.clientY - panelRect.top
+      nextVCallInspectorPanel.classList.add('is-dragging')
+      event.preventDefault()
+
+      const onMove = (moveEvent) => {
+        const shellRect = shell.getBoundingClientRect()
+        const nextLeft = moveEvent.clientX - shellRect.left - startOffsetX
+        const nextTop = moveEvent.clientY - shellRect.top - startOffsetY
+        applyNextVCallInspectorPanelLayout({
+          left: nextLeft,
+          top: nextTop,
+          width: nextVCallInspectorPanel.offsetWidth,
+          height: nextVCallInspectorPanel.offsetHeight,
+        })
+      }
+
+      const onUp = () => {
+        nextVCallInspectorPanel.classList.remove('is-dragging')
+        persistNextVCallInspectorPanelLayout()
+        document.removeEventListener('mousemove', onMove)
+        document.removeEventListener('mouseup', onUp)
+      }
+
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onUp)
+    })
+  }
+
+  if (typeof ResizeObserver === 'function') {
+    const observer = new ResizeObserver(() => {
+      if (nextVCallInspectorPanel.hidden) return
+      persistNextVCallInspectorPanelLayout()
+    })
+    observer.observe(nextVCallInspectorPanel)
+  }
+
+  window.addEventListener('resize', () => {
+    const storedLayout = readStoredNextVCallInspectorPanelLayout()
+    if (!storedLayout) return
+    applyNextVCallInspectorPanelLayout(storedLayout)
+  })
+
+  window.addEventListener('beforeunload', () => {
+    persistNextVCallInspectorPanelLayout()
+  })
+
+  window.requestAnimationFrame(() => {
+    restoreNextVCallInspectorPanelLayout()
+  })
+}
+
+export function toggleNextVCallInspectorPanel() {
+  if (!nextVCallInspectorPanel) return
+  initNextVCallInspectorPanelChrome()
+  const isOpen = !nextVCallInspectorPanel.hidden
+  if (isOpen) {
+    persistNextVCallInspectorPanelLayout()
+  }
+  nextVCallInspectorPanel.hidden = isOpen
+  nextVCallInspectorPanel.classList.toggle('is-active', !isOpen)
+  if (!isOpen) {
+    window.requestAnimationFrame(() => {
+      restoreNextVCallInspectorPanelLayout()
+    })
+  }
+  
+  if (nextVViewCallInspector) {
+    nextVViewCallInspector.classList.toggle('active', !isOpen)
+    nextVViewCallInspector.setAttribute('aria-selected', !isOpen ? 'true' : 'false')
+  }
+  
+  if (!isOpen) {
+    // Panel is now open, set focus
+    nextVCallInspectorPanel.focus()
+  }
 }
 
 export function clampNextVUserIOWidth(value) {
@@ -1681,16 +1870,22 @@ export function setNextVRuntimeTarget(value, options = {}) {
 }
 
 export function buildNextVApiPath(pathname) {
-  const params = new URLSearchParams()
+  const url = new URL(String(pathname ?? ''), window.location.origin)
+  const params = url.searchParams
   const runtimeTarget = getNextVRuntimeTarget()
   params.set('runtimeTarget', runtimeTarget)
-  if (runtimeTarget === 'attach' && nextVAttachSessionState.attached === true) {
+  if (runtimeTarget === 'attach') {
     const attachWsUrl = getNextVAttachWsUrl()
     if (attachWsUrl) {
       params.set('attachWsUrl', attachWsUrl)
+    } else {
+      params.delete('attachWsUrl')
     }
+  } else {
+    params.delete('attachWsUrl')
   }
-  return `${pathname}?${params.toString()}`
+  const query = params.toString()
+  return query ? `${url.pathname}?${query}` : url.pathname
 }
 
 export function normalizeDeclaredExternalChannels(rawChannels) {
@@ -1824,6 +2019,11 @@ export function updateRemoteRuntimeIdentity(data, options = {}) {
   if (clear) {
     _setRemoteRuntimeWorkspaceDir('')
     _setRemoteRuntimeEntrypointPath('')
+    if (workspace) {
+      workspace.dispatchEvent(new CustomEvent('nextv:remote-workspace-identity', {
+        detail: { workspaceDir: '', entrypointPath: '' },
+      }))
+    }
     return
   }
 
@@ -1834,8 +2034,25 @@ export function updateRemoteRuntimeIdentity(data, options = {}) {
     data?.remoteRuntimeEntrypointPath ?? data?.entrypointPath ?? data?.snapshot?.entrypointPath ?? ''
   ).trim()
 
-  if (nextWorkspaceDir) _setRemoteRuntimeWorkspaceDir(nextWorkspaceDir)
+  if (nextWorkspaceDir) {
+    _setRemoteRuntimeWorkspaceDir(nextWorkspaceDir)
+    if (nextVRuntimeTargetState.target === 'attach' && nextVWorkspaceDirInput) {
+      const normalizedValue = nextWorkspaceDir === '.' ? '' : nextWorkspaceDir
+      if (String(nextVWorkspaceDirInput.value ?? '').trim() !== normalizedValue) {
+        nextVWorkspaceDirInput.value = normalizedValue
+      }
+    }
+  }
   if (nextEntrypointPath) _setRemoteRuntimeEntrypointPath(nextEntrypointPath)
+
+  if (workspace && (nextWorkspaceDir || nextEntrypointPath)) {
+    workspace.dispatchEvent(new CustomEvent('nextv:remote-workspace-identity', {
+      detail: {
+        workspaceDir: nextWorkspaceDir,
+        entrypointPath: nextEntrypointPath,
+      },
+    }))
+  }
 }
 
 export function updateRemoteModeBadge() {
@@ -2984,6 +3201,7 @@ export function getControlProvenanceClass(value) {
   const normalized = String(value ?? '').trim().toLowerCase()
   if (normalized === 'bounded') return 'bounded'
   if (normalized === 'unbounded') return 'unbounded'
+  if (normalized === 'operational') return 'operational'
   if (normalized === 'mixed') return 'mixed'
   return 'unknown'
 }
@@ -3021,6 +3239,7 @@ export function buildNextVControlGraphArtifacts(controlEdges) {
       eventType: String(rawEdge?.eventType ?? '').trim(),
       provenance: getControlProvenanceClass(rawEdge?.provenance),
       boundedControl: rawEdge?.boundedControl === true,
+      operationalControl: rawEdge?.operationalControl === true,
       line: Number.isFinite(Number(rawEdge?.line)) ? Number(rawEdge.line) : null,
       statement: String(rawEdge?.statement ?? '').trim(),
     })
@@ -5033,6 +5252,9 @@ export function renderNextVGraph(data = {}, options = {}) {
         ? String(effectMeta?.sourceEvent ?? '')
         : String(nodeObj.eventType ?? nodeObj.id)
     const transition = transitionByEvent.get(transitionEventType)
+    const transitionTryBoundaries = Array.isArray(transition?.tryBoundaries)
+      ? transition.tryBoundaries
+      : []
     const effectClassification = effectMeta?.type === 'output' ? getEffectOutputClassification(effectMeta.channel) : 'side_effect'
     const transitionClass = isControlBranchNode
       ? getControlOverlayClassName(nodeObj?.provenance)
@@ -5077,6 +5299,12 @@ export function renderNextVGraph(data = {}, options = {}) {
 
     titleWrap.appendChild(eventName)
     titleWrap.appendChild(badge)
+    if (isHandlerNode && transitionTryBoundaries.length > 0) {
+      const tryBadge = document.createElement('span')
+      tryBadge.className = 'nextv-graph-chip try-boundary'
+      tryBadge.textContent = `try ${transitionTryBoundaries.length}`
+      titleWrap.appendChild(tryBadge)
+    }
     header.appendChild(titleWrap)
     header.appendChild(closeBtn)
     card.appendChild(header)
@@ -5100,6 +5328,7 @@ export function renderNextVGraph(data = {}, options = {}) {
       const tools = Array.isArray(transition.tools) ? transition.tools.filter(Boolean) : []
       const outputs = Array.isArray(transition.outputs) ? transition.outputs : []
       const warnings = Array.isArray(transition.warnings) ? transition.warnings : []
+      const tryBoundaries = transitionTryBoundaries
 
       if (tools.length > 0) {
         addLine(`tools: ${tools.map((tool) => tool.name || 'dynamic').join(', ')}`)
@@ -5114,10 +5343,25 @@ export function renderNextVGraph(data = {}, options = {}) {
           addLine(`warning: ${String(warning.message ?? warning.code ?? 'unknown warning')}`, 'warning')
         }
       }
+
+      if (tryBoundaries.length > 0) {
+        addLine(`try boundaries: ${tryBoundaries.length}`)
+        for (const boundary of tryBoundaries) {
+          const operation = String(boundary?.operation ?? 'call')
+          const target = String(boundary?.target ?? '').trim()
+          const boundaryText = target
+            ? `try: ${operation} -> ${target}`
+            : `try: ${operation}`
+          addLine(boundaryText)
+        }
+      }
     }
 
     if (isControlBranchNode) {
       addLine(`provenance: ${getControlProvenanceClass(nodeObj?.provenance)}`)
+      if (nodeObj?.provenance === 'operational') {
+        addLine('control kind: operational envelope branch')
+      }
       if (Number.isFinite(Number(nodeObj?.line))) {
         addLine(`line: ${Number(nodeObj.line)}`)
       }
@@ -5301,11 +5545,12 @@ export function renderNextVGraph(data = {}, options = {}) {
   const mixedCount = transitions.filter((transition) => transition?.classification === 'mixed').length
   const boundedControlCount = visibleControlGraphEdges.filter((edge) => edge.provenance === 'bounded').length
   const unboundedControlCount = visibleControlGraphEdges.filter((edge) => edge.provenance === 'unbounded').length
+  const operationalControlCount = visibleControlGraphEdges.filter((edge) => edge.provenance === 'operational').length
   const effectCount = effectNodes.length
   const handlerCount = nodes.filter((n) => n.kind === 'handler').length
   const timerCount = rawTimerNodes.length
   const entrypointLabel = pathBasename(entrypointPath) || 'entrypoint'
-  meta.textContent = `${entrypointLabel} • ${handlerCount} handlers • ${edges.length} edges${timerCount ? ` • ${timerCount} timers` : ''}${effectCount ? ` • ${effectCount} effects` : ''}${visibleControlGraphEdges.length ? ` • ${visibleControlGraphEdges.length} control` : ''}${cycles.length ? ` • ${cycleLabel}` : ''}${mixedCount ? ` • ${mixedCount} mixed` : ''}${boundedControlCount ? ` • ${boundedControlCount} bounded-control` : ''}${unboundedControlCount ? ` • ${unboundedControlCount} unbounded-control` : ''}`
+  meta.textContent = `${entrypointLabel} • ${handlerCount} handlers • ${edges.length} edges${timerCount ? ` • ${timerCount} timers` : ''}${effectCount ? ` • ${effectCount} effects` : ''}${visibleControlGraphEdges.length ? ` • ${visibleControlGraphEdges.length} control` : ''}${cycles.length ? ` • ${cycleLabel}` : ''}${mixedCount ? ` • ${mixedCount} mixed` : ''}${boundedControlCount ? ` • ${boundedControlCount} bounded-control` : ''}${unboundedControlCount ? ` • ${unboundedControlCount} unbounded-control` : ''}${operationalControlCount ? ` • ${operationalControlCount} operational-control` : ''}`
   toolbar.appendChild(meta)
 
   if (transitions.length > 0) {
@@ -5324,6 +5569,7 @@ export function renderNextVGraph(data = {}, options = {}) {
     controlLegend.className = 'nextv-graph-legend'
     appendTransitionChip(controlLegend, 'control bounded', 'control-bounded')
     appendTransitionChip(controlLegend, 'control unbounded', 'control-unbounded')
+    appendTransitionChip(controlLegend, 'control operational', 'control-operational')
     appendTransitionChip(controlLegend, 'control mixed', 'control-mixed')
     appendTransitionChip(controlLegend, 'control unknown', 'control-unknown')
     wrap.appendChild(controlLegend)
@@ -5835,6 +6081,16 @@ export function renderNextVGraph(data = {}, options = {}) {
     if (hasParallelAgents && Array.isArray(transition?.agents) && transition.agents.length > 0) titleParts.push(`parallel=${transition.agents.join(', ')}`)
     if (Array.isArray(transition?.outputs) && transition.outputs.length > 0) titleParts.push(`outputs=${transition.outputs.join(', ')}`)
     if (Array.isArray(transition?.tools) && transition.tools.length > 0) titleParts.push(`tools=${transition.tools.map((tool) => tool.name || 'dynamic').join(', ')}`)
+    if (Array.isArray(transition?.tryBoundaries) && transition.tryBoundaries.length > 0) {
+      const tryBoundarySummary = transition.tryBoundaries
+        .map((boundary) => {
+          const operation = String(boundary?.operation ?? 'call')
+          const target = String(boundary?.target ?? '').trim()
+          return target ? `${operation}->${target}` : operation
+        })
+        .join(', ')
+      titleParts.push(`try=${tryBoundarySummary}`)
+    }
     if (hasWarnings) titleParts.push(`warnings=${transition.warnings.map((warning) => warning.code).join(', ')}`)
     title.textContent = titleParts.join(' | ')
     group.appendChild(title)
@@ -8030,7 +8286,6 @@ import {
   _setIsStateDiffResizing,
   _setNextVStateFilterQuery,
   isStateDiffResizing,
-  nextVGraphShell,
   nextVStateDiffFeed,
   nextVStateDiffPanel,
   nextVStateDiffSplitter,
@@ -8533,7 +8788,7 @@ export function initNextVStateDiffPanel() {
 }
 
 export function setupNextVStateDiffSplitter() {
-  if (!nextVStateDiffSplitter || !nextVStateDiffPanel || !nextVGraphShell) return
+  if (!nextVStateDiffSplitter || !nextVStateDiffPanel) return
 
   const applyStateDiffWidth = (pixels) => {
     const clamped = clampNextVStateDiffWidth(pixels)
@@ -8572,7 +8827,6 @@ import {
   _setTraceRowCounter,
   isUserIOResizing,
   nextVEventSource,
-  nextVGraphShell,
   nextVHasLiveRuntimeEvents,
   nextVLastKnownState,
   nextVRuntimeRunning,
@@ -8700,7 +8954,7 @@ export function initNextVUserIOPanel() {
 }
 
 export function setupNextVUserIOSplitter() {
-  if (!nextVUserIOSplitter || !scriptEditorPanel || !nextVGraphShell) return
+  if (!nextVUserIOSplitter || !scriptEditorPanel) return
 
   const applyUserIOWidth = (pixels) => {
     const clamped = clampNextVUserIOWidth(pixels)
@@ -8717,7 +8971,9 @@ export function setupNextVUserIOSplitter() {
 
   window.addEventListener('mousemove', (event) => {
     if (!isUserIOResizing) return
-    const shellRect = nextVGraphShell.getBoundingClientRect()
+    const shell = scriptEditorPanel.parentElement
+    if (!shell) return
+    const shellRect = shell.getBoundingClientRect()
     applyUserIOWidth(shellRect.right - event.clientX)
   })
 
@@ -9185,6 +9441,30 @@ import {
   nextVEventSourceInput,
   nextVEventTypeInput,
   nextVEventValueInput,
+  nextVCallTargetKindInput,
+  nextVCallTargetAgentInput,
+  nextVCallTargetInput,
+  nextVCallValidateInput,
+  nextVCallRetryInput,
+  nextVCallInstructionsInput,
+  nextVCallPromptInput,
+  nextVCallReturnsInput,
+  nextVCallDecideInput,
+  nextVCallTargetConfigLabel,
+  nextVCallTargetConfigOutput,
+  nextVCallResolvedLabel,
+  nextVCallResolvedOutput,
+  nextVCallGeneratedCode,
+  nextVCallResultTabRaw,
+  nextVCallResultTabParsed,
+  nextVCallResultTabValidation,
+  nextVCallResultTabRetry,
+  nextVCallResultTabMetadata,
+  nextVCallResultRaw,
+  nextVCallResultParsed,
+  nextVCallResultValidation,
+  nextVCallResultRetry,
+  nextVCallResultMetadata,
   nextVGraphState,
   nextVHasLiveRuntimeEvents,
   nextVImageCount,
@@ -9198,6 +9478,7 @@ import {
   nextVManagedProcessRunning,
   nextVPanelState,
   nextVRuntimeRunning,
+  activePaneId,
   nextVAttachSessionState,
   nextVRuntimeTargetState,
   nextVWorkspaceDirInput,
@@ -9268,6 +9549,9 @@ import {
   persistNextVConfig
 } from './09_editor.js'
 import {
+  getPaneTextarea
+} from './09_editor.js'
+import {
   pathBasename,
   formatNextVStartLine,
   formatWorkspaceConfigStatus,
@@ -9290,8 +9574,42 @@ import {
   setStatus,
   appendErrorRow,
   ensureNextVEntrypointVisible,
-  saveNextVEntrypoint
+  saveNextVEntrypoint,
+  openNextVWorkspace
 } from './13_layout.js'
+
+let bufferedRuntimeEventsForExecution = []
+
+function toExecutionEventKey(event) {
+  if (!event || typeof event !== 'object') return ''
+  const type = String(event.type ?? '').trim()
+  const timestamp = String(event.timestamp ?? '').trim()
+  const tool = String(event.tool ?? '').trim()
+  const agent = String(event.agent ?? '').trim()
+  const sourcePath = String(event.sourcePath ?? '').trim()
+  const sourceLine = Number.isFinite(Number(event.sourceLine)) ? String(Number(event.sourceLine)) : ''
+  const line = Number.isFinite(Number(event.line)) ? String(Number(event.line)) : ''
+  return [type, timestamp, tool, agent, sourcePath, sourceLine, line].join('|')
+}
+
+function mergeExecutionEventsWithLiveRuntimeEvents(executionEvents, runtimeEvents) {
+  const left = Array.isArray(executionEvents) ? executionEvents : []
+  const right = Array.isArray(runtimeEvents) ? runtimeEvents : []
+  if (right.length === 0) return left
+  if (left.length === 0) return right
+
+  const merged = []
+  const seen = new Set()
+
+  for (const event of [...left, ...right]) {
+    const key = toExecutionEventKey(event)
+    if (key && seen.has(key)) continue
+    if (key) seen.add(key)
+    merged.push(event)
+  }
+
+  return merged
+}
 
 function buildNextVAttachApiPath(pathname) {
   const params = new URLSearchParams()
@@ -9364,8 +9682,20 @@ export async function attachNextVRuntime() {
       throw new Error(data.error ?? 'attach failed')
     }
 
-    const remoteWorkspaceDir = String(data?.remoteRuntimeWorkspaceDir ?? data?.workspaceDir ?? '').trim()
-    const remoteEntrypointPathRaw = String(data?.remoteRuntimeEntrypointPath ?? data?.entrypointPath ?? '').trim()
+    const remoteWorkspaceDir = String(
+      data?.remoteRuntimeWorkspaceDir
+      ?? data?.workspaceDir
+      ?? data?.remoteConnection?.workspaceDir
+      ?? data?.snapshot?.workspaceDir
+      ?? ''
+    ).trim()
+    const remoteEntrypointPathRaw = String(
+      data?.remoteRuntimeEntrypointPath
+      ?? data?.entrypointPath
+      ?? data?.remoteConnection?.entrypointPath
+      ?? data?.snapshot?.entrypointPath
+      ?? ''
+    ).trim()
     if (nextVWorkspaceDirInput && remoteWorkspaceDir) {
       nextVWorkspaceDirInput.value = remoteWorkspaceDir === '.' ? '' : remoteWorkspaceDir
     }
@@ -9374,6 +9704,18 @@ export async function attachNextVRuntime() {
       nextVEntrypointInput.value = normalizedEntrypoint
       saveNextVEntrypoint()
     }
+
+    // Hydrate tree/editor/graph automatically from attached runtime identity.
+    updateRemoteRuntimeIdentity(data)
+    if (remoteWorkspaceDir && isNextVMode()) {
+      try {
+        await openNextVWorkspace()
+      } catch (workspaceErr) {
+        appendNextVErrorLog(workspaceErr, '[nextv:attach:workspace:auto-open:error]')
+      }
+    }
+
+    await refreshNextVCallInspectorAgents({ quiet: true })
 
     nextVAttachSessionState.attached = true
     nextVAttachSessionState.connecting = false
@@ -9437,6 +9779,7 @@ export function openNextVStream() {
   nextVEventSource.addEventListener('nextv_started', (evt) => {
     try {
       const payload = JSON.parse(evt.data)
+      bufferedRuntimeEventsForExecution = []
       _setNextVHasLiveRuntimeEvents(false)
       resetNextVGraphRuntimeState({ keepExternalNodes: false })
       applyNextVGraphRuntimeVisuals()
@@ -9471,6 +9814,11 @@ export function openNextVStream() {
       const runtimeEvent = payload?.runtimeEvent
       if (!runtimeEvent || typeof runtimeEvent !== 'object') return
 
+      bufferedRuntimeEventsForExecution.push(runtimeEvent)
+      if (bufferedRuntimeEventsForExecution.length > 500) {
+        bufferedRuntimeEventsForExecution = bufferedRuntimeEventsForExecution.slice(-500)
+      }
+
       _setNextVHasLiveRuntimeEvents(true)
       handleNextVGraphRuntimeEvent(runtimeEvent)
       renderCanonicalNextVEvents([runtimeEvent])
@@ -9495,12 +9843,16 @@ export function openNextVStream() {
       const eventType = String(payload?.event?.type ?? '')
       const source = String(payload?.event?.source ?? '')
       const executionEvents = Array.isArray(payload?.events) ? payload.events : []
+      const mergedExecutionEvents = mergeExecutionEventsWithLiveRuntimeEvents(
+        executionEvents,
+        bufferedRuntimeEventsForExecution,
+      )
       const shouldRenderFromExecution = !nextVHasLiveRuntimeEvents
       const shouldUseTimerExecutionSupplement = false
       
       // Prefer live runtime events. Fall back to execution event replay only when live events were not observed.
       const runtimeEventsForGraph = shouldRenderFromExecution
-        ? executionEvents
+        ? mergedExecutionEvents
         : []
       
       const eventsForGraphProcessing = runtimeEventsForGraph
@@ -9577,7 +9929,10 @@ export function openNextVStream() {
 
       // Build and render execution group (newest-first)
       nextVExecutionCounter += 1
-      const group = buildExecutionGroup(payload, nextVExecutionCounter)
+      const group = buildExecutionGroup({
+        ...payload,
+        events: mergedExecutionEvents,
+      }, nextVExecutionCounter)
 
       if (nextVEventsLiveMode) {
         // Live mode: prepend to groups and render
@@ -9603,6 +9958,7 @@ export function openNextVStream() {
       const diffAfter = payload?.snapshot?.state ?? {}
       appendNextVStateDiffEntry(eventType, buildStateDiff(diffBefore, diffAfter))
       renderNextVSnapshot(payload.snapshot)
+      bufferedRuntimeEventsForExecution = []
       _setNextVHasLiveRuntimeEvents(false)
       setStatus('nextv execution complete')
     } catch {
@@ -10114,6 +10470,601 @@ export async function sendNextVIngress() {
     appendNextVErrorLog(err)
     setStatus('ingress dispatch failed', 'responding')
   }
+}
+
+export async function executeNextVCallInspector() {
+  const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
+  const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  await refreshNextVCallInspectorAgents({ quiet: true })
+  const target = getNextVCallInspectorTargetValue(targetKind)
+  const instructions = String(nextVCallInstructionsInput?.value ?? '')
+  const prompt = String(nextVCallPromptInput?.value ?? '')
+  const returnsText = String(nextVCallReturnsInput?.value ?? '').trim()
+  const decideText = String(nextVCallDecideInput?.value ?? '').trim()
+  const validateRaw = String(nextVCallValidateInput?.value ?? 'coerce').trim().toLowerCase()
+  const validate = ['strict', 'coerce', 'none'].includes(validateRaw) ? validateRaw : 'coerce'
+  const retryRaw = Number(nextVCallRetryInput?.value)
+  const retryCount = Number.isInteger(retryRaw) ? Math.max(0, Math.min(8, retryRaw)) : 0
+
+  if (!target) {
+    setStatus('call inspector target is required', 'responding')
+    return
+  }
+  if (!prompt.trim()) {
+    setStatus('call inspector prompt is required', 'responding')
+    return
+  }
+  if (returnsText && decideText) {
+    setStatus('use either returns or decide, not both', 'responding')
+    return
+  }
+
+  const requestBody = {
+    workspaceDir: normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? ''),
+    targetKind,
+    instructions,
+    prompt,
+    validate,
+    retry_on_contract_violation: retryCount,
+  }
+  if (targetKind === 'agent') {
+    requestBody.agent = target
+  } else {
+    requestBody.model = target
+  }
+
+  if (returnsText) {
+    try {
+      requestBody.returns = JSON.parse(returnsText)
+    } catch {
+      setStatus('returns contract must be valid JSON', 'responding')
+      return
+    }
+  }
+  if (decideText) {
+    requestBody.decide = decideText
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean)
+  }
+
+  renderNextVCallInspectorResolvedCall({ status: 'resolving runtime invocation...' })
+  renderNextVCallInspectorResult({ status: 'running call inspector request...' })
+  setStatus('executing call inspector...', 'responding')
+
+  try {
+    const res = await fetch(buildNextVApiPath('/api/nextv/call-inspector/execute'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'call inspector execution failed')
+    }
+
+    renderNextVCallInspectorResolvedCall(data?.resolvedCall ?? { status: 'resolved call unavailable' })
+    renderNextVCallInspectorResult(data)
+
+    const targetLabel = targetKind === 'agent'
+      ? `agent=${requestBody.agent}`
+      : `model=${requestBody.model}`
+    appendNextVLogRow(`[nextv:call-inspector] executed ${targetLabel}`, 'step')
+    setStatus('call inspector completed')
+  } catch (err) {
+    appendNextVErrorLog(err)
+    renderNextVCallInspectorResolvedCall({ error: 'execution failed before resolved call was available' })
+    renderNextVCallInspectorResult({ error: String(err?.message ?? err) })
+    setStatus('call inspector failed', 'responding')
+  }
+}
+
+function stringifyInspectorPane(value) {
+  if (value == null) return 'null'
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function persistNextVCallInspectorInputs() {
+  const targetKind = String(nextVCallTargetKindInput?.value ?? '').trim()
+  if (targetKind) localStorage.setItem(storageKeys.nextVCallInspectorTargetKind, targetKind)
+
+  const targetAgent = String(nextVCallTargetAgentInput?.value ?? '').trim()
+  if (targetAgent) localStorage.setItem(storageKeys.nextVCallInspectorTargetAgent, targetAgent)
+
+  const targetModel = String(nextVCallTargetInput?.value ?? '').trim()
+  if (targetModel) localStorage.setItem(storageKeys.nextVCallInspectorTargetModel, targetModel)
+
+  const validate = String(nextVCallValidateInput?.value ?? '').trim()
+  if (validate) localStorage.setItem(storageKeys.nextVCallInspectorValidate, validate)
+
+  const retry = String(nextVCallRetryInput?.value ?? '').trim()
+  if (retry !== '') localStorage.setItem(storageKeys.nextVCallInspectorRetry, retry)
+
+  localStorage.setItem(storageKeys.nextVCallInspectorInstructions, String(nextVCallInstructionsInput?.value ?? ''))
+  localStorage.setItem(storageKeys.nextVCallInspectorPrompt, String(nextVCallPromptInput?.value ?? ''))
+  localStorage.setItem(storageKeys.nextVCallInspectorReturns, String(nextVCallReturnsInput?.value ?? ''))
+  localStorage.setItem(storageKeys.nextVCallInspectorDecide, String(nextVCallDecideInput?.value ?? ''))
+}
+
+function restoreNextVCallInspectorInputs() {
+  const targetKind = String(localStorage.getItem(storageKeys.nextVCallInspectorTargetKind) ?? '').trim()
+  if (targetKind && nextVCallTargetKindInput) nextVCallTargetKindInput.value = targetKind
+
+  const validate = String(localStorage.getItem(storageKeys.nextVCallInspectorValidate) ?? '').trim()
+  if (validate && nextVCallValidateInput) nextVCallValidateInput.value = validate
+
+  const retry = String(localStorage.getItem(storageKeys.nextVCallInspectorRetry) ?? '').trim()
+  if (retry !== '' && nextVCallRetryInput) nextVCallRetryInput.value = retry
+
+  const instructions = localStorage.getItem(storageKeys.nextVCallInspectorInstructions)
+  if (instructions !== null && nextVCallInstructionsInput) nextVCallInstructionsInput.value = instructions
+
+  const prompt = localStorage.getItem(storageKeys.nextVCallInspectorPrompt)
+  if (prompt !== null && nextVCallPromptInput) nextVCallPromptInput.value = prompt
+
+  const returns = localStorage.getItem(storageKeys.nextVCallInspectorReturns)
+  if (returns !== null && nextVCallReturnsInput) nextVCallReturnsInput.value = returns
+
+  const decide = localStorage.getItem(storageKeys.nextVCallInspectorDecide)
+  if (decide !== null && nextVCallDecideInput) nextVCallDecideInput.value = decide
+}
+
+const nextVCallInspectorProjectConfig = {
+  agentsByName: {},
+  modelsByName: {},
+  transportProvidersByName: {},
+}
+
+function setNextVCallInspectorProjectConfig(payload = {}) {
+  const agentsByName = payload?.agentsByName
+  const modelsByName = payload?.modelsByName
+  const transportProvidersByName = payload?.transportProvidersByName
+
+  nextVCallInspectorProjectConfig.agentsByName = agentsByName && typeof agentsByName === 'object' && !Array.isArray(agentsByName)
+    ? agentsByName
+    : {}
+  nextVCallInspectorProjectConfig.modelsByName = modelsByName && typeof modelsByName === 'object' && !Array.isArray(modelsByName)
+    ? modelsByName
+    : {}
+  nextVCallInspectorProjectConfig.transportProvidersByName = transportProvidersByName && typeof transportProvidersByName === 'object' && !Array.isArray(transportProvidersByName)
+    ? transportProvidersByName
+    : {}
+}
+
+function renderNextVCallInspectorTargetConfig() {
+  if (!nextVCallTargetConfigOutput || !nextVCallTargetConfigLabel) return
+
+  const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
+  const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  const targetName = getNextVCallInspectorTargetValue(targetKind)
+
+  if (!targetName) {
+    nextVCallTargetConfigLabel.textContent = 'project config'
+    nextVCallTargetConfigOutput.textContent = '(select a configured target)'
+    return
+  }
+
+  if (targetKind === 'agent') {
+    const profile = nextVCallInspectorProjectConfig.agentsByName[targetName]
+    nextVCallTargetConfigLabel.textContent = `project config · agent.${targetName}`
+    if (!profile || typeof profile !== 'object') {
+      nextVCallTargetConfigOutput.textContent = stringifyInspectorPane({ status: 'agent not found in workspace config' })
+      return
+    }
+
+    const modelName = String(profile?.model ?? profile?.modelId ?? '').trim()
+    const model = modelName ? nextVCallInspectorProjectConfig.modelsByName[modelName] : null
+    const transportName = String(model?.transport ?? '').trim()
+    const provider = transportName
+      ? String(nextVCallInspectorProjectConfig.transportProvidersByName[transportName] ?? '').trim()
+      : ''
+
+    nextVCallTargetConfigOutput.textContent = stringifyInspectorPane({
+      agent: profile,
+      model: model
+        ? {
+            name: modelName,
+            ...model,
+            transportProvider: provider || undefined,
+          }
+        : (modelName
+          ? {
+              name: modelName,
+              status: 'model referenced by agent not found in workspace config',
+            }
+          : {
+              status: 'agent does not declare a model',
+            }),
+    })
+    return
+  }
+
+  const model = nextVCallInspectorProjectConfig.modelsByName[targetName]
+  const transportName = String(model?.transport ?? '').trim()
+  const provider = transportName
+    ? String(nextVCallInspectorProjectConfig.transportProvidersByName[transportName] ?? '').trim()
+    : ''
+  nextVCallTargetConfigLabel.textContent = `project config · model.${targetName}`
+  nextVCallTargetConfigOutput.textContent = stringifyInspectorPane(model
+    ? {
+        ...model,
+        transportProvider: provider || undefined,
+      }
+    : { status: 'model not found in workspace config' })
+}
+
+function renderNextVCallInspectorResolvedCall(resolvedCall = null) {
+  if (!nextVCallResolvedOutput || !nextVCallResolvedLabel) return
+
+  nextVCallResolvedLabel.textContent = 'resolved call'
+  nextVCallResolvedOutput.textContent = resolvedCall
+    ? stringifyInspectorPane(resolvedCall)
+    : '(run call to inspect resolved invocation)'
+}
+
+function getNextVCallInspectorTargetValue(targetKind) {
+  const normalizedTargetKind = String(targetKind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  if (normalizedTargetKind === 'agent') {
+    return String(nextVCallTargetAgentInput?.value ?? '').trim()
+  }
+  return String(nextVCallTargetInput?.value ?? '').trim()
+}
+
+function syncNextVCallInspectorTargetMode() {
+  const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
+  const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  const isAgentMode = targetKind === 'agent'
+
+  if (nextVCallTargetAgentInput) {
+    nextVCallTargetAgentInput.hidden = !isAgentMode
+    nextVCallTargetAgentInput.disabled = !isAgentMode
+  }
+  if (nextVCallTargetInput) {
+    nextVCallTargetInput.hidden = isAgentMode
+    nextVCallTargetInput.disabled = isAgentMode
+  }
+}
+
+function setNextVCallInspectorAgentOptions(agentNames, options = {}) {
+  if (!nextVCallTargetAgentInput) return
+  const emptyLabel = String(options?.emptyLabel ?? '(no configured agents)')
+
+  const names = Array.isArray(agentNames) ? agentNames.filter(Boolean).map((value) => String(value).trim()).filter(Boolean) : []
+  const currentValue = String(nextVCallTargetAgentInput.value ?? '').trim()
+  nextVCallTargetAgentInput.innerHTML = ''
+
+  if (names.length === 0) {
+    const emptyOption = document.createElement('option')
+    emptyOption.value = ''
+    emptyOption.textContent = emptyLabel
+    nextVCallTargetAgentInput.appendChild(emptyOption)
+    return
+  }
+
+  for (const name of names) {
+    const option = document.createElement('option')
+    option.value = name
+    option.textContent = name
+    nextVCallTargetAgentInput.appendChild(option)
+  }
+
+  if (currentValue && names.includes(currentValue)) {
+    nextVCallTargetAgentInput.value = currentValue
+  } else {
+    nextVCallTargetAgentInput.value = names[0]
+  }
+}
+
+function setNextVCallInspectorModelOptions(modelNames, options = {}) {
+  if (!nextVCallTargetInput) return
+  const emptyLabel = String(options?.emptyLabel ?? '(no configured models)')
+
+  const names = Array.isArray(modelNames) ? modelNames.filter(Boolean).map((value) => String(value).trim()).filter(Boolean) : []
+  const currentValue = String(nextVCallTargetInput.value ?? '').trim()
+  nextVCallTargetInput.innerHTML = ''
+
+  if (names.length === 0) {
+    const emptyOption = document.createElement('option')
+    emptyOption.value = ''
+    emptyOption.textContent = emptyLabel
+    nextVCallTargetInput.appendChild(emptyOption)
+    return
+  }
+
+  for (const name of names) {
+    const option = document.createElement('option')
+    option.value = name
+    option.textContent = name
+    nextVCallTargetInput.appendChild(option)
+  }
+
+  if (currentValue && names.includes(currentValue)) {
+    nextVCallTargetInput.value = currentValue
+  } else {
+    nextVCallTargetInput.value = names[0]
+  }
+}
+
+export async function refreshNextVCallInspectorAgents(options = {}) {
+  const quiet = options?.quiet === true
+  const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
+  const noAgentsLabel = workspaceDir
+    ? '(no configured agents)'
+    : '(set workspace folder to load agents)'
+  const noModelsLabel = workspaceDir
+    ? '(no configured models)'
+    : '(set workspace folder to load models)'
+
+  try {
+    const query = workspaceDir ? `?workspaceDir=${encodeURIComponent(workspaceDir)}` : ''
+    const res = await fetch(buildNextVApiPath(`/api/nextv/workspace-config${query}`))
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'failed to load workspace config')
+    }
+
+    const configuredAgents = Array.isArray(data?.configuredAgents) ? data.configuredAgents : []
+    const configuredModels = Array.isArray(data?.configuredModels) ? data.configuredModels : []
+    setNextVCallInspectorProjectConfig({
+      agentsByName: data?.configuredAgentProfiles,
+      modelsByName: data?.configuredModelConfigs,
+      transportProvidersByName: data?.configuredTransportProviders,
+    })
+    setNextVCallInspectorAgentOptions(configuredAgents, { emptyLabel: noAgentsLabel })
+    setNextVCallInspectorModelOptions(configuredModels, { emptyLabel: noModelsLabel })
+
+    const storedAgent = String(localStorage.getItem(storageKeys.nextVCallInspectorTargetAgent) ?? '').trim()
+    if (storedAgent && nextVCallTargetAgentInput) {
+      const agentOptions = [...nextVCallTargetAgentInput.options].map((o) => o.value)
+      if (agentOptions.includes(storedAgent)) nextVCallTargetAgentInput.value = storedAgent
+    }
+    const storedModel = String(localStorage.getItem(storageKeys.nextVCallInspectorTargetModel) ?? '').trim()
+    if (storedModel && nextVCallTargetInput) {
+      const modelOptions = [...nextVCallTargetInput.options].map((o) => o.value)
+      if (modelOptions.includes(storedModel)) nextVCallTargetInput.value = storedModel
+    }
+
+    syncNextVCallInspectorTargetMode()
+    renderNextVCallInspectorTargetConfig()
+    renderNextVCallInspectorSnippet()
+  } catch (err) {
+    setNextVCallInspectorProjectConfig({})
+    setNextVCallInspectorAgentOptions([], {
+      emptyLabel: workspaceDir ? '(workspace config unavailable)' : noAgentsLabel,
+    })
+    setNextVCallInspectorModelOptions([], {
+      emptyLabel: workspaceDir ? '(workspace config unavailable)' : noModelsLabel,
+    })
+    syncNextVCallInspectorTargetMode()
+    renderNextVCallInspectorTargetConfig()
+    if (!quiet) {
+      appendNextVErrorLog(err)
+      setStatus('could not load configured agents', 'responding')
+    }
+  }
+}
+
+export function setNextVCallInspectorResultTab(tab) {
+  const nextTab = ['raw', 'parsed', 'validation', 'retry', 'metadata'].includes(String(tab ?? '').trim())
+    ? String(tab).trim()
+    : 'raw'
+
+  const buttons = {
+    raw: nextVCallResultTabRaw,
+    parsed: nextVCallResultTabParsed,
+    validation: nextVCallResultTabValidation,
+    retry: nextVCallResultTabRetry,
+    metadata: nextVCallResultTabMetadata,
+  }
+  const panes = {
+    raw: nextVCallResultRaw,
+    parsed: nextVCallResultParsed,
+    validation: nextVCallResultValidation,
+    retry: nextVCallResultRetry,
+    metadata: nextVCallResultMetadata,
+  }
+
+  for (const key of Object.keys(buttons)) {
+    const button = buttons[key]
+    const active = key === nextTab
+    if (button) {
+      button.classList.toggle('active', active)
+      button.setAttribute('aria-selected', active ? 'true' : 'false')
+    }
+    const pane = panes[key]
+    if (pane) {
+      pane.hidden = !active
+    }
+  }
+
+  localStorage.setItem(storageKeys.nextVCallInspectorResultTab, nextTab)
+}
+
+function getStoredNextVCallInspectorResultTab() {
+  const stored = String(localStorage.getItem(storageKeys.nextVCallInspectorResultTab) ?? '').trim()
+  return ['raw', 'parsed', 'validation', 'retry', 'metadata'].includes(stored)
+    ? stored
+    : 'raw'
+}
+
+export function renderNextVCallInspectorResult(data, options = {}) {
+  const response = data && typeof data === 'object' ? data : { value: data }
+  const call = response?.call ?? null
+  const result = response?.result ?? null
+  const metadata = result?.metadata ?? null
+
+  if (nextVCallResultRaw) {
+    nextVCallResultRaw.textContent = stringifyInspectorPane(response)
+  }
+  if (nextVCallResultParsed) {
+    nextVCallResultParsed.textContent = stringifyInspectorPane(result?.value ?? null)
+  }
+  if (nextVCallResultValidation) {
+    nextVCallResultValidation.textContent = stringifyInspectorPane({
+      hadContractViolation: result?.hadContractViolation === true,
+      violation: result?.violation ?? null,
+      validate: call?.validate ?? null,
+    })
+  }
+  if (nextVCallResultRetry) {
+    nextVCallResultRetry.textContent = stringifyInspectorPane({
+      configuredRetries: Number(call?.retry_on_contract_violation ?? 0),
+      attempt: Number(metadata?.request?.attempt ?? 1),
+      retryLimit: Number(metadata?.request?.retryLimit ?? call?.retry_on_contract_violation ?? 0),
+      note: 'Per-attempt transcript is not yet included in the host response payload.',
+    })
+  }
+  if (nextVCallResultMetadata) {
+    nextVCallResultMetadata.textContent = stringifyInspectorPane(metadata)
+  }
+
+  const forceTab = String(options?.forceTab ?? '').trim()
+  setNextVCallInspectorResultTab(forceTab || getStoredNextVCallInspectorResultTab())
+}
+
+export function buildNextVCallInspectorSnippet() {
+  const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
+  const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  const target = getNextVCallInspectorTargetValue(targetKind)
+  const instructions = String(nextVCallInstructionsInput?.value ?? '').trim()
+  const prompt = String(nextVCallPromptInput?.value ?? '').trim()
+  const returnsText = String(nextVCallReturnsInput?.value ?? '').trim()
+  const decideText = String(nextVCallDecideInput?.value ?? '').trim()
+  const validateRaw = String(nextVCallValidateInput?.value ?? 'coerce').trim().toLowerCase()
+  const validate = ['strict', 'coerce', 'none'].includes(validateRaw) ? validateRaw : 'coerce'
+  const retryRaw = Number(nextVCallRetryInput?.value)
+  const retryCount = Number.isInteger(retryRaw) ? Math.max(0, Math.min(8, retryRaw)) : 0
+
+  const lines = []
+  const head = target || (targetKind === 'agent' ? 'router' : 'model-id')
+  lines.push(`result = ${targetKind}(`)
+  lines.push(`  ${JSON.stringify(head)},`)
+  lines.push(`  ${JSON.stringify(prompt || 'prompt')},`)
+  if (instructions) {
+    lines.push(`  instructions=${JSON.stringify(instructions)},`)
+  }
+  if (returnsText) {
+    lines.push(`  returns=${returnsText},`)
+  }
+  if (decideText) {
+    const decideList = decideText
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .map((value) => JSON.stringify(value))
+      .join(',')
+    lines.push(`  decide=[${decideList}],`)
+  }
+  if (validate !== 'coerce') {
+    lines.push(`  validate=${JSON.stringify(validate)},`)
+  }
+  if (retryCount > 0) {
+    lines.push(`  retry_on_contract_violation=${retryCount},`)
+  }
+  lines.push(')')
+  return lines.join('\n')
+}
+
+export function renderNextVCallInspectorSnippet() {
+  renderNextVCallInspectorTargetConfig()
+  if (!nextVCallGeneratedCode) return
+  nextVCallGeneratedCode.textContent = buildNextVCallInspectorSnippet()
+}
+
+export function insertNextVCallInspectorSnippet() {
+  const textarea = getPaneTextarea(activePaneId)
+  if (!textarea) {
+    setStatus('open an editor pane before inserting code', 'responding')
+    return
+  }
+
+  const snippet = buildNextVCallInspectorSnippet()
+  const start = Number(textarea.selectionStart ?? 0)
+  const end = Number(textarea.selectionEnd ?? start)
+  const original = String(textarea.value ?? '')
+  const prefix = start > 0 && !original.slice(0, start).endsWith('\n') ? '\n' : ''
+  const suffix = end < original.length && !original.slice(end).startsWith('\n') ? '\n' : ''
+  const insertion = `${prefix}${snippet}${suffix}`
+  textarea.value = `${original.slice(0, start)}${insertion}${original.slice(end)}`
+  const caret = start + insertion.length
+  textarea.setSelectionRange(caret, caret)
+  textarea.focus()
+  textarea.dispatchEvent(new Event('input', { bubbles: true }))
+  appendNextVLogRow('[nextv:call-inspector] inserted generated code into active editor pane', 'step')
+  setStatus('call inspector code inserted')
+}
+
+export function initNextVCallInspector() {
+  const controls = [
+    nextVCallTargetKindInput,
+    nextVCallTargetAgentInput,
+    nextVCallTargetInput,
+    nextVCallValidateInput,
+    nextVCallRetryInput,
+    nextVCallInstructionsInput,
+    nextVCallPromptInput,
+    nextVCallReturnsInput,
+    nextVCallDecideInput,
+  ]
+  for (const control of controls) {
+    if (!control || control.dataset.callInspectorBound === '1') continue
+    control.dataset.callInspectorBound = '1'
+    const rerender = () => {
+      if (control === nextVCallTargetKindInput) {
+        syncNextVCallInspectorTargetMode()
+        if (String(nextVCallTargetKindInput?.value ?? '').trim().toLowerCase() !== 'model') {
+          refreshNextVCallInspectorAgents({ quiet: true })
+        }
+      }
+      persistNextVCallInspectorInputs()
+      renderNextVCallInspectorSnippet()
+    }
+    control.addEventListener('input', rerender)
+    control.addEventListener('change', rerender)
+  }
+
+  if (nextVWorkspaceDirInput && nextVWorkspaceDirInput.dataset.callInspectorWorkspaceBound !== '1') {
+    nextVWorkspaceDirInput.dataset.callInspectorWorkspaceBound = '1'
+    const refresh = () => {
+      refreshNextVCallInspectorAgents({ quiet: true })
+    }
+    nextVWorkspaceDirInput.addEventListener('change', refresh)
+    nextVWorkspaceDirInput.addEventListener('blur', refresh)
+  }
+
+  if (workspace && workspace.dataset.callInspectorRuntimeIdentityBound !== '1') {
+    workspace.dataset.callInspectorRuntimeIdentityBound = '1'
+    workspace.addEventListener('nextv:remote-workspace-identity', () => {
+      refreshNextVCallInspectorAgents({ quiet: true })
+    })
+  }
+
+  const tabButtons = [
+    ['raw', nextVCallResultTabRaw],
+    ['parsed', nextVCallResultTabParsed],
+    ['validation', nextVCallResultTabValidation],
+    ['retry', nextVCallResultTabRetry],
+    ['metadata', nextVCallResultTabMetadata],
+  ]
+  for (const [tabId, button] of tabButtons) {
+    if (!button || button.dataset.callInspectorTabBound === '1') continue
+    button.dataset.callInspectorTabBound = '1'
+    button.addEventListener('click', () => {
+      setNextVCallInspectorResultTab(tabId)
+    })
+  }
+
+  restoreNextVCallInspectorInputs()
+  syncNextVCallInspectorTargetMode()
+  refreshNextVCallInspectorAgents({ quiet: true })
+  renderNextVCallInspectorSnippet()
+  renderNextVCallInspectorResolvedCall(null)
+  renderNextVCallInspectorResult({ status: 'call inspector ready' }, { forceTab: getStoredNextVCallInspectorResultTab() })
 }
 
 export function updateNextVEventImageUI() {
@@ -11848,6 +12799,8 @@ import {
   setNextVStateDiffTab,
   setUserIOPanelOpen,
   toggleNextVDevConsole,
+  initNextVCallInspectorPanelChrome,
+  toggleNextVCallInspectorPanel,
   toggleNextVFileDrawer,
   toggleNextVImagesOpen,
   toggleUserIOPanel
@@ -11913,6 +12866,9 @@ import {
   refreshNextVSnapshot,
   handleNextVImageInput,
   reloadNextVRuntimeConfig,
+  executeNextVCallInspector,
+  insertNextVCallInspectorSnippet,
+  initNextVCallInspector,
 } from './12_stream.js'
 import {
   loadSession,
@@ -12032,6 +12988,8 @@ setupNextVUserIOSplitter()
 setupNextVImageDropzone()
 updateNextVEventImageUI()
 setupVerticalSplitters()
+initNextVCallInspectorPanelChrome()
+initNextVCallInspector()
 setupNextVEventsScrollListener()
 initLayoutState()
 initFileTreeCtxMenu()
@@ -12059,6 +13017,7 @@ Object.assign(window, {
   detachNextVRuntime,
   setUserIOPanelOpen,
   toggleNextVDevConsole,
+  toggleNextVCallInspectorPanel,
   toggleNextVFileDrawer,
   toggleNextVImagesOpen,
   toggleNextVIngressControlsSetting,
@@ -12093,6 +13052,8 @@ Object.assign(window, {
   sendNextVIngress,
   startNextVRuntime,
   stopNextVRuntime,
+  executeNextVCallInspector,
+  insertNextVCallInspectorSnippet,
   // 13_layout.js
   addScriptInputRow,
   cancelScriptRun,

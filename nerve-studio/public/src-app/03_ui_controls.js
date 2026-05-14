@@ -195,6 +195,8 @@ export function setNextVPrimaryView(view, options = {}) {
   }
 
   nextVViewState.currentView = nextView
+  document.body.classList.toggle('nextv-primary-editor', nextView === 'editor')
+  document.body.classList.toggle('nextv-primary-graph', nextView === 'graph')
 
   if (nextVViewEditor) {
     nextVViewEditor.classList.toggle('active', nextView === 'editor')

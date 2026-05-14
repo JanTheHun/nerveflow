@@ -3,7 +3,6 @@ import {
   _setIsStateDiffResizing,
   _setNextVStateFilterQuery,
   isStateDiffResizing,
-  nextVGraphShell,
   nextVStateDiffFeed,
   nextVStateDiffPanel,
   nextVStateDiffSplitter,
@@ -506,7 +505,7 @@ export function initNextVStateDiffPanel() {
 }
 
 export function setupNextVStateDiffSplitter() {
-  if (!nextVStateDiffSplitter || !nextVStateDiffPanel || !nextVGraphShell) return
+  if (!nextVStateDiffSplitter || !nextVStateDiffPanel) return
 
   const applyStateDiffWidth = (pixels) => {
     const clamped = clampNextVStateDiffWidth(pixels)

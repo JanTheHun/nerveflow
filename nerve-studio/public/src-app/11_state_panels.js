@@ -8,7 +8,6 @@ import {
   _setTraceRowCounter,
   isUserIOResizing,
   nextVEventSource,
-  nextVGraphShell,
   nextVHasLiveRuntimeEvents,
   nextVLastKnownState,
   nextVRuntimeRunning,
@@ -136,7 +135,7 @@ export function initNextVUserIOPanel() {
 }
 
 export function setupNextVUserIOSplitter() {
-  if (!nextVUserIOSplitter || !scriptEditorPanel || !nextVGraphShell) return
+  if (!nextVUserIOSplitter || !scriptEditorPanel) return
 
   const applyUserIOWidth = (pixels) => {
     const clamped = clampNextVUserIOWidth(pixels)
@@ -153,7 +152,9 @@ export function setupNextVUserIOSplitter() {
 
   window.addEventListener('mousemove', (event) => {
     if (!isUserIOResizing) return
-    const shellRect = nextVGraphShell.getBoundingClientRect()
+    const shell = scriptEditorPanel.parentElement
+    if (!shell) return
+    const shellRect = shell.getBoundingClientRect()
     applyUserIOWidth(shellRect.right - event.clientX)
   })
 

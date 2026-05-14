@@ -419,6 +419,7 @@ export function getControlProvenanceClass(value) {
   const normalized = String(value ?? '').trim().toLowerCase()
   if (normalized === 'bounded') return 'bounded'
   if (normalized === 'unbounded') return 'unbounded'
+  if (normalized === 'operational') return 'operational'
   if (normalized === 'mixed') return 'mixed'
   return 'unknown'
 }
@@ -456,6 +457,7 @@ export function buildNextVControlGraphArtifacts(controlEdges) {
       eventType: String(rawEdge?.eventType ?? '').trim(),
       provenance: getControlProvenanceClass(rawEdge?.provenance),
       boundedControl: rawEdge?.boundedControl === true,
+      operationalControl: rawEdge?.operationalControl === true,
       line: Number.isFinite(Number(rawEdge?.line)) ? Number(rawEdge.line) : null,
       statement: String(rawEdge?.statement ?? '').trim(),
     })

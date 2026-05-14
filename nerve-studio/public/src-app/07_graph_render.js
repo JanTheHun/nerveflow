@@ -218,6 +218,9 @@ export function renderNextVGraph(data = {}, options = {}) {
         ? String(effectMeta?.sourceEvent ?? '')
         : String(nodeObj.eventType ?? nodeObj.id)
     const transition = transitionByEvent.get(transitionEventType)
+    const transitionTryBoundaries = Array.isArray(transition?.tryBoundaries)
+      ? transition.tryBoundaries
+      : []
     const effectClassification = effectMeta?.type === 'output' ? getEffectOutputClassification(effectMeta.channel) : 'side_effect'
     const transitionClass = isControlBranchNode
       ? getControlOverlayClassName(nodeObj?.provenance)
@@ -262,6 +265,12 @@ export function renderNextVGraph(data = {}, options = {}) {
 
     titleWrap.appendChild(eventName)
     titleWrap.appendChild(badge)
+    if (isHandlerNode && transitionTryBoundaries.length > 0) {
+      const tryBadge = document.createElement('span')
+      tryBadge.className = 'nextv-graph-chip try-boundary'
+      tryBadge.textContent = `try ${transitionTryBoundaries.length}`
+      titleWrap.appendChild(tryBadge)
+    }
     header.appendChild(titleWrap)
     header.appendChild(closeBtn)
     card.appendChild(header)
@@ -285,6 +294,7 @@ export function renderNextVGraph(data = {}, options = {}) {
       const tools = Array.isArray(transition.tools) ? transition.tools.filter(Boolean) : []
       const outputs = Array.isArray(transition.outputs) ? transition.outputs : []
       const warnings = Array.isArray(transition.warnings) ? transition.warnings : []
+      const tryBoundaries = transitionTryBoundaries
 
       if (tools.length > 0) {
         addLine(`tools: ${tools.map((tool) => tool.name || 'dynamic').join(', ')}`)
@@ -299,10 +309,25 @@ export function renderNextVGraph(data = {}, options = {}) {
           addLine(`warning: ${String(warning.message ?? warning.code ?? 'unknown warning')}`, 'warning')
         }
       }
+
+      if (tryBoundaries.length > 0) {
+        addLine(`try boundaries: ${tryBoundaries.length}`)
+        for (const boundary of tryBoundaries) {
+          const operation = String(boundary?.operation ?? 'call')
+          const target = String(boundary?.target ?? '').trim()
+          const boundaryText = target
+            ? `try: ${operation} -> ${target}`
+            : `try: ${operation}`
+          addLine(boundaryText)
+        }
+      }
     }
 
     if (isControlBranchNode) {
       addLine(`provenance: ${getControlProvenanceClass(nodeObj?.provenance)}`)
+      if (nodeObj?.provenance === 'operational') {
+        addLine('control kind: operational envelope branch')
+      }
       if (Number.isFinite(Number(nodeObj?.line))) {
         addLine(`line: ${Number(nodeObj.line)}`)
       }
@@ -486,11 +511,12 @@ export function renderNextVGraph(data = {}, options = {}) {
   const mixedCount = transitions.filter((transition) => transition?.classification === 'mixed').length
   const boundedControlCount = visibleControlGraphEdges.filter((edge) => edge.provenance === 'bounded').length
   const unboundedControlCount = visibleControlGraphEdges.filter((edge) => edge.provenance === 'unbounded').length
+  const operationalControlCount = visibleControlGraphEdges.filter((edge) => edge.provenance === 'operational').length
   const effectCount = effectNodes.length
   const handlerCount = nodes.filter((n) => n.kind === 'handler').length
   const timerCount = rawTimerNodes.length
   const entrypointLabel = pathBasename(entrypointPath) || 'entrypoint'
-  meta.textContent = `${entrypointLabel} • ${handlerCount} handlers • ${edges.length} edges${timerCount ? ` • ${timerCount} timers` : ''}${effectCount ? ` • ${effectCount} effects` : ''}${visibleControlGraphEdges.length ? ` • ${visibleControlGraphEdges.length} control` : ''}${cycles.length ? ` • ${cycleLabel}` : ''}${mixedCount ? ` • ${mixedCount} mixed` : ''}${boundedControlCount ? ` • ${boundedControlCount} bounded-control` : ''}${unboundedControlCount ? ` • ${unboundedControlCount} unbounded-control` : ''}`
+  meta.textContent = `${entrypointLabel} • ${handlerCount} handlers • ${edges.length} edges${timerCount ? ` • ${timerCount} timers` : ''}${effectCount ? ` • ${effectCount} effects` : ''}${visibleControlGraphEdges.length ? ` • ${visibleControlGraphEdges.length} control` : ''}${cycles.length ? ` • ${cycleLabel}` : ''}${mixedCount ? ` • ${mixedCount} mixed` : ''}${boundedControlCount ? ` • ${boundedControlCount} bounded-control` : ''}${unboundedControlCount ? ` • ${unboundedControlCount} unbounded-control` : ''}${operationalControlCount ? ` • ${operationalControlCount} operational-control` : ''}`
   toolbar.appendChild(meta)
 
   if (transitions.length > 0) {
@@ -509,6 +535,7 @@ export function renderNextVGraph(data = {}, options = {}) {
     controlLegend.className = 'nextv-graph-legend'
     appendTransitionChip(controlLegend, 'control bounded', 'control-bounded')
     appendTransitionChip(controlLegend, 'control unbounded', 'control-unbounded')
+    appendTransitionChip(controlLegend, 'control operational', 'control-operational')
     appendTransitionChip(controlLegend, 'control mixed', 'control-mixed')
     appendTransitionChip(controlLegend, 'control unknown', 'control-unknown')
     wrap.appendChild(controlLegend)
@@ -1020,6 +1047,16 @@ export function renderNextVGraph(data = {}, options = {}) {
     if (hasParallelAgents && Array.isArray(transition?.agents) && transition.agents.length > 0) titleParts.push(`parallel=${transition.agents.join(', ')}`)
     if (Array.isArray(transition?.outputs) && transition.outputs.length > 0) titleParts.push(`outputs=${transition.outputs.join(', ')}`)
     if (Array.isArray(transition?.tools) && transition.tools.length > 0) titleParts.push(`tools=${transition.tools.map((tool) => tool.name || 'dynamic').join(', ')}`)
+    if (Array.isArray(transition?.tryBoundaries) && transition.tryBoundaries.length > 0) {
+      const tryBoundarySummary = transition.tryBoundaries
+        .map((boundary) => {
+          const operation = String(boundary?.operation ?? 'call')
+          const target = String(boundary?.target ?? '').trim()
+          return target ? `${operation}->${target}` : operation
+        })
+        .join(', ')
+      titleParts.push(`try=${tryBoundarySummary}`)
+    }
     if (hasWarnings) titleParts.push(`warnings=${transition.warnings.map((warning) => warning.code).join(', ')}`)
     title.textContent = titleParts.join(' | ')
     group.appendChild(title)

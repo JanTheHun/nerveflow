@@ -1113,6 +1113,51 @@ function stringifyInspectorPane(value) {
   }
 }
 
+function persistNextVCallInspectorInputs() {
+  const targetKind = String(nextVCallTargetKindInput?.value ?? '').trim()
+  if (targetKind) localStorage.setItem(storageKeys.nextVCallInspectorTargetKind, targetKind)
+
+  const targetAgent = String(nextVCallTargetAgentInput?.value ?? '').trim()
+  if (targetAgent) localStorage.setItem(storageKeys.nextVCallInspectorTargetAgent, targetAgent)
+
+  const targetModel = String(nextVCallTargetInput?.value ?? '').trim()
+  if (targetModel) localStorage.setItem(storageKeys.nextVCallInspectorTargetModel, targetModel)
+
+  const validate = String(nextVCallValidateInput?.value ?? '').trim()
+  if (validate) localStorage.setItem(storageKeys.nextVCallInspectorValidate, validate)
+
+  const retry = String(nextVCallRetryInput?.value ?? '').trim()
+  if (retry !== '') localStorage.setItem(storageKeys.nextVCallInspectorRetry, retry)
+
+  localStorage.setItem(storageKeys.nextVCallInspectorInstructions, String(nextVCallInstructionsInput?.value ?? ''))
+  localStorage.setItem(storageKeys.nextVCallInspectorPrompt, String(nextVCallPromptInput?.value ?? ''))
+  localStorage.setItem(storageKeys.nextVCallInspectorReturns, String(nextVCallReturnsInput?.value ?? ''))
+  localStorage.setItem(storageKeys.nextVCallInspectorDecide, String(nextVCallDecideInput?.value ?? ''))
+}
+
+function restoreNextVCallInspectorInputs() {
+  const targetKind = String(localStorage.getItem(storageKeys.nextVCallInspectorTargetKind) ?? '').trim()
+  if (targetKind && nextVCallTargetKindInput) nextVCallTargetKindInput.value = targetKind
+
+  const validate = String(localStorage.getItem(storageKeys.nextVCallInspectorValidate) ?? '').trim()
+  if (validate && nextVCallValidateInput) nextVCallValidateInput.value = validate
+
+  const retry = String(localStorage.getItem(storageKeys.nextVCallInspectorRetry) ?? '').trim()
+  if (retry !== '' && nextVCallRetryInput) nextVCallRetryInput.value = retry
+
+  const instructions = localStorage.getItem(storageKeys.nextVCallInspectorInstructions)
+  if (instructions !== null && nextVCallInstructionsInput) nextVCallInstructionsInput.value = instructions
+
+  const prompt = localStorage.getItem(storageKeys.nextVCallInspectorPrompt)
+  if (prompt !== null && nextVCallPromptInput) nextVCallPromptInput.value = prompt
+
+  const returns = localStorage.getItem(storageKeys.nextVCallInspectorReturns)
+  if (returns !== null && nextVCallReturnsInput) nextVCallReturnsInput.value = returns
+
+  const decide = localStorage.getItem(storageKeys.nextVCallInspectorDecide)
+  if (decide !== null && nextVCallDecideInput) nextVCallDecideInput.value = decide
+}
+
 const nextVCallInspectorProjectConfig = {
   agentsByName: {},
   modelsByName: {},
@@ -1316,6 +1361,18 @@ export async function refreshNextVCallInspectorAgents(options = {}) {
     })
     setNextVCallInspectorAgentOptions(configuredAgents, { emptyLabel: noAgentsLabel })
     setNextVCallInspectorModelOptions(configuredModels, { emptyLabel: noModelsLabel })
+
+    const storedAgent = String(localStorage.getItem(storageKeys.nextVCallInspectorTargetAgent) ?? '').trim()
+    if (storedAgent && nextVCallTargetAgentInput) {
+      const agentOptions = [...nextVCallTargetAgentInput.options].map((o) => o.value)
+      if (agentOptions.includes(storedAgent)) nextVCallTargetAgentInput.value = storedAgent
+    }
+    const storedModel = String(localStorage.getItem(storageKeys.nextVCallInspectorTargetModel) ?? '').trim()
+    if (storedModel && nextVCallTargetInput) {
+      const modelOptions = [...nextVCallTargetInput.options].map((o) => o.value)
+      if (modelOptions.includes(storedModel)) nextVCallTargetInput.value = storedModel
+    }
+
     syncNextVCallInspectorTargetMode()
     renderNextVCallInspectorTargetConfig()
     renderNextVCallInspectorSnippet()
@@ -1508,6 +1565,7 @@ export function initNextVCallInspector() {
           refreshNextVCallInspectorAgents({ quiet: true })
         }
       }
+      persistNextVCallInspectorInputs()
       renderNextVCallInspectorSnippet()
     }
     control.addEventListener('input', rerender)
@@ -1545,6 +1603,7 @@ export function initNextVCallInspector() {
     })
   }
 
+  restoreNextVCallInspectorInputs()
   syncNextVCallInspectorTargetMode()
   refreshNextVCallInspectorAgents({ quiet: true })
   renderNextVCallInspectorSnippet()

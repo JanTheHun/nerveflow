@@ -14,23 +14,33 @@ on external "user_message"
   target_contract = {
     target: ""
   }
+
+
+	result = try agent(
+	  "intent-4",
+	  event.value,
+	  instructions="Classify user intent. Choose from declared possibilities.\nReturn exactly one.\nIf not sure, choose unclear.",
+		decide=["play", "unclear"]
+	)
+
+	output json result
+	  
+  # intent_results = parallel([
+    # agent(
+      # "intent-4",
+      # event.value,
+      # intent_instructions,
+      # decide=["play", "unclear"]
+    # ),
+    # agent(
+      # "intent-4",
+      # event.value,
+      # target_instructions,
+      # returns=target_contract
+    # )
+  # ])
   
-  intent_results = parallel([
-    agent(
-      "intent-4",
-      event.value,
-      intent_instructions,
-      decide=["play", "unclear"]
-    ),
-    agent(
-      "intent-4",
-      event.value,
-      target_instructions,
-      returns=target_contract
-    )
-  ])
-  
-  output json intent_results
+  # output json intent_results
   
   emit("user_wants_music", event.value)
 end

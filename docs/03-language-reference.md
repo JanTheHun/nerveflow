@@ -100,7 +100,37 @@ Language constructs (not regular function calls):
 
 - `parallel([agent(...), model(...), ...])`
 
+Try envelope expression:
+
+- `try <call-expression>`
+
 `parallel([...])` evaluates a group of independent `agent()` or `model()` calls and returns their results in input order. All children are evaluated under a shared context snapshot. If any child fails, the entire expression fails; if multiple fail, the error from the lowest input index is surfaced. `on_contract_violation` is not allowed inside parallel children. `parallel([...])` must be assigned to a variable.
+
+`try <call-expression>` converts supported operational call failures into explicit envelope values:
+
+- success: `{ ok: true, value: ... }`
+- failure: `{ ok: false, error: { type, message, output? } }`
+
+When the failing operation has original text output available, `error.output` preserves that source text.
+
+Phase 1 supports `try` with:
+
+- `tool(...)`
+- `script(...)`
+- `operator(...)`
+- `try_bind(...)`
+- `agent(...)`
+- `model(...)`
+
+For `try` with `agent(...)` or `model(...)`, the call must not use:
+
+- `on_contract_violation`
+
+`returns`, `decide` (agent only), and `retry_on_contract_violation` are supported with `try`.
+
+Invalid combinations raise `INVALID_CALL_CONFIG`.
+
+`try` does not suppress parse errors, compile/runtime structural errors, invalid workflow semantics, or deterministic evaluation errors.
 
 See `docs/spec-parallel-group-evaluation.md` for full semantics.
 

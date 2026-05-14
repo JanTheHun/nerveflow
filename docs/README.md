@@ -13,6 +13,15 @@ This documentation is for **users building workflows with Nerveflow**.
 
 ## Agent docs
 
+- [platform/platform-agent-guide.md](platform/platform-agent-guide.md)
+- [project-generation/project-generator-guide.md](project-generation/project-generator-guide.md)
+- [project-generation/workflow-generation-rules.md](project-generation/workflow-generation-rules.md)
+- [project-generation/agent-language-reference.md](project-generation/agent-language-reference.md)
+- [project-generation/workflow-checklists.md](project-generation/workflow-checklists.md)
+- [project-generation/canonical-snippets.md](project-generation/canonical-snippets.md)
+
+## Legacy agent docs (transition)
+
 - [06-agent-project-guide.md](06-agent-project-guide.md)
 - [07-agent-language-reference.md](07-agent-language-reference.md)
 - [08-agent-checklists.md](08-agent-checklists.md)

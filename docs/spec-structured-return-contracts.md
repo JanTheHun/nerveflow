@@ -620,6 +620,13 @@ Compatibility note:
 Related draft:
 
 - See [spec-late-contract-binding.md](spec-late-contract-binding.md) for a proposed extension that separates generation guidance from runtime enforcement via `validate="none"` and `try_bind(...)`.
+- See [spec-explicit-runtime-failure-envelopes.md](spec-explicit-runtime-failure-envelopes.md) for operational failure-to-envelope handling via `try`.
+
+Relationship note:
+
+- contract modes (`returns`, `retry_on_contract_violation`, `on_contract_violation`) handle schema/contract failures
+- `try` handles supported operational execution failures
+- in Phase 1, `try` must not be combined with contracted `agent/model` call modes (`returns`, `decide`, violation policy arguments)
 
 Included:
 

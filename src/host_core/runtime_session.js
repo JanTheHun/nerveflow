@@ -486,6 +486,7 @@ export function createHostAdapter({
 
       let lastViolation = null
       let previousViolationKey = null
+      let lastRequestDebugPayload = null
 
       for (let attemptNum = 0; attemptNum <= retryLimit; attemptNum += 1) {
         const chatMessages = []
@@ -558,6 +559,7 @@ export function createHostAdapter({
               },
             }
           : null
+        lastRequestDebugPayload = requestDebugPayload
 
         const callStartedAt = Date.now()
         let slowWarningEmitted = false
@@ -786,7 +788,7 @@ export function createHostAdapter({
             } catch {
               lateBindValue = raw
             }
-            return { value: lateBindValue, metadata: metadataWithDebug }
+            return { value: lateBindValue, outputText: String(raw ?? ''), metadata: metadataWithDebug }
           }
 
           let parsed
@@ -803,6 +805,7 @@ export function createHostAdapter({
               return {
                 __nextv_contract_violation__: true,
                 expression: on_contract_violation,
+                metadata: metadataWithDebug,
                 violation: {
                   type: 'json_parse_error',
                   field: '',
@@ -812,6 +815,7 @@ export function createHostAdapter({
                 },
               }
             }
+            parseErr.requestMetadata = lastRequestDebugPayload
             annotateRetryExhaustion(parseErr, retryLimit, attemptNum)
             throw parseErr
           }
@@ -820,6 +824,7 @@ export function createHostAdapter({
             try {
               return {
                 value: validateAgentReturnContract(parsed, returns, mode),
+                outputText: String(raw ?? ''),
                 metadata: metadataWithDebug,
               }
             } catch (err) {
@@ -837,6 +842,7 @@ export function createHostAdapter({
                 return {
                   __nextv_contract_violation__: true,
                   expression: on_contract_violation,
+                  metadata: metadataWithDebug,
                   violation: {
                     type: 'contract_violation',
                     message: String(err?.message ?? ''),
@@ -847,19 +853,21 @@ export function createHostAdapter({
                   },
                 }
               }
+              err.requestMetadata = lastRequestDebugPayload
+              err.output = String(raw ?? '')
               enrichAgentContractError(err, { agentName, line, statement, sourcePath, sourceLine })
               annotateRetryExhaustion(err, retryLimit, attemptNum)
               throw err
             }
           }
-          return { value: parsed, metadata: metadataWithDebug }
+          return { value: parsed, outputText: String(raw ?? ''), metadata: metadataWithDebug }
         }
 
         // decide contract: plain-text enum validation, no JSON parsing
         if (decide != null && typeof validateDecideOutput === 'function') {
           try {
             const matched = validateDecideOutput(raw, decide)
-            return { value: matched, metadata: metadataWithDebug }
+            return { value: matched, outputText: String(raw ?? ''), metadata: metadataWithDebug }
           } catch (err) {
             lastViolation = String(raw ?? '')
             const violationKey = `DECIDE_MISMATCH:${String(raw ?? '').slice(0, 80)}`
@@ -873,6 +881,7 @@ export function createHostAdapter({
               return {
                 __nextv_contract_violation__: true,
                 expression: on_contract_violation,
+                metadata: metadataWithDebug,
                 violation: {
                   type: 'contract_violation',
                   subtype: 'decide_mismatch',
@@ -886,14 +895,17 @@ export function createHostAdapter({
             }
             const decideErr = new Error(`decide contract violation: output "${String(raw ?? '').slice(0, 80)}" does not match any allowed value.`)
             decideErr.code = 'AGENT_RETURN_CONTRACT_VIOLATION'
+            decideErr.output = String(raw ?? '')
+            decideErr.requestMetadata = lastRequestDebugPayload
             annotateRetryExhaustion(decideErr, retryLimit, attemptNum)
             throw decideErr
           }
         }
 
-        if (!format) return { value: raw, metadata: metadataWithDebug }
+        if (!format) return { value: raw, outputText: String(raw ?? ''), metadata: metadataWithDebug }
         return {
           value: normalizeAgentFormattedOutput(raw, format),
+          outputText: String(raw ?? ''),
           metadata: metadataWithDebug,
         }
       }

@@ -305,6 +305,91 @@ test('controller submitCandidate reports rejected candidate without mutating act
   assert.equal(status.candidate.status, 'rejected')
 })
 
+test('controller promoteCandidate throws when runtime is inactive', () => {
+  const { controller } = createController()
+
+  assert.throws(
+    () => controller.promoteCandidate(),
+    /nextV runtime not active/,
+  )
+})
+
+test('controller promoteCandidate throws when no promotable candidate exists', async () => {
+  const { controller } = createController()
+  await controller.start({ entrypointPath: 'main.nrv' })
+
+  assert.throws(
+    () => controller.promoteCandidate(),
+    /no promotable candidate/i,
+  )
+})
+
+test('controller promoteCandidate throws when candidate was rejected', async () => {
+  const configStart = {
+    agents: { status: 'loaded', source: 'agents.json', profiles: {} },
+    tools: { status: 'loaded', source: 'tools.json', allow: null, aliases: {} },
+    nextv: { status: 'loaded', file: 'nextv.json', config: { effectsPolicy: 'strict' }, timers: [], timersSource: '' },
+    operators: { status: 'missing', source: '', map: {} },
+  }
+  const configRejected = {
+    ...configStart,
+    agents: { status: 'loaded', source: 'agents.bad.json', profiles: {}, map: { x: { model: 'a', transport: 'bad' } } },
+  }
+  const loadedConfigs = [configStart, configRejected]
+  let loadIndex = 0
+  const { controller } = createController({
+    loadWorkspaceConfig: () => loadedConfigs[Math.min(loadIndex++, loadedConfigs.length - 1)],
+    validateNoForbiddenAgentFields: (wc) => {
+      if (wc?.agents?.source !== 'agents.bad.json') return []
+      return [{ code: 'FORBIDDEN_AGENT_FIELD', message: 'transport is forbidden on agent x' }]
+    },
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  controller.submitCandidate()
+
+  assert.throws(
+    () => controller.promoteCandidate(),
+    /no promotable candidate/i,
+  )
+})
+
+test('controller promoteCandidate applies candidate and resets candidate status', async () => {
+  const configStart = {
+    agents: { status: 'loaded', source: 'agents.v1.json', profiles: {} },
+    tools: { status: 'loaded', source: 'tools.json', allow: null, aliases: {} },
+    nextv: { status: 'loaded', file: 'nextv.json', config: {}, timers: [], timersSource: '' },
+    operators: { status: 'missing', source: '', map: {} },
+  }
+  const configCandidate = {
+    ...configStart,
+    agents: { status: 'loaded', source: 'agents.v2.json', profiles: {} },
+  }
+  const loadedConfigs = [configStart, configCandidate]
+  let loadIndex = 0
+  const { controller, published } = createController({
+    loadWorkspaceConfig: () => loadedConfigs[Math.min(loadIndex++, loadedConfigs.length - 1)],
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  const candidate = controller.submitCandidate()
+  assert.equal(candidate.status, 'promotable')
+
+  const promoted = controller.promoteCandidate()
+
+  assert.equal(promoted.workspaceConfig.agentsSource, 'agents.v2.json')
+  assert.equal(
+    published.some((entry) => entry.eventName === 'nextv_candidate_promoted'),
+    true,
+  )
+  assert.equal(
+    published.some((entry) => entry.eventName === 'nextv_config_reloaded'),
+    true,
+  )
+  const status = controller.getDefinitionStatus()
+  assert.equal(status.candidate.status, 'none')
+})
+
 test('controller start warns for unsupported declared effects in warn mode and continues startup', async () => {
   const { controller, published } = createController({
     workspaceConfig: {

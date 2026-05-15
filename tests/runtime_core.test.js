@@ -83,6 +83,16 @@ test('runtime command router returns protocol responses', async () => {
     true,
   )
 
+  const promoteResponse = await router.handleRawCommand({
+    type: 'promote_candidate',
+    requestId: 'promote-1',
+    payload: {},
+  })
+
+  // Runtime starts with no candidate, so promote must either succeed (if submit was promotable)
+  // or return an error — either way the command is recognised (not 'validation_error')
+  assert.notEqual(promoteResponse.error?.code, 'validation_error')
+
   const definitionStatusResponse = await router.handleRawCommand({
     type: 'definition_status',
     requestId: 'defs-1',
@@ -234,6 +244,72 @@ test('runtime command router handles call_inspector_execute command', async () =
   assert.equal(response.data.call.target, 'test-model')
   assert.equal(response.data.call.mode, 'try')
   assert.deepEqual(runtime.callInspectorExecuteCalls, [payload])
+})
+
+test('runtime core callInspectorExecute mode=try returns success envelope', async () => {
+  const runtime = createRuntimeCore({
+    resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
+    callAgent: async () => 'play',
+  })
+
+  const response = await runtime.callInspectorExecute({
+    workspaceDir: 'examples/mqtt-simple-host',
+    targetKind: 'model',
+    mode: 'try',
+    model: 'test-model',
+    prompt: 'hello',
+  })
+
+  assert.equal(response.call.mode, 'try')
+  assert.equal(response.result.hadContractViolation, false)
+  assert.deepEqual(response.result.value, {
+    ok: true,
+    value: 'play',
+  })
+  assert.deepEqual(response.result.parsed, {
+    ok: true,
+    value: 'play',
+  })
+  assert.equal(response.resolvedCall.attempt, 1)
+  assert.equal(response.resolvedCall.retryLimit, 0)
+  assert.equal(Array.isArray(response.resolvedCall.finalRequest?.messages), true)
+  assert.equal(response.resolvedCall.finalRequest.messages.length > 0, true)
+  assert.equal(response.resolvedCall.retryGuidanceInjected, false)
+})
+
+test('runtime core callInspectorExecute mode=try returns failure envelope on contract violation', async () => {
+  const runtime = createRuntimeCore({
+    resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
+    callAgent: async () => '{"intent":"maybe"}',
+  })
+
+  const response = await runtime.callInspectorExecute({
+    workspaceDir: 'examples/mqtt-simple-host',
+    targetKind: 'model',
+    mode: 'try',
+    model: 'test-model',
+    prompt: 'hello',
+    returns: { intent: ['yes', 'no'] },
+    validate: 'strict',
+    retry_on_contract_violation: 1,
+  })
+
+  assert.equal(response.call.mode, 'try')
+  assert.equal(response.result.hadContractViolation, true)
+  assert.equal(response.result.value?.ok, false)
+  assert.equal(response.result.value?.error?.type, 'agent_return_contract_violation')
+  assert.equal(typeof response.result.value?.error?.message, 'string')
+  assert.equal(response.resolvedCall.attempt, 2)
+  assert.equal(response.resolvedCall.retryLimit, 1)
+  assert.equal(response.resolvedCall.retryGuidanceInjected, true)
+  assert.equal(Array.isArray(response.resolvedCall.finalRequest?.messages), true)
+  assert.equal(
+    response.resolvedCall.finalRequest.messages.some((entry) => (
+      String(entry?.role ?? '') === 'user'
+      && /the previous response/i.test(String(entry?.content ?? ''))
+    )),
+    true,
+  )
 })
 
 test('controller startup exposes configured models in nextv_started event', async () => {

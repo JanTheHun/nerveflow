@@ -90,6 +90,11 @@ export function createRuntimeCommandRouter({
           throw new Error('candidate validation is not available in this runtime host')
         }
         data = runtimeCore.submitCandidate(payload)
+      } else if (command.type === 'promote_candidate') {
+        if (typeof runtimeCore.promoteCandidate !== 'function') {
+          throw new Error('candidate promotion is not available in this runtime host')
+        }
+        data = runtimeCore.promoteCandidate(payload)
       } else if (command.type === 'snapshot') {
         const snapshot = runtimeCore.getSnapshot()
         const status = typeof runtimeCore.getStatus === 'function'

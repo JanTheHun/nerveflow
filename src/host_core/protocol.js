@@ -18,6 +18,7 @@
  * - dispatch_ingress: Dispatch ingress connector output into runtime queue
  * - call_inspector_execute: Execute a structured direct model/agent call
  * - submit_candidate: Validate a candidate workflow/config without mutating active runtime
+ * - promote_candidate: Apply a validated promotable candidate to the active runtime
  * - snapshot: Get current runtime state
  * - definition_status: Get active/candidate definition status
  * - subscribe: Attach surface to runtime events
@@ -37,6 +38,7 @@
  * - nextv_candidate_validation_started: Candidate validation pipeline started
  * - nextv_candidate_validation_failed: Candidate rejected during validation
  * - nextv_candidate_promotable: Candidate validated as promotable
+ * - nextv_candidate_promoted: Candidate successfully promoted to active runtime
  * 
  * Error codes indicate protocol or policy violations:
  * - policy_denied: Tool/effect not allowed
@@ -56,6 +58,7 @@ const HOST_COMMAND_TYPES = Object.freeze([
   'dispatch_ingress',
   'call_inspector_execute',
   'submit_candidate',
+  'promote_candidate',
   'snapshot',
   'definition_status',
   'subscribe',
@@ -76,6 +79,7 @@ const HOST_EVENT_NAMES = Object.freeze([
   'nextv_candidate_validation_started',
   'nextv_candidate_validation_failed',
   'nextv_candidate_promotable',
+  'nextv_candidate_promoted',
 ])
 
 const HOST_ERROR_CODES = Object.freeze([

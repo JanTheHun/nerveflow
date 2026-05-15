@@ -688,6 +688,20 @@ export function createNextVRuntimeController({
     return payload
   }
 
+  function promoteCandidate() {
+    if (!nextVRunner) {
+      throw new Error('nextV runtime not active')
+    }
+    if (nextVCandidateStatus.status !== 'promotable') {
+      throw new Error('no promotable candidate — run submitCandidate first')
+    }
+
+    const reloaded = reloadConfig()
+    nextVCandidateStatus = buildInactiveCandidateStatus()
+    eventBus.publish('nextv_candidate_promoted', reloaded)
+    return reloaded
+  }
+
   function enqueue(rawEvent) {
     if (!nextVRunner) {
       throw new Error('nextV runtime not active')
@@ -778,6 +792,7 @@ export function createNextVRuntimeController({
     stop,
     reloadConfig,
     submitCandidate,
+    promoteCandidate,
     enqueue,
     dispatchIngress,
     getSnapshot,

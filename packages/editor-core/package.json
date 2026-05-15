@@ -1,0 +1,37 @@
+{
+  "name": "@nerveflow/editor-core",
+  "version": "0.1.0-alpha.0",
+  "description": "Framework-agnostic single-document editor substrate",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "verify:pack": "node ../../scripts/verify-editor-core-pack.js"
+  },
+  "files": [
+    "src/",
+    "docs/",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/janthehun/nerveflow.git"
+  },
+  "homepage": "https://github.com/janthehun/nerveflow",
+  "keywords": [
+    "nerveflow",
+    "editor",
+    "surface",
+    "plugin"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}

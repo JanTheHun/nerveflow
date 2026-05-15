@@ -39,6 +39,13 @@ This documentation is for **users building workflows with Nerveflow**.
 - [11-production-readiness.md](11-production-readiness.md) — Production readiness gates and pre-publish checklist
 - [12-docker-deployment.md](12-docker-deployment.md) — Deploy one workflow workspace as a Dockerized app
 
+## Editor-Core Companion Package
+
+- [../packages/editor-core/README.md](../packages/editor-core/README.md) — package API, usage, and source-of-truth workflow
+- [../packages/editor-core/docs/HOST_CONTRACT.md](../packages/editor-core/docs/HOST_CONTRACT.md) — host integration contract for editor surfaces
+- [../packages/editor-core/docs/PLUGIN_CONTRACT.md](../packages/editor-core/docs/PLUGIN_CONTRACT.md) — plugin output and behavior contract
+- [11-production-readiness.md](11-production-readiness.md) — includes editor-core sync and pack verification gates
+
 ## Example scripts
 
 - [examples/hello-router.nrv](examples/hello-router.nrv)

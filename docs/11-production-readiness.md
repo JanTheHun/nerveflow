@@ -158,6 +158,39 @@ npm run test:pack-smoke
 
 ---
 
+## 5.5 Editor-Core Companion Package Gate
+
+**Purpose:** Ensure `@nerveflow/editor-core` publish candidate and Studio mirror integration remain deterministic.
+
+### Pass Criteria
+
+- [ ] Studio mirror sync check [scripts/verify-editor-core-sync.js](../scripts/verify-editor-core-sync.js) passes:
+  - `packages/editor-core/src` and `nerve-studio/public/editor-core` have identical paths and content
+  - stale mirror files are rejected
+- [ ] Editor-core pack check [scripts/verify-editor-core-pack.js](../scripts/verify-editor-core-pack.js) passes:
+  - `npm pack --json --dry-run` succeeds for [packages/editor-core/package.json](../packages/editor-core/package.json)
+  - packed paths are restricted to allowlist (`README.md`, `package.json`, `src/`, `docs/`)
+  - required package entry points are present (`src/index.js`, `src/Surface.js`, `src/Renderer.js`, `src/Diagnostics.js`)
+- [ ] Studio build path keeps import strategy stable:
+  - [nerve-studio/public/src-app/15_surface_beta.js](../nerve-studio/public/src-app/15_surface_beta.js) continues importing from `../editor-core/index.js`
+  - [package.json](../package.json) `build:studio` runs sync before [scripts/build-app-js.js](../scripts/build-app-js.js)
+
+### Fail Criteria
+
+- Mirror drift detected between package source and Studio mirror
+- Pack dry run includes disallowed files or misses required entry points
+- Studio build no longer enforces sync-first behavior
+
+### Validation Commands
+
+```bash
+npm run verify:editor-core-sync
+npm run verify:editor-core-pack
+npm run build:studio
+```
+
+---
+
 ## 6. CI Gate
 
 **Purpose:** Enforce all tests and smoke validation in CI before merge, with results visible in PR status.
@@ -166,7 +199,7 @@ npm run test:pack-smoke
 
 - [ ] GitHub Actions workflow [.github/workflows/publish-gate.yml](.github/workflows/publish-gate.yml) configured:
   - Triggered on: pull_request, push to main, manual dispatch
-  - Steps: checkout, setup Node 20, npm ci, npm test, npm run test:pack-smoke
+  - Steps: checkout, setup Node 20, npm ci, npm test, npm run verify:editor-core-sync, npm run verify:editor-core-pack, npm run test:pack-smoke
   - All steps succeed
 - [ ] Workflow marked as required check in branch protection rules (prevents merge if gate fails)
 - [ ] Workflow logs visible in PR checks (users can debug failures)
@@ -234,6 +267,10 @@ npm test
 
 # 2. Smoke test (pack → install → boot → smoke)
 npm run test:pack-smoke
+
+# 2.5 Companion package sync + pack checks
+npm run verify:editor-core-sync
+npm run verify:editor-core-pack
 
 # 3. Verify git state (no uncommitted changes)
 git status

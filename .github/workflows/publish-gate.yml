@@ -9,7 +9,7 @@ on:
 
 jobs:
   verify:
-    name: Verify Runtime Publish Contract
+    name: Verify Publish Contract
     runs-on: ubuntu-latest
 
     steps:
@@ -27,6 +27,12 @@ jobs:
 
       - name: Run test suite
         run: npm test
+
+      - name: Verify editor-core mirror sync
+        run: npm run verify:editor-core-sync
+
+      - name: Verify editor-core packed artifact
+        run: npm run verify:editor-core-pack
 
       - name: Run packed runtime smoke gate
         run: npm run test:pack-smoke

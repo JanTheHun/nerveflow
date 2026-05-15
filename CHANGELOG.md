@@ -4,8 +4,6 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
-## [0.1.5] - 2026-05-15
-
 ### Added
 
 - Structured return contracts now support string scalar enum constraints via string-literal arrays.
@@ -30,6 +28,12 @@ All notable changes to this project are documented in this file.
 ### Notes
 
 - Coerce mode continues to repair structural omissions only; it does not rewrite invalid enum values or invent missing enum values.
+
+## [0.1.5] - 2026-05-15
+
+### Changed
+
+- Version bump release cut to 0.1.5.
 
 ## [0.1.3] - 2026-04-24
 

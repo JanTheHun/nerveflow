@@ -23,7 +23,6 @@ All notable changes to this project are documented in this file.
 - WebSocket runtime dependency (`ws`) is now a runtime dependency so published runtime surfaces and attach CLI are self-contained.
 - Published CLI boundary now focuses on standalone runtime tools (`nerve-runtime`, `nerve-attach`, `nerve-model-check`); `nerve-dev-remote` remains repository-only.
 - Publish gate CI workflow now enforces editor-core sync and pack checks before runtime packed-artifact smoke.
-- Call inspector now surfaces in-panel validation errors on Run Call preflight failures (missing target/prompt or invalid returns JSON) instead of appearing idle.
 
 ### Notes
 

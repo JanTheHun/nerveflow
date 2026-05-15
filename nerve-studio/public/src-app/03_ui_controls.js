@@ -32,8 +32,11 @@ import {
   nextVManagedProcessRunning,
   nextVPanelState,
   nextVReloadConfigBtn,
+  nextVValidateBtn,
+  nextVPromoteBtn,
   nextVRunBtn,
   nextVRuntimeRunning,
+  nextVCandidatePromotable,
   nextVAttachSessionState,
   nextVAttachControls,
   nextVAttachBtn,
@@ -1096,7 +1099,10 @@ export function setNextVRunControls() {
   }
   
   if (nextVStopBtn) nextVStopBtn.disabled = remoteBlocksControl || !nextVRuntimeRunning || isBusy
-  if (nextVReloadConfigBtn) nextVReloadConfigBtn.disabled = remoteBlocksControl || !nextVRuntimeRunning || isBusy
+  const isEmbeddedMode = !isRemoteMode && !isExternalMode && !isAttachMode
+  if (nextVReloadConfigBtn) nextVReloadConfigBtn.disabled = !isEmbeddedMode || !nextVRuntimeRunning || isBusy
+  if (nextVValidateBtn) nextVValidateBtn.disabled = !isEmbeddedMode || !nextVRuntimeRunning || isBusy
+  if (nextVPromoteBtn) nextVPromoteBtn.disabled = !isEmbeddedMode || !nextVCandidatePromotable || isBusy
 }
 
 export function appendPanelLogRow(panel, line, cls = '') {

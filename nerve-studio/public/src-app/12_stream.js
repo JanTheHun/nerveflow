@@ -12,6 +12,7 @@ import {
   _setNextVLastKnownState,
   _setNextVManagedProcessRunning,
   _setNextVRuntimeRunning,
+  _setNextVCandidatePromotable,
   _setNextVExecutionGroups,
   _setNextVExecutionCounter,
   _setNextVEventsLiveMode,
@@ -32,6 +33,7 @@ import {
   nextVEventSourceInput,
   nextVEventTypeInput,
   nextVEventValueInput,
+  nextVCallModeInput,
   nextVCallTargetKindInput,
   nextVCallTargetAgentInput,
   nextVCallTargetInput,
@@ -47,15 +49,18 @@ import {
   nextVCallResolvedOutput,
   nextVCallGeneratedCode,
   nextVCallResultTabRaw,
+  nextVCallResultTabActual,
   nextVCallResultTabParsed,
   nextVCallResultTabValidation,
-  nextVCallResultTabRetry,
+  nextVCallResultTabTry,
   nextVCallResultTabMetadata,
   nextVCallResultRaw,
+  nextVCallResultActual,
   nextVCallResultParsed,
   nextVCallResultValidation,
-  nextVCallResultRetry,
+  nextVCallResultTry,
   nextVCallResultMetadata,
+  nextVCallInspectorPanel,
   nextVGraphState,
   nextVHasLiveRuntimeEvents,
   nextVImageCount,
@@ -69,6 +74,10 @@ import {
   nextVManagedProcessRunning,
   nextVPanelState,
   nextVRuntimeRunning,
+  nextVCandidatePromotable,
+  nextVCandidateStatusRow,
+  nextVCandidateStatusBadge,
+  nextVCandidateIssueCount,
   activePaneId,
   nextVAttachSessionState,
   nextVRuntimeTargetState,
@@ -101,6 +110,7 @@ import {
   updateRemoteRuntimeIdentity,
   updateRemoteModeBadge,
   setNextVRunControls,
+  toggleNextVCallInspectorPanel,
   clearNextVEventsOutput,
   clearNextVConsoleOutput
 } from './03_ui_controls.js'
@@ -984,6 +994,99 @@ export async function reloadNextVRuntimeConfig() {
   }
 }
 
+export async function submitNextVCandidate() {
+  if (!nextVRuntimeRunning) {
+    setStatus('nextv runtime not running', 'responding')
+    return
+  }
+
+  if (isBusy) {
+    setStatus('busy: wait for current task', 'responding')
+    return
+  }
+
+  try {
+    const res = await fetch(buildNextVApiPath('/api/nextv/submit-candidate'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'failed to submit candidate')
+    }
+
+    const candidate = data.candidate ?? {}
+    const status = candidate.status ?? 'unknown'
+    const issues = Array.isArray(candidate.issues) ? candidate.issues : []
+    const isPromotable = status === 'promotable'
+
+    _setNextVCandidatePromotable(isPromotable)
+    if (nextVCandidateStatusRow) nextVCandidateStatusRow.hidden = false
+    if (nextVCandidateStatusBadge) nextVCandidateStatusBadge.textContent = status
+    if (nextVCandidateIssueCount) {
+      nextVCandidateIssueCount.textContent = issues.length > 0 ? `${issues.length} issue${issues.length === 1 ? '' : 's'}` : ''
+    }
+
+    appendNextVLogRow(`[nextv:candidate] ${status}`, isPromotable ? 'step' : 'warn')
+    if (candidate.workspaceConfig && typeof candidate.workspaceConfig === 'object') {
+      appendNextVLogRow(formatWorkspaceConfigStatus(candidate.workspaceConfig), 'result')
+    }
+    if (issues.length > 0) {
+      for (const issue of issues) {
+        appendNextVLogRow(`  issue: ${issue}`, 'warn')
+      }
+    }
+    setNextVRunControls()
+    setStatus(`candidate: ${status}`)
+  } catch (err) {
+    appendNextVErrorLog(err)
+    setStatus('candidate validation failed', 'responding')
+  }
+}
+
+export async function promoteNextVCandidate() {
+  if (!nextVRuntimeRunning) {
+    setStatus('nextv runtime not running', 'responding')
+    return
+  }
+
+  if (!nextVCandidatePromotable) {
+    setStatus('no promotable candidate', 'responding')
+    return
+  }
+
+  if (isBusy) {
+    setStatus('busy: wait for current task', 'responding')
+    return
+  }
+
+  try {
+    const res = await fetch(buildNextVApiPath('/api/nextv/promote-candidate'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'failed to promote candidate')
+    }
+
+    _setNextVCandidatePromotable(false)
+    if (nextVCandidateStatusRow) nextVCandidateStatusRow.hidden = true
+    if (nextVCandidateStatusBadge) nextVCandidateStatusBadge.textContent = ''
+    if (nextVCandidateIssueCount) nextVCandidateIssueCount.textContent = ''
+
+    appendNextVLogRow(`[nextv:candidate] promoted`, 'step')
+    if (data?.workspaceConfig && typeof data.workspaceConfig === 'object') {
+      appendNextVLogRow(formatWorkspaceConfigStatus(data.workspaceConfig), 'result')
+    }
+    setNextVRunControls()
+    setStatus('candidate promoted')
+  } catch (err) {
+    appendNextVErrorLog(err)
+    setStatus('candidate promotion failed', 'responding')
+  }
+}
+
 export async function sendNextVEvent() {
   const value = String(nextVEventValueInput?.value ?? '')
   const selectedChannel = getSelectedNextVInputChannel()
@@ -1066,6 +1169,8 @@ export async function sendNextVIngress() {
 export async function executeNextVCallInspector() {
   const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
   const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  const modeRaw = String(nextVCallModeInput?.value ?? 'call').trim().toLowerCase()
+  const mode = modeRaw === 'try' ? 'try' : 'call'
   await refreshNextVCallInspectorAgents({ quiet: true })
   const target = getNextVCallInspectorTargetValue(targetKind)
   const instructions = String(nextVCallInstructionsInput?.value ?? '')
@@ -1093,6 +1198,7 @@ export async function executeNextVCallInspector() {
   const requestBody = {
     workspaceDir: normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? ''),
     targetKind,
+    mode,
     instructions,
     prompt,
     validate,
@@ -1164,6 +1270,10 @@ function persistNextVCallInspectorInputs() {
   const targetKind = String(nextVCallTargetKindInput?.value ?? '').trim()
   if (targetKind) localStorage.setItem(storageKeys.nextVCallInspectorTargetKind, targetKind)
 
+  const modeRaw = String(nextVCallModeInput?.value ?? '').trim().toLowerCase()
+  const mode = modeRaw === 'try' ? 'try' : 'call'
+  localStorage.setItem(storageKeys.nextVCallInspectorMode, mode)
+
   const targetAgent = String(nextVCallTargetAgentInput?.value ?? '').trim()
   if (targetAgent) localStorage.setItem(storageKeys.nextVCallInspectorTargetAgent, targetAgent)
 
@@ -1185,6 +1295,11 @@ function persistNextVCallInspectorInputs() {
 function restoreNextVCallInspectorInputs() {
   const targetKind = String(localStorage.getItem(storageKeys.nextVCallInspectorTargetKind) ?? '').trim()
   if (targetKind && nextVCallTargetKindInput) nextVCallTargetKindInput.value = targetKind
+
+  const storedMode = String(localStorage.getItem(storageKeys.nextVCallInspectorMode) ?? '').trim().toLowerCase()
+  if (nextVCallModeInput) {
+    nextVCallModeInput.value = storedMode === 'try' ? 'try' : 'call'
+  }
 
   const validate = String(localStorage.getItem(storageKeys.nextVCallInspectorValidate) ?? '').trim()
   if (validate && nextVCallValidateInput) nextVCallValidateInput.value = validate
@@ -1292,10 +1407,22 @@ function renderNextVCallInspectorTargetConfig() {
 function renderNextVCallInspectorResolvedCall(resolvedCall = null) {
   if (!nextVCallResolvedOutput || !nextVCallResolvedLabel) return
 
-  nextVCallResolvedLabel.textContent = 'resolved call'
-  nextVCallResolvedOutput.textContent = resolvedCall
-    ? stringifyInspectorPane(resolvedCall)
-    : '(run call to inspect resolved invocation)'
+  nextVCallResolvedLabel.textContent = 'resolved call · final model-facing request'
+  if (!resolvedCall) {
+    nextVCallResolvedOutput.textContent = '(run call to inspect resolved invocation)'
+    return
+  }
+
+  const compact = {
+    ...resolvedCall,
+    finalRequest: resolvedCall?.finalRequest ?? {
+      model: String(resolvedCall?.resolvedModel ?? '').trim(),
+      messageCount: Number(resolvedCall?.messageCount ?? 0),
+      messages: Array.isArray(resolvedCall?.finalMessages) ? resolvedCall.finalMessages : [],
+    },
+  }
+
+  nextVCallResolvedOutput.textContent = stringifyInspectorPane(compact)
 }
 
 function getNextVCallInspectorTargetValue(targetKind) {
@@ -1440,23 +1567,130 @@ export async function refreshNextVCallInspectorAgents(options = {}) {
   }
 }
 
+function ensureNextVCallInspectorOption(selectEl, value) {
+  if (!selectEl) return false
+  const targetValue = String(value ?? '').trim()
+  if (!targetValue) return false
+
+  const existingOption = [...selectEl.options].find((option) => String(option.value ?? '').trim() === targetValue)
+  if (existingOption) {
+    selectEl.value = targetValue
+    return true
+  }
+
+  const option = document.createElement('option')
+  option.value = targetValue
+  option.textContent = targetValue
+  selectEl.appendChild(option)
+  selectEl.value = targetValue
+  return true
+}
+
+function applyNextVCallInspectorPrefill(prefill = {}) {
+  if (!prefill || typeof prefill !== 'object') return
+
+  const instructions = String(prefill.instructions ?? '').trim()
+  if (instructions && nextVCallInstructionsInput) {
+    nextVCallInstructionsInput.value = instructions
+  }
+
+  const prompt = String(prefill.prompt ?? '').trim()
+  if (prompt && nextVCallPromptInput) {
+    nextVCallPromptInput.value = prompt
+  }
+
+  const returnsText = String(prefill.returnsText ?? '').trim()
+  if (returnsText && nextVCallReturnsInput) {
+    nextVCallReturnsInput.value = returnsText
+  }
+
+  let decideText = ''
+  if (Array.isArray(prefill.decide)) {
+    decideText = prefill.decide.map((value) => String(value ?? '').trim()).filter(Boolean).join(', ')
+  } else {
+    decideText = String(prefill.decideText ?? '').trim()
+  }
+  if (decideText && nextVCallDecideInput) {
+    nextVCallDecideInput.value = decideText
+  }
+
+  const validateRaw = String(prefill.validate ?? '').trim().toLowerCase()
+  if (['strict', 'coerce', 'none'].includes(validateRaw) && nextVCallValidateInput) {
+    nextVCallValidateInput.value = validateRaw
+  }
+
+  const retryNumeric = Number(prefill.retry)
+  if (Number.isInteger(retryNumeric) && nextVCallRetryInput) {
+    nextVCallRetryInput.value = String(Math.max(0, Math.min(8, retryNumeric)))
+  }
+}
+
+export async function openNextVCallInspectorForToken(kind, value, options = {}) {
+  const targetKind = String(kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  const targetValue = String(value ?? '').trim()
+
+  if (nextVCallInspectorPanel?.hidden) {
+    toggleNextVCallInspectorPanel()
+  }
+
+  await refreshNextVCallInspectorAgents({ quiet: true })
+
+  if (nextVCallTargetKindInput) {
+    nextVCallTargetKindInput.value = targetKind
+  }
+  syncNextVCallInspectorTargetMode()
+
+  if (targetKind === 'model') {
+    if (targetValue) {
+      ensureNextVCallInspectorOption(nextVCallTargetInput, targetValue)
+    }
+  } else {
+    if (targetValue) {
+      ensureNextVCallInspectorOption(nextVCallTargetAgentInput, targetValue)
+    }
+  }
+
+  applyNextVCallInspectorPrefill(options?.prefill)
+
+  persistNextVCallInspectorInputs()
+  renderNextVCallInspectorTargetConfig()
+  renderNextVCallInspectorSnippet()
+
+  if (options?.focusPrompt !== false && nextVCallPromptInput) {
+    nextVCallPromptInput.focus()
+  }
+
+  setStatus(
+    targetValue
+      ? `call inspector target set to ${targetKind}.${targetValue}`
+      : `call inspector opened for ${targetKind} target`
+  )
+  return true
+}
+
 export function setNextVCallInspectorResultTab(tab) {
-  const nextTab = ['raw', 'parsed', 'validation', 'retry', 'metadata'].includes(String(tab ?? '').trim())
-    ? String(tab).trim()
+  const rawTab = String(tab ?? '').trim()
+  const normalizedTab = rawTab === 'result'
+    ? 'parsed'
+    : (rawTab === 'retry' ? 'try' : rawTab)
+  const nextTab = ['raw', 'actual', 'parsed', 'validation', 'try', 'metadata'].includes(normalizedTab)
+    ? normalizedTab
     : 'raw'
 
   const buttons = {
     raw: nextVCallResultTabRaw,
+    actual: nextVCallResultTabActual,
     parsed: nextVCallResultTabParsed,
     validation: nextVCallResultTabValidation,
-    retry: nextVCallResultTabRetry,
+    try: nextVCallResultTabTry,
     metadata: nextVCallResultTabMetadata,
   }
   const panes = {
     raw: nextVCallResultRaw,
+    actual: nextVCallResultActual,
     parsed: nextVCallResultParsed,
     validation: nextVCallResultValidation,
-    retry: nextVCallResultRetry,
+    try: nextVCallResultTry,
     metadata: nextVCallResultMetadata,
   }
 
@@ -1477,8 +1711,11 @@ export function setNextVCallInspectorResultTab(tab) {
 }
 
 function getStoredNextVCallInspectorResultTab() {
-  const stored = String(localStorage.getItem(storageKeys.nextVCallInspectorResultTab) ?? '').trim()
-  return ['raw', 'parsed', 'validation', 'retry', 'metadata'].includes(stored)
+  const storedRaw = String(localStorage.getItem(storageKeys.nextVCallInspectorResultTab) ?? '').trim()
+  const stored = storedRaw === 'result'
+    ? 'parsed'
+    : (storedRaw === 'retry' ? 'try' : storedRaw)
+  return ['raw', 'actual', 'parsed', 'validation', 'try', 'metadata'].includes(stored)
     ? stored
     : 'raw'
 }
@@ -1488,12 +1725,33 @@ export function renderNextVCallInspectorResult(data, options = {}) {
   const call = response?.call ?? null
   const result = response?.result ?? null
   const metadata = result?.metadata ?? null
+  const modeRaw = String(call?.mode ?? nextVCallModeInput?.value ?? 'call').trim().toLowerCase()
+  const mode = modeRaw === 'try' ? 'try' : 'call'
+  const outputCandidates = [
+    result?.actual,
+    result?.output,
+    result?.outputText,
+    typeof result?.value === 'string' ? result.value : '',
+    typeof result?.violation?.actual === 'string' ? result.violation.actual : '',
+  ]
+  const outputText = outputCandidates
+    .map((value) => String(value ?? '').trim())
+    .find((value) => value.length > 0) ?? ''
+  const parsedValue = Object.prototype.hasOwnProperty.call(result ?? {}, 'parsed')
+    ? result?.parsed
+    : result?.value
 
   if (nextVCallResultRaw) {
     nextVCallResultRaw.textContent = stringifyInspectorPane(response)
   }
+  if (nextVCallResultActual) {
+    nextVCallResultActual.textContent = outputText || '(no output text captured)'
+  }
   if (nextVCallResultParsed) {
-    nextVCallResultParsed.textContent = stringifyInspectorPane(result?.value ?? null)
+    const parsedDisplayValue = mode === 'try'
+      ? (parsedValue ?? result)
+      : parsedValue
+    nextVCallResultParsed.textContent = stringifyInspectorPane(parsedDisplayValue)
   }
   if (nextVCallResultValidation) {
     nextVCallResultValidation.textContent = stringifyInspectorPane({
@@ -1502,12 +1760,21 @@ export function renderNextVCallInspectorResult(data, options = {}) {
       validate: call?.validate ?? null,
     })
   }
-  if (nextVCallResultRetry) {
-    nextVCallResultRetry.textContent = stringifyInspectorPane({
+  if (nextVCallResultTry) {
+    const finalRequest = response?.resolvedCall?.finalRequest ?? null
+    const finalMessages = Array.isArray(finalRequest?.messages)
+      ? finalRequest.messages
+      : (Array.isArray(metadata?.request?.messages) ? metadata.request.messages : [])
+    const retryGuidanceInjected = finalMessages.length > 0
+      ? /the previous response/i.test(String([...finalMessages].reverse().find((entry) => String(entry?.role ?? '').trim() === 'user')?.content ?? ''))
+      : false
+    nextVCallResultTry.textContent = stringifyInspectorPane({
       configuredRetries: Number(call?.retry_on_contract_violation ?? 0),
       attempt: Number(metadata?.request?.attempt ?? 1),
       retryLimit: Number(metadata?.request?.retryLimit ?? call?.retry_on_contract_violation ?? 0),
-      note: 'Per-attempt transcript is not yet included in the host response payload.',
+      retryGuidanceInjected,
+      finalMessages,
+      finalRequest,
     })
   }
   if (nextVCallResultMetadata) {
@@ -1521,6 +1788,8 @@ export function renderNextVCallInspectorResult(data, options = {}) {
 export function buildNextVCallInspectorSnippet() {
   const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
   const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  const modeRaw = String(nextVCallModeInput?.value ?? 'call').trim().toLowerCase()
+  const mode = modeRaw === 'try' ? 'try' : 'call'
   const target = getNextVCallInspectorTargetValue(targetKind)
   const instructions = String(nextVCallInstructionsInput?.value ?? '').trim()
   const prompt = String(nextVCallPromptInput?.value ?? '').trim()
@@ -1533,7 +1802,7 @@ export function buildNextVCallInspectorSnippet() {
 
   const lines = []
   const head = target || (targetKind === 'agent' ? 'router' : 'model-id')
-  lines.push(`result = ${targetKind}(`)
+  lines.push(`result = ${mode === 'try' ? 'try ' : ''}${targetKind}(`)
   lines.push(`  ${JSON.stringify(head)},`)
   lines.push(`  ${JSON.stringify(prompt || 'prompt')},`)
   if (instructions) {
@@ -1592,6 +1861,7 @@ export function insertNextVCallInspectorSnippet() {
 
 export function initNextVCallInspector() {
   const controls = [
+    nextVCallModeInput,
     nextVCallTargetKindInput,
     nextVCallTargetAgentInput,
     nextVCallTargetInput,
@@ -1637,9 +1907,10 @@ export function initNextVCallInspector() {
 
   const tabButtons = [
     ['raw', nextVCallResultTabRaw],
+    ['actual', nextVCallResultTabActual],
     ['parsed', nextVCallResultTabParsed],
     ['validation', nextVCallResultTabValidation],
-    ['retry', nextVCallResultTabRetry],
+    ['try', nextVCallResultTabTry],
     ['metadata', nextVCallResultTabMetadata],
   ]
   for (const [tabId, button] of tabButtons) {

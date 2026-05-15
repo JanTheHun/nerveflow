@@ -108,10 +108,20 @@ import {
   refreshNextVSnapshot,
   handleNextVImageInput,
   reloadNextVRuntimeConfig,
+  submitNextVCandidate,
+  promoteNextVCandidate,
   executeNextVCallInspector,
   insertNextVCallInspectorSnippet,
   initNextVCallInspector,
 } from './12_stream.js'
+import {
+  initNextVEditorSurfaceBeta,
+  setNextVEditorSurfaceBetaEnabled,
+  setNextVEditorSurfaceTelemetryVisible,
+} from './15_surface_beta.js'
+import {
+  initNextVTokenClickPlugin,
+} from './16_token_click_plugin.js'
 import {
   loadSession,
   clearScriptOutput,
@@ -139,6 +149,7 @@ export function initLayoutState() {
 
   restoreNextVConfig()
   setEditorLayout(editorLayoutState.layoutMode, { persist: false })
+  initNextVEditorSurfaceBeta()
 
   const queryWorkspaceDir = normalizeNextVWorkspaceDir(
     new URLSearchParams(window.location.search).get('workspaceDir') ?? ''
@@ -232,6 +243,7 @@ updateNextVEventImageUI()
 setupVerticalSplitters()
 initNextVCallInspectorPanelChrome()
 initNextVCallInspector()
+initNextVTokenClickPlugin()
 setupNextVEventsScrollListener()
 initLayoutState()
 initFileTreeCtxMenu()
@@ -278,6 +290,8 @@ Object.assign(window, {
   saveAllNextVFiles,
   setEditorLayout,
   setNextVEditorTabSize,
+  setNextVEditorSurfaceBetaEnabled,
+  setNextVEditorSurfaceTelemetryVisible,
   // 10_file_tree.js
   clearNextVStateDiff,
   setNextVStateCollapseAll,
@@ -290,6 +304,8 @@ Object.assign(window, {
   refreshNextVSnapshot,
   runNextVRuntime,
   reloadNextVRuntimeConfig,
+  submitNextVCandidate,
+  promoteNextVCandidate,
   sendNextVEvent,
   sendNextVIngress,
   startNextVRuntime,

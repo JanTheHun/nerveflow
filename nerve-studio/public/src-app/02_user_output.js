@@ -453,12 +453,30 @@ export function renderExecutionGroups() {
         eventEl.className = `exec-event exec-event-${event.type}`
 
         const debugPayload = getExecutionEventDebugPayload(event)
-        eventEl.innerHTML = `
-          <span class="exec-event-ts">${event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '—'}</span>
-          <span class="exec-event-type">${event.type}</span>
-          <span class="exec-event-content">${escapeExecutionEventText(formatExecutionEventContent(event))}</span>
-          ${debugPayload !== null ? '<button type="button" class="exec-event-debug-toggle" aria-label="show payload" title="show payload">&#x25B6;</button>' : ''}
-        `
+        const timestampEl = document.createElement('span')
+        timestampEl.className = 'exec-event-ts'
+        timestampEl.textContent = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '—'
+        eventEl.appendChild(timestampEl)
+
+        const typeEl = document.createElement('span')
+        typeEl.className = 'exec-event-type'
+        typeEl.textContent = String(event.type ?? '')
+        eventEl.appendChild(typeEl)
+
+        const contentEl = document.createElement('span')
+        contentEl.className = 'exec-event-content'
+        contentEl.appendChild(buildExecutionEventContentFragment(event))
+        eventEl.appendChild(contentEl)
+
+        if (debugPayload !== null) {
+          const toggleBtn = document.createElement('button')
+          toggleBtn.type = 'button'
+          toggleBtn.className = 'exec-event-debug-toggle'
+          toggleBtn.setAttribute('aria-label', 'show payload')
+          toggleBtn.title = 'show payload'
+          toggleBtn.textContent = '\u25B6'
+          eventEl.appendChild(toggleBtn)
+        }
 
         if (debugPayload !== null) {
           const toggleBtn = eventEl.querySelector('.exec-event-debug-toggle')
@@ -488,6 +506,90 @@ export function renderExecutionGroups() {
 
     nextVEventsOutput.appendChild(groupEl)
   }
+}
+
+function parseExecutionToolArgs(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value
+  if (typeof value !== 'string') return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function getExecutionEventTokenTarget(event) {
+  const type = String(event?.type ?? '').trim().toLowerCase()
+  if (type === 'agent_call') {
+    const agent = String(event?.agent ?? '').trim()
+    if (agent) return { kind: 'agent', value: agent }
+    return null
+  }
+
+  if (type !== 'tool_call') return null
+  const tool = String(event?.tool ?? '').trim().toLowerCase()
+  if (tool !== 'agent' && tool !== 'model') return null
+
+  const args = parseExecutionToolArgs(event?.args)
+  const candidateKeys = tool === 'agent'
+    ? ['agent', 'name', 'target', 'id']
+    : ['model', 'name', 'target', 'id']
+
+  for (const key of candidateKeys) {
+    const value = String(args?.[key] ?? '').trim()
+    if (value) {
+      return { kind: tool, value }
+    }
+  }
+
+  return null
+}
+
+function removeFirstCaseInsensitive(haystack, needle) {
+  const source = String(haystack ?? '')
+  const target = String(needle ?? '')
+  if (!source || !target) return source
+
+  const index = source.toLowerCase().indexOf(target.toLowerCase())
+  if (index < 0) return source
+  return `${source.slice(0, index)}${source.slice(index + target.length)}`
+}
+
+function buildExecutionEventContentFragment(event) {
+  const fragment = document.createDocumentFragment()
+  const tokenTarget = getExecutionEventTokenTarget(event)
+  if (!tokenTarget) {
+    fragment.appendChild(document.createTextNode(formatExecutionEventContent(event)))
+    return fragment
+  }
+
+  if (String(event?.type ?? '').trim() === 'agent_call') {
+    fragment.appendChild(document.createTextNode('agent call: '))
+  } else {
+    const tool = String(event?.tool ?? tokenTarget.kind).trim().toLowerCase() || tokenTarget.kind
+    fragment.appendChild(document.createTextNode(`call: ${tool} `))
+  }
+
+  const tokenEl = document.createElement('span')
+  tokenEl.className = 'exec-event-token'
+  tokenEl.dataset.nerveTokenKind = tokenTarget.kind
+  tokenEl.dataset.nerveTokenValue = tokenTarget.value
+  tokenEl.textContent = tokenTarget.value
+  tokenEl.title = `open call inspector for ${tokenTarget.kind} ${tokenTarget.value}`
+  fragment.appendChild(tokenEl)
+
+  if (String(event?.type ?? '').trim() === 'tool_call') {
+    const argsSummary = String(summarizeToolCallArgs(event?.args) ?? '').trim()
+    if (argsSummary) {
+      const suffix = removeFirstCaseInsensitive(argsSummary, tokenTarget.value).trim()
+      if (suffix) {
+        fragment.appendChild(document.createTextNode(` ${suffix}`))
+      }
+    }
+  }
+
+  return fragment
 }
 
 function escapeExecutionEventText(text) {

@@ -45,6 +45,14 @@
             <option value="4">4 spaces</option>
             <option value="8">8 spaces</option>
           </select>
+          <label class="settings-item check-label settings-item-checkbox" role="menuitemcheckbox" aria-label="enable surface switchers in editor panes">
+            <input id="nextv-editor-surface-beta-toggle" type="checkbox" onchange="setNextVEditorSurfaceBetaEnabled(this.checked)">
+            enable surface switchers
+          </label>
+          <label class="settings-item check-label settings-item-checkbox" role="menuitemcheckbox" aria-label="show surface telemetry row">
+            <input id="nextv-editor-surface-telemetry-toggle" type="checkbox" onchange="setNextVEditorSurfaceTelemetryVisible(this.checked)">
+            show surface telemetry
+          </label>
           <label class="settings-item check-label settings-item-checkbox" role="menuitemcheckbox" aria-label="show ingress connectors">
             <input id="nextv-show-ingress-toggle" type="checkbox" onchange="toggleNextVIngressControlsSetting()" checked>
             show ingress connectors
@@ -86,7 +94,14 @@
           <button type="button" id="nextv-start-btn" onclick="startNextVRuntime()">start</button>
           <button type="button" id="nextv-stop-btn" onclick="stopNextVRuntime()" disabled>stop</button>
           <button type="button" id="nextv-reload-config-btn" onclick="reloadNextVRuntimeConfig()" disabled>reload config</button>
+          <button type="button" id="nextv-validate-btn" onclick="submitNextVCandidate()" disabled>validate</button>
+          <button type="button" id="nextv-promote-btn" onclick="promoteNextVCandidate()" disabled>promote</button>
           <button id="nextv-refresh-snapshot-btn" type="button" onclick="refreshNextVSnapshot()">snapshot</button>
+        </div>
+        <div id="nextv-candidate-status-row" class="footer-row nextv-candidate-row" hidden>
+          <span class="row-label">candidate</span>
+          <span id="nextv-candidate-status-badge"></span>
+          <span id="nextv-candidate-issue-count"></span>
         </div>
         <div id="nextv-ingress-controls-row" class="footer-row nextv-ingress-controls-row">
           <span class="row-label">ingress</span>
@@ -366,6 +381,10 @@
                 <select id="nextv-call-target" title="model target" hidden>
                   <option value="">loading models...</option>
                 </select>
+                <select id="nextv-call-mode" title="call mode">
+                  <option value="call" selected>call</option>
+                  <option value="try">try</option>
+                </select>
                 <select id="nextv-call-validate" title="validation mode">
                   <option value="coerce" selected>coerce</option>
                   <option value="strict">strict</option>
@@ -393,15 +412,17 @@
               <div class="nextv-call-output-section">
                 <div id="nextv-call-result-tabs" class="panel-tabs" role="tablist" aria-label="call inspector result tabs">
                   <button id="nextv-call-result-tab-raw" type="button" class="panel-tab" role="tab" aria-selected="true">raw</button>
+                  <button id="nextv-call-result-tab-actual" type="button" class="panel-tab" role="tab" aria-selected="false">output</button>
                   <button id="nextv-call-result-tab-parsed" type="button" class="panel-tab" role="tab" aria-selected="false">parsed</button>
                   <button id="nextv-call-result-tab-validation" type="button" class="panel-tab" role="tab" aria-selected="false">validation</button>
-                  <button id="nextv-call-result-tab-retry" type="button" class="panel-tab" role="tab" aria-selected="false">retry</button>
+                  <button id="nextv-call-result-tab-try" type="button" class="panel-tab" role="tab" aria-selected="false">try</button>
                   <button id="nextv-call-result-tab-metadata" type="button" class="panel-tab" role="tab" aria-selected="false">metadata</button>
                 </div>
                 <pre id="nextv-call-result-raw" class="panel-scroll nextv-call-result-output" role="tabpanel"></pre>
+                <pre id="nextv-call-result-actual" class="panel-scroll nextv-call-result-output" role="tabpanel" hidden></pre>
                 <pre id="nextv-call-result-parsed" class="panel-scroll nextv-call-result-output" role="tabpanel" hidden></pre>
                 <pre id="nextv-call-result-validation" class="panel-scroll nextv-call-result-output" role="tabpanel" hidden></pre>
-                <pre id="nextv-call-result-retry" class="panel-scroll nextv-call-result-output" role="tabpanel" hidden></pre>
+                <pre id="nextv-call-result-try" class="panel-scroll nextv-call-result-output" role="tabpanel" hidden></pre>
                 <pre id="nextv-call-result-metadata" class="panel-scroll nextv-call-result-output" role="tabpanel" hidden></pre>
               </div>
             </div>

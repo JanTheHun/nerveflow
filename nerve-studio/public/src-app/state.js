@@ -13,6 +13,7 @@ export let activeEditorGridResize = false
 export let activeScriptAbortController = null
 export let activeScriptRunId = ''
 export let nextVRuntimeRunning = false
+export let nextVCandidatePromotable = false
 export let isRemoteMode = false
 export let isRemoteControlMode = false
 export let isRemoteRuntimeConnected = true
@@ -71,6 +72,7 @@ export const storageKeys = {
   nextVCallInspectorPanelLayout: 'local-agent.nextv.callInspectorPanelLayout',
   nextVCallInspectorResultTab: 'local-agent.nextv.callInspectorResultTab',
   nextVCallInspectorTargetKind: 'local-agent.nextv.callInspectorTargetKind',
+  nextVCallInspectorMode: 'local-agent.nextv.callInspectorMode',
   nextVCallInspectorTargetAgent: 'local-agent.nextv.callInspectorTargetAgent',
   nextVCallInspectorTargetModel: 'local-agent.nextv.callInspectorTargetModel',
   nextVCallInspectorValidate: 'local-agent.nextv.callInspectorValidate',
@@ -82,6 +84,8 @@ export const storageKeys = {
   nextVEditorGridSplit: 'local-agent.nextv.editorGridSplit',
   nextVEditorLayout: 'local-agent.nextv.editorLayout',
   nextVEditorTabSize: 'local-agent.nextv.editorTabSize',
+  nextVEditorSurfaceBeta: 'local-agent.nextv.editorSurfaceBeta',
+  nextVEditorSurfaceTelemetry: 'local-agent.nextv.editorSurfaceTelemetry',
 }
 
 export const MIN_LEFT_PANEL_SECTION_HEIGHT = 90
@@ -407,6 +411,11 @@ export const nextVStartBtn = document.getElementById('nextv-start-btn')
 export const nextVRunBtn = document.getElementById('nextv-run-btn')
 export const nextVStopBtn = document.getElementById('nextv-stop-btn')
 export const nextVReloadConfigBtn = document.getElementById('nextv-reload-config-btn')
+export const nextVValidateBtn = document.getElementById('nextv-validate-btn')
+export const nextVPromoteBtn = document.getElementById('nextv-promote-btn')
+export const nextVCandidateStatusRow = document.getElementById('nextv-candidate-status-row')
+export const nextVCandidateStatusBadge = document.getElementById('nextv-candidate-status-badge')
+export const nextVCandidateIssueCount = document.getElementById('nextv-candidate-issue-count')
 export const nextVRuntimeTargetInput = document.getElementById('nextv-runtime-target')
 export const nextVAttachWsUrlInput = document.getElementById('nextv-attach-ws-url')
 export const nextVAttachWsUrlLabel = document.getElementById('nextv-attach-ws-url-label')
@@ -415,6 +424,8 @@ export const nextVAttachBtn = document.getElementById('nextv-attach-btn')
 export const nextVDetachBtn = document.getElementById('nextv-detach-btn')
 export const nextVAttachStatus = document.getElementById('nextv-attach-status')
 export const nextVEditorTabSizeInput = document.getElementById('nextv-editor-tab-size')
+export const nextVEditorSurfaceBetaToggle = document.getElementById('nextv-editor-surface-beta-toggle')
+export const nextVEditorSurfaceTelemetryToggle = document.getElementById('nextv-editor-surface-telemetry-toggle')
 export const remoteModeBadge = document.getElementById('remote-mode-badge')
 export const userOutput = document.getElementById('user-output')
 export const userOutputChannelFilters = document.getElementById('user-output-channel-filters')
@@ -443,16 +454,19 @@ export const nextVStateDiffTabState = document.getElementById('nextv-state-diff-
 export const nextVConsoleOutput = document.getElementById('nextv-console-output')
 export const nextVCallInspectorPanel = document.getElementById('nextv-call-inspector-panel')
 export const nextVCallGeneratedCode = document.getElementById('nextv-call-generated-code')
+export const nextVCallModeInput = document.getElementById('nextv-call-mode')
 export const nextVCallResultTabs = document.getElementById('nextv-call-result-tabs')
 export const nextVCallResultTabRaw = document.getElementById('nextv-call-result-tab-raw')
+export const nextVCallResultTabActual = document.getElementById('nextv-call-result-tab-actual')
 export const nextVCallResultTabParsed = document.getElementById('nextv-call-result-tab-parsed')
 export const nextVCallResultTabValidation = document.getElementById('nextv-call-result-tab-validation')
-export const nextVCallResultTabRetry = document.getElementById('nextv-call-result-tab-retry')
+export const nextVCallResultTabTry = document.getElementById('nextv-call-result-tab-try')
 export const nextVCallResultTabMetadata = document.getElementById('nextv-call-result-tab-metadata')
 export const nextVCallResultRaw = document.getElementById('nextv-call-result-raw')
+export const nextVCallResultActual = document.getElementById('nextv-call-result-actual')
 export const nextVCallResultParsed = document.getElementById('nextv-call-result-parsed')
 export const nextVCallResultValidation = document.getElementById('nextv-call-result-validation')
-export const nextVCallResultRetry = document.getElementById('nextv-call-result-retry')
+export const nextVCallResultTry = document.getElementById('nextv-call-result-try')
 export const nextVCallResultMetadata = document.getElementById('nextv-call-result-metadata')
 export const settingsMenu = document.getElementById('settings-menu')
 export const scriptEditorPanel = document.getElementById('script-editor-panel')
@@ -479,6 +493,7 @@ export function _setActiveEditorGridResize(v) { activeEditorGridResize = v }
 export function _setActiveScriptAbortController(v) { activeScriptAbortController = v }
 export function _setActiveScriptRunId(v) { activeScriptRunId = v }
 export function _setNextVRuntimeRunning(v) { nextVRuntimeRunning = v }
+export function _setNextVCandidatePromotable(v) { nextVCandidatePromotable = v }
 export function _setIsRemoteMode(v) { isRemoteMode = v }
 export function _setIsRemoteControlMode(v) { isRemoteControlMode = v }
 export function _setIsRemoteRuntimeConnected(v) { isRemoteRuntimeConnected = v }

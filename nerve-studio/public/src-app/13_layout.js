@@ -100,8 +100,13 @@ import {
   closeNextVStream
 } from './11_state_panels.js'
 import {
-  ensureStatusBar
+  ensureStatusBar,
+  openNextVCallInspectorForToken
 } from './12_stream.js'
+
+const SCRIPT_CALL_TARGET_REGEX = /\b(agent|model)\s*\(\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/g
+const SCRIPT_TOOL_KIND_REGEX = /\btool\s*\(\s*("agent"|'agent'|"model"|'model')/g
+const SCRIPT_CALL_KIND_WORD_REGEX = /\b(agent|model)\b/g
 
 export function setStatus(text, cls = '') {
   const bar = ensureStatusBar()
@@ -316,16 +321,53 @@ export function normalizeNewlines(textValue) {
   return String(textValue ?? '').replace(/\r\n/g, '\n')
 }
 
+function getApproximateTextareaOffsetAtPoint(textarea, clientX, clientY) {
+  if (!textarea) return null
+  const rect = textarea.getBoundingClientRect()
+  if (
+    clientX < rect.left
+    || clientX > rect.right
+    || clientY < rect.top
+    || clientY > rect.bottom
+  ) {
+    return null
+  }
+
+  const text = normalizeNewlines(textarea.value)
+  const lines = text.split('\n')
+  const style = window.getComputedStyle(textarea)
+  const lineHeight = Math.max(1, Number.parseFloat(style.lineHeight) || 20)
+  const fontSize = Math.max(1, Number.parseFloat(style.fontSize) || 13)
+  const charWidth = Math.max(6, fontSize * 0.62)
+  const paddingTop = Number.parseFloat(style.paddingTop) || 0
+  const paddingLeft = Number.parseFloat(style.paddingLeft) || 0
+
+  const contentY = clientY - rect.top + textarea.scrollTop - paddingTop
+  const contentX = clientX - rect.left + textarea.scrollLeft - paddingLeft
+  const lineIndex = Math.max(0, Math.min(lines.length - 1, Math.floor(contentY / lineHeight)))
+  const lineText = lines[lineIndex] ?? ''
+  const column = Math.max(0, Math.min(lineText.length, Math.floor(contentX / charWidth)))
+
+  let offset = 0
+  for (let i = 0; i < lineIndex; i += 1) {
+    offset += (lines[i]?.length ?? 0) + 1
+  }
+  offset += column
+  return Math.max(0, Math.min(text.length, offset))
+}
+
 export function getTextareaOffsetAtPoint(textarea, clientX, clientY) {
   if (typeof document.caretPositionFromPoint === 'function') {
     const pos = document.caretPositionFromPoint(clientX, clientY)
-    return pos && pos.offsetNode === textarea ? pos.offset : null
+    const offset = Number(pos?.offset)
+    if (Number.isFinite(offset)) return offset
   }
   if (typeof document.caretRangeFromPoint === 'function') {
     const range = document.caretRangeFromPoint(clientX, clientY)
-    return range && range.startContainer === textarea ? range.startOffset : null
+    const offset = Number(range?.startOffset)
+    if (Number.isFinite(offset)) return offset
   }
-  return null
+  return getApproximateTextareaOffsetAtPoint(textarea, clientX, clientY)
 }
 
 export function bindTextareaFileRefCursor(textarea, getTextFn) {
@@ -334,7 +376,7 @@ export function bindTextareaFileRefCursor(textarea, getTextFn) {
     if (offset === null) { textarea.style.cursor = ''; return }
     const text = normalizeNewlines(getTextFn())
     const candidates = [offset, Math.max(0, offset - 1)]
-    const hit = candidates.some(o => findScriptReferenceAtOffset(text, o) !== null)
+    const hit = candidates.some((candidateOffset) => findEditorClickTargetAtOffset(text, candidateOffset) !== null)
     textarea.style.cursor = hit ? 'pointer' : ''
   })
   textarea.addEventListener('mouseleave', () => { textarea.style.cursor = '' })
@@ -389,6 +431,342 @@ export function findScriptReferenceAtOffset(textValue, offset) {
   return null
 }
 
+function decodeCallTargetLiteral(literal) {
+  const rawLiteral = String(literal ?? '').trim()
+  if (!rawLiteral) return ''
+  if (rawLiteral.startsWith('"')) {
+    try {
+      return String(JSON.parse(rawLiteral))
+    } catch {
+      return rawLiteral.slice(1, -1)
+    }
+  }
+  if (rawLiteral.startsWith("'")) {
+    return rawLiteral
+      .slice(1, -1)
+      .replace(/\\'/g, "'")
+      .replace(/\\\\/g, '\\')
+  }
+  return rawLiteral
+}
+
+function extractFirstStringLiteral(value) {
+  const source = String(value ?? '')
+  const match = /(\"([^\"\\]|\\.)*\"|'([^'\\]|\\.)*')/.exec(source)
+  if (!match) return ''
+  return decodeCallTargetLiteral(match[1])
+}
+
+function findMatchingParen(text, openParenIndex) {
+  const source = String(text ?? '')
+  const start = Number(openParenIndex)
+  if (!Number.isInteger(start) || start < 0 || start >= source.length || source[start] !== '(') return -1
+
+  let depth = 0
+  let inSingle = false
+  let inDouble = false
+  let escaped = false
+  for (let i = start; i < source.length; i += 1) {
+    const ch = source[i]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (ch === '\\') {
+      escaped = true
+      continue
+    }
+    if (inSingle) {
+      if (ch === "'") inSingle = false
+      continue
+    }
+    if (inDouble) {
+      if (ch === '"') inDouble = false
+      continue
+    }
+    if (ch === "'") {
+      inSingle = true
+      continue
+    }
+    if (ch === '"') {
+      inDouble = true
+      continue
+    }
+    if (ch === '(') {
+      depth += 1
+      continue
+    }
+    if (ch === ')') {
+      depth -= 1
+      if (depth === 0) return i
+    }
+  }
+
+  return -1
+}
+
+function findCallSegmentAtOffset(textValue, kind, offset) {
+  const text = normalizeNewlines(textValue)
+  const normalizedKind = String(kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  const safeOffset = Math.max(0, Math.min(text.length, Number(offset) || 0))
+
+  const directRegex = /\b(agent|model)\s*\(/g
+  let match
+  while ((match = directRegex.exec(text)) !== null) {
+    const callKind = String(match[1] ?? '').trim().toLowerCase()
+    if (callKind !== normalizedKind) continue
+    const openParenIndex = text.indexOf('(', match.index)
+    if (openParenIndex < 0) continue
+    const closeParenIndex = findMatchingParen(text, openParenIndex)
+    if (closeParenIndex < 0) continue
+    if (safeOffset < match.index || safeOffset > closeParenIndex) continue
+    return text.slice(match.index, closeParenIndex + 1)
+  }
+
+  const toolRegex = /\btool\s*\(/g
+  while ((match = toolRegex.exec(text)) !== null) {
+    const openParenIndex = text.indexOf('(', match.index)
+    if (openParenIndex < 0) continue
+    const closeParenIndex = findMatchingParen(text, openParenIndex)
+    if (closeParenIndex < 0) continue
+    if (safeOffset < match.index || safeOffset > closeParenIndex) continue
+
+    const segment = text.slice(match.index, closeParenIndex + 1)
+    const toolKindMatch = /\btool\s*\(\s*(\"agent\"|'agent'|\"model\"|'model')/s.exec(segment)
+    if (!toolKindMatch) continue
+    const callKind = decodeCallTargetLiteral(toolKindMatch[1]).toLowerCase() === 'model' ? 'model' : 'agent'
+    if (callKind !== normalizedKind) continue
+    return segment
+  }
+
+  return ''
+}
+
+function inferCallInspectorPrefillFromDocument(textValue, kind, offset) {
+  const segment = findCallSegmentAtOffset(textValue, kind, offset)
+  if (!segment) return null
+
+  const prefill = {}
+
+  const directPromptMatch = /^\s*(agent|model)\s*\(\s*(\"([^\"\\]|\\.)*\"|'([^'\\]|\\.)*')\s*,\s*(\"([^\"\\]|\\.)*\"|'([^'\\]|\\.)*')/s.exec(segment)
+  if (directPromptMatch) {
+    const prompt = decodeCallTargetLiteral(directPromptMatch[6])
+    if (prompt) prefill.prompt = prompt
+  }
+
+  const instructionsMatch = /\binstructions\s*[:=]\s*(\"([^\"\\]|\\.)*\"|'([^'\\]|\\.)*')/s.exec(segment)
+  if (instructionsMatch) {
+    prefill.instructions = decodeCallTargetLiteral(instructionsMatch[1])
+  }
+
+  const validateMatch = /\bvalidate\s*[:=]\s*(strict|coerce|none|\"strict\"|\"coerce\"|\"none\"|'strict'|'coerce'|'none')/s.exec(segment)
+  if (validateMatch) {
+    const validate = decodeCallTargetLiteral(validateMatch[1]).toLowerCase()
+    if (['strict', 'coerce', 'none'].includes(validate)) {
+      prefill.validate = validate
+    }
+  }
+
+  const retryMatch = /\bretry_on_contract_violation\s*[:=]\s*(\d+)/s.exec(segment)
+  if (retryMatch) {
+    prefill.retry = Number(retryMatch[1])
+  }
+
+  const decideMatch = /\bdecide\s*[:=]\s*\[([\s\S]*?)\]/s.exec(segment)
+  if (decideMatch) {
+    const decideRaw = decideMatch[1]
+    const options = []
+    const literalRegex = /(\"([^\"\\]|\\.)*\"|'([^'\\]|\\.)*')/g
+    let literal
+    while ((literal = literalRegex.exec(decideRaw)) !== null) {
+      const value = decodeCallTargetLiteral(literal[1])
+      if (value) options.push(value)
+    }
+    if (options.length > 0) {
+      prefill.decide = options
+    }
+  }
+
+  const returnsMatch = /\breturns\s*[:=]\s*(\{[\s\S]*?\}|\[[\s\S]*?\])/s.exec(segment)
+  if (returnsMatch) {
+    prefill.returnsText = String(returnsMatch[1] ?? '').trim()
+  }
+
+  return Object.keys(prefill).length > 0 ? prefill : null
+}
+
+function inferToolCallTargetValue(line, kind, searchStart = 0) {
+  const source = String(line ?? '')
+  const normalizedKind = String(kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  const valuePattern = normalizedKind === 'model'
+    ? /\b(model|name|target|id)\b\s*[:=]\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/
+    : /\b(agent|name|target|id)\b\s*[:=]\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/
+
+  const match = valuePattern.exec(source.slice(Math.max(0, Number(searchStart) || 0)))
+  if (!match) return ''
+  return decodeCallTargetLiteral(match[2])
+}
+
+function inferCallTargetValueFromLine(line, kind, searchStart = 0) {
+  const source = String(line ?? '')
+  const normalizedKind = String(kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  const directPattern = normalizedKind === 'model'
+    ? /\bmodel\s*\(\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/
+    : /\bagent\s*\(\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/
+  const directMatch = directPattern.exec(source.slice(Math.max(0, Number(searchStart) || 0)))
+  if (directMatch) {
+    return decodeCallTargetLiteral(directMatch[1])
+  }
+
+  return inferToolCallTargetValue(source, normalizedKind, searchStart)
+}
+
+function inferCallTargetValueFromDocument(textValue, kind, offset) {
+  const text = normalizeNewlines(textValue)
+  const normalizedKind = String(kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  const safeOffset = Math.max(0, Math.min(text.length, Number(offset) || 0))
+  const sliceStart = Math.max(0, safeOffset - 80)
+  const sliceEnd = Math.min(text.length, safeOffset + 1200)
+  const scope = text.slice(sliceStart, sliceEnd)
+  const localOffset = safeOffset - sliceStart
+
+  const directPattern = normalizedKind === 'model'
+    ? /\bmodel\s*\(\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/s
+    : /\bagent\s*\(\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/s
+  const directMatch = directPattern.exec(scope.slice(Math.max(0, localOffset - 16)))
+  if (directMatch) {
+    return decodeCallTargetLiteral(directMatch[1])
+  }
+
+  const toolPattern = normalizedKind === 'model'
+    ? /\btool\s*\(\s*("model"|'model')[\s\S]{0,800}?\b(model|name|target|id)\b\s*[:=]\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/s
+    : /\btool\s*\(\s*("agent"|'agent')[\s\S]{0,800}?\b(agent|name|target|id)\b\s*[:=]\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/s
+  const toolMatch = toolPattern.exec(scope.slice(Math.max(0, localOffset - 32)))
+  if (toolMatch) {
+    return decodeCallTargetLiteral(toolMatch[3])
+  }
+
+  return ''
+}
+
+function collectCallInspectorTargetsInLine(line) {
+  const text = String(line ?? '')
+  const matches = []
+  SCRIPT_CALL_TARGET_REGEX.lastIndex = 0
+  let match
+  while ((match = SCRIPT_CALL_TARGET_REGEX.exec(text)) !== null) {
+    const kind = String(match[1] ?? '').trim().toLowerCase()
+    const literal = String(match[2] ?? '')
+    const literalIndex = String(match[0] ?? '').indexOf(literal)
+    if (literalIndex < 0) continue
+
+    const start = Number(match.index) + literalIndex
+    const end = start + literal.length
+    matches.push({
+      start,
+      end,
+      text: literal,
+      kind,
+      value: decodeCallTargetLiteral(literal),
+    })
+  }
+
+  SCRIPT_TOOL_KIND_REGEX.lastIndex = 0
+  while ((match = SCRIPT_TOOL_KIND_REGEX.exec(text)) !== null) {
+    const kind = decodeCallTargetLiteral(match[1]).toLowerCase() === 'model' ? 'model' : 'agent'
+    const literal = String(match[1] ?? '')
+    const literalIndex = String(match[0] ?? '').indexOf(literal)
+    if (literalIndex < 0) continue
+
+    const start = Number(match.index) + literalIndex
+    const end = start + literal.length
+    matches.push({
+      start,
+      end,
+      text: literal,
+      kind,
+      value: inferToolCallTargetValue(text, kind, end),
+    })
+  }
+
+  return matches
+}
+
+export function findCallInspectorTargetAtOffset(textValue, offset) {
+  const text = normalizeNewlines(textValue)
+  if (!text) return null
+
+  const safeOffset = Math.max(0, Math.min(text.length, Number(offset) || 0))
+  const lineStart = text.lastIndexOf('\n', Math.max(0, safeOffset - 1)) + 1
+  const nextNewline = text.indexOf('\n', safeOffset)
+  const lineEnd = nextNewline === -1 ? text.length : nextNewline
+  const line = text.slice(lineStart, lineEnd)
+  const lineOffset = safeOffset - lineStart
+
+  const matches = collectCallInspectorTargetsInLine(line)
+  for (const match of matches) {
+    if (lineOffset < match.start || lineOffset > match.end) continue
+    if (match.kind !== 'agent' && match.kind !== 'model') continue
+    return {
+      kind: match.kind,
+      value: String(match.value ?? '').trim(),
+      prefill: inferCallInspectorPrefillFromDocument(text, match.kind, safeOffset),
+    }
+  }
+
+  SCRIPT_CALL_KIND_WORD_REGEX.lastIndex = 0
+  let keywordMatch
+  while ((keywordMatch = SCRIPT_CALL_KIND_WORD_REGEX.exec(line)) !== null) {
+    const start = keywordMatch.index
+    const end = start + String(keywordMatch[0] ?? '').length
+    if (lineOffset < start || lineOffset > end) continue
+    const kind = String(keywordMatch[1] ?? '').trim().toLowerCase()
+    if (kind !== 'agent' && kind !== 'model') continue
+    return {
+      kind,
+      value: inferCallTargetValueFromLine(line, kind, start) || inferCallTargetValueFromDocument(text, kind, safeOffset),
+      prefill: inferCallInspectorPrefillFromDocument(text, kind, safeOffset),
+    }
+  }
+
+  const contextualKindMatch = /\b(agent|model)\b/i.exec(line)
+  if (contextualKindMatch) {
+    const kind = String(contextualKindMatch[1] ?? '').trim().toLowerCase()
+    if (kind === 'agent' || kind === 'model') {
+      const value = inferCallTargetValueFromDocument(text, kind, safeOffset)
+      if (value) {
+        return {
+          kind,
+          value,
+          prefill: inferCallInspectorPrefillFromDocument(text, kind, safeOffset),
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+export function findEditorClickTargetAtOffset(textValue, offset) {
+  const callTarget = findCallInspectorTargetAtOffset(textValue, offset)
+  if (callTarget) {
+    return {
+      type: 'call-target',
+      value: callTarget,
+    }
+  }
+
+  const fileReference = findScriptReferenceAtOffset(textValue, offset)
+  if (fileReference) {
+    return {
+      type: 'file-reference',
+      value: fileReference,
+    }
+  }
+
+  return null
+}
+
 export function buildScriptMirrorLine(textValue) {
   const row = document.createElement('div')
   row.className = 'script-editor-line'
@@ -411,17 +789,44 @@ export function buildScriptMirrorLine(textValue) {
     tokens.push({ start: match.index, end: match.index + match[0].length, text: match[0], filePath: match[1], kind: 'file' })
   }
 
+  const callTargets = collectCallInspectorTargetsInLine(line)
+  for (const target of callTargets) {
+    tokens.push({
+      start: target.start,
+      end: target.end,
+      text: target.text,
+      kind: target.kind,
+      callTarget: target.value,
+    })
+  }
+
+  SCRIPT_CALL_KIND_WORD_REGEX.lastIndex = 0
+  while ((match = SCRIPT_CALL_KIND_WORD_REGEX.exec(line)) !== null) {
+    const kind = String(match[1] ?? '').trim().toLowerCase()
+    if (kind !== 'agent' && kind !== 'model') continue
+    tokens.push({
+      start: match.index,
+      end: match.index + String(match[0] ?? '').length,
+      text: match[0],
+      kind,
+      callTarget: inferCallTargetValueFromLine(line, kind, match.index),
+    })
+  }
+
   tokens.sort((a, b) => a.start - b.start)
 
   let lastIndex = 0
   for (const tok of tokens) {
+    if (tok.start < lastIndex) continue
     if (tok.start > lastIndex) {
       textWrap.appendChild(document.createTextNode(line.slice(lastIndex, tok.start)))
     }
     const token = document.createElement('span')
     token.className = `script-ref-token ${tok.kind}`
     token.textContent = tok.text
-    token.title = `${tok.kind}: ${tok.filePath}`
+    token.title = tok.kind === 'agent' || tok.kind === 'model'
+      ? `${tok.kind}: ${tok.callTarget}`
+      : `${tok.kind}: ${tok.filePath}`
     textWrap.appendChild(token)
     lastIndex = tok.end
   }
@@ -487,6 +892,37 @@ export async function openEditorReference(filePath) {
     appendScriptLogRow(`[file:error] ${err.message}`, 'error')
     setStatus('file open error', 'responding')
   }
+}
+
+export async function openEditorCallInspectorTarget(target) {
+  const kind = String(target?.kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  const value = String(target?.value ?? '').trim()
+
+  const opened = await openNextVCallInspectorForToken(kind, value, {
+    focusPrompt: true,
+    prefill: target?.prefill ?? null,
+  })
+  if (!opened) {
+    const label = value ? `${kind}.${value}` : `${kind}`
+    setStatus(`unable to open call inspector target ${label}`, 'responding')
+  }
+}
+
+export async function openEditorClickTargetAtOffset(textValue, offset) {
+  const target = findEditorClickTargetAtOffset(textValue, offset)
+  if (!target) return false
+
+  if (target.type === 'call-target') {
+    await openEditorCallInspectorTarget(target.value)
+    return true
+  }
+
+  if (target.type === 'file-reference') {
+    await openEditorReference(target.value.filePath)
+    return true
+  }
+
+  return false
 }
 
 export function getScriptEditorText() {
@@ -1219,10 +1655,8 @@ export function bindEditorPaneEvents(paneId) {
     const candidateOffsets = [primaryOffset, Math.max(0, primaryOffset - 1)]
 
     for (const offset of candidateOffsets) {
-      const ref = findScriptReferenceAtOffset(text, offset)
-      if (!ref) continue
-      await openEditorReference(ref.filePath)
-      return
+      const opened = await openEditorClickTargetAtOffset(text, offset)
+      if (opened) return
     }
   })
 }

@@ -876,12 +876,30 @@ export function renderExecutionGroups() {
         eventEl.className = `exec-event exec-event-${event.type}`
 
         const debugPayload = getExecutionEventDebugPayload(event)
-        eventEl.innerHTML = `
-          <span class="exec-event-ts">${event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '—'}</span>
-          <span class="exec-event-type">${event.type}</span>
-          <span class="exec-event-content">${escapeExecutionEventText(formatExecutionEventContent(event))}</span>
-          ${debugPayload !== null ? '<button type="button" class="exec-event-debug-toggle" aria-label="show payload" title="show payload">&#x25B6;</button>' : ''}
-        `
+        const timestampEl = document.createElement('span')
+        timestampEl.className = 'exec-event-ts'
+        timestampEl.textContent = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '—'
+        eventEl.appendChild(timestampEl)
+
+        const typeEl = document.createElement('span')
+        typeEl.className = 'exec-event-type'
+        typeEl.textContent = String(event.type ?? '')
+        eventEl.appendChild(typeEl)
+
+        const contentEl = document.createElement('span')
+        contentEl.className = 'exec-event-content'
+        contentEl.appendChild(buildExecutionEventContentFragment(event))
+        eventEl.appendChild(contentEl)
+
+        if (debugPayload !== null) {
+          const toggleBtn = document.createElement('button')
+          toggleBtn.type = 'button'
+          toggleBtn.className = 'exec-event-debug-toggle'
+          toggleBtn.setAttribute('aria-label', 'show payload')
+          toggleBtn.title = 'show payload'
+          toggleBtn.textContent = '\u25B6'
+          eventEl.appendChild(toggleBtn)
+        }
 
         if (debugPayload !== null) {
           const toggleBtn = eventEl.querySelector('.exec-event-debug-toggle')
@@ -911,6 +929,90 @@ export function renderExecutionGroups() {
 
     nextVEventsOutput.appendChild(groupEl)
   }
+}
+
+function parseExecutionToolArgs(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value
+  if (typeof value !== 'string') return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function getExecutionEventTokenTarget(event) {
+  const type = String(event?.type ?? '').trim().toLowerCase()
+  if (type === 'agent_call') {
+    const agent = String(event?.agent ?? '').trim()
+    if (agent) return { kind: 'agent', value: agent }
+    return null
+  }
+
+  if (type !== 'tool_call') return null
+  const tool = String(event?.tool ?? '').trim().toLowerCase()
+  if (tool !== 'agent' && tool !== 'model') return null
+
+  const args = parseExecutionToolArgs(event?.args)
+  const candidateKeys = tool === 'agent'
+    ? ['agent', 'name', 'target', 'id']
+    : ['model', 'name', 'target', 'id']
+
+  for (const key of candidateKeys) {
+    const value = String(args?.[key] ?? '').trim()
+    if (value) {
+      return { kind: tool, value }
+    }
+  }
+
+  return null
+}
+
+function removeFirstCaseInsensitive(haystack, needle) {
+  const source = String(haystack ?? '')
+  const target = String(needle ?? '')
+  if (!source || !target) return source
+
+  const index = source.toLowerCase().indexOf(target.toLowerCase())
+  if (index < 0) return source
+  return `${source.slice(0, index)}${source.slice(index + target.length)}`
+}
+
+function buildExecutionEventContentFragment(event) {
+  const fragment = document.createDocumentFragment()
+  const tokenTarget = getExecutionEventTokenTarget(event)
+  if (!tokenTarget) {
+    fragment.appendChild(document.createTextNode(formatExecutionEventContent(event)))
+    return fragment
+  }
+
+  if (String(event?.type ?? '').trim() === 'agent_call') {
+    fragment.appendChild(document.createTextNode('agent call: '))
+  } else {
+    const tool = String(event?.tool ?? tokenTarget.kind).trim().toLowerCase() || tokenTarget.kind
+    fragment.appendChild(document.createTextNode(`call: ${tool} `))
+  }
+
+  const tokenEl = document.createElement('span')
+  tokenEl.className = 'exec-event-token'
+  tokenEl.dataset.nerveTokenKind = tokenTarget.kind
+  tokenEl.dataset.nerveTokenValue = tokenTarget.value
+  tokenEl.textContent = tokenTarget.value
+  tokenEl.title = `open call inspector for ${tokenTarget.kind} ${tokenTarget.value}`
+  fragment.appendChild(tokenEl)
+
+  if (String(event?.type ?? '').trim() === 'tool_call') {
+    const argsSummary = String(summarizeToolCallArgs(event?.args) ?? '').trim()
+    if (argsSummary) {
+      const suffix = removeFirstCaseInsensitive(argsSummary, tokenTarget.value).trim()
+      if (suffix) {
+        fragment.appendChild(document.createTextNode(` ${suffix}`))
+      }
+    }
+  }
+
+  return fragment
 }
 
 function escapeExecutionEventText(text) {
@@ -1065,8 +1167,11 @@ import {
   nextVManagedProcessRunning,
   nextVPanelState,
   nextVReloadConfigBtn,
+  nextVValidateBtn,
+  nextVPromoteBtn,
   nextVRunBtn,
   nextVRuntimeRunning,
+  nextVCandidatePromotable,
   nextVAttachSessionState,
   nextVAttachControls,
   nextVAttachBtn,
@@ -2129,7 +2234,10 @@ export function setNextVRunControls() {
   }
   
   if (nextVStopBtn) nextVStopBtn.disabled = remoteBlocksControl || !nextVRuntimeRunning || isBusy
-  if (nextVReloadConfigBtn) nextVReloadConfigBtn.disabled = remoteBlocksControl || !nextVRuntimeRunning || isBusy
+  const isEmbeddedMode = !isRemoteMode && !isExternalMode && !isAttachMode
+  if (nextVReloadConfigBtn) nextVReloadConfigBtn.disabled = !isEmbeddedMode || !nextVRuntimeRunning || isBusy
+  if (nextVValidateBtn) nextVValidateBtn.disabled = !isEmbeddedMode || !nextVRuntimeRunning || isBusy
+  if (nextVPromoteBtn) nextVPromoteBtn.disabled = !isEmbeddedMode || !nextVCandidatePromotable || isBusy
 }
 
 export function appendPanelLogRow(panel, line, cls = '') {
@@ -9421,6 +9529,7 @@ import {
   _setNextVLastKnownState,
   _setNextVManagedProcessRunning,
   _setNextVRuntimeRunning,
+  _setNextVCandidatePromotable,
   _setNextVExecutionGroups,
   _setNextVExecutionCounter,
   _setNextVEventsLiveMode,
@@ -9441,6 +9550,7 @@ import {
   nextVEventSourceInput,
   nextVEventTypeInput,
   nextVEventValueInput,
+  nextVCallModeInput,
   nextVCallTargetKindInput,
   nextVCallTargetAgentInput,
   nextVCallTargetInput,
@@ -9456,15 +9566,18 @@ import {
   nextVCallResolvedOutput,
   nextVCallGeneratedCode,
   nextVCallResultTabRaw,
+  nextVCallResultTabActual,
   nextVCallResultTabParsed,
   nextVCallResultTabValidation,
-  nextVCallResultTabRetry,
+  nextVCallResultTabTry,
   nextVCallResultTabMetadata,
   nextVCallResultRaw,
+  nextVCallResultActual,
   nextVCallResultParsed,
   nextVCallResultValidation,
-  nextVCallResultRetry,
+  nextVCallResultTry,
   nextVCallResultMetadata,
+  nextVCallInspectorPanel,
   nextVGraphState,
   nextVHasLiveRuntimeEvents,
   nextVImageCount,
@@ -9478,6 +9591,10 @@ import {
   nextVManagedProcessRunning,
   nextVPanelState,
   nextVRuntimeRunning,
+  nextVCandidatePromotable,
+  nextVCandidateStatusRow,
+  nextVCandidateStatusBadge,
+  nextVCandidateIssueCount,
   activePaneId,
   nextVAttachSessionState,
   nextVRuntimeTargetState,
@@ -9510,6 +9627,7 @@ import {
   updateRemoteRuntimeIdentity,
   updateRemoteModeBadge,
   setNextVRunControls,
+  toggleNextVCallInspectorPanel,
   clearNextVEventsOutput,
   clearNextVConsoleOutput
 } from './03_ui_controls.js'
@@ -10393,6 +10511,99 @@ export async function reloadNextVRuntimeConfig() {
   }
 }
 
+export async function submitNextVCandidate() {
+  if (!nextVRuntimeRunning) {
+    setStatus('nextv runtime not running', 'responding')
+    return
+  }
+
+  if (isBusy) {
+    setStatus('busy: wait for current task', 'responding')
+    return
+  }
+
+  try {
+    const res = await fetch(buildNextVApiPath('/api/nextv/submit-candidate'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'failed to submit candidate')
+    }
+
+    const candidate = data.candidate ?? {}
+    const status = candidate.status ?? 'unknown'
+    const issues = Array.isArray(candidate.issues) ? candidate.issues : []
+    const isPromotable = status === 'promotable'
+
+    _setNextVCandidatePromotable(isPromotable)
+    if (nextVCandidateStatusRow) nextVCandidateStatusRow.hidden = false
+    if (nextVCandidateStatusBadge) nextVCandidateStatusBadge.textContent = status
+    if (nextVCandidateIssueCount) {
+      nextVCandidateIssueCount.textContent = issues.length > 0 ? `${issues.length} issue${issues.length === 1 ? '' : 's'}` : ''
+    }
+
+    appendNextVLogRow(`[nextv:candidate] ${status}`, isPromotable ? 'step' : 'warn')
+    if (candidate.workspaceConfig && typeof candidate.workspaceConfig === 'object') {
+      appendNextVLogRow(formatWorkspaceConfigStatus(candidate.workspaceConfig), 'result')
+    }
+    if (issues.length > 0) {
+      for (const issue of issues) {
+        appendNextVLogRow(`  issue: ${issue}`, 'warn')
+      }
+    }
+    setNextVRunControls()
+    setStatus(`candidate: ${status}`)
+  } catch (err) {
+    appendNextVErrorLog(err)
+    setStatus('candidate validation failed', 'responding')
+  }
+}
+
+export async function promoteNextVCandidate() {
+  if (!nextVRuntimeRunning) {
+    setStatus('nextv runtime not running', 'responding')
+    return
+  }
+
+  if (!nextVCandidatePromotable) {
+    setStatus('no promotable candidate', 'responding')
+    return
+  }
+
+  if (isBusy) {
+    setStatus('busy: wait for current task', 'responding')
+    return
+  }
+
+  try {
+    const res = await fetch(buildNextVApiPath('/api/nextv/promote-candidate'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'failed to promote candidate')
+    }
+
+    _setNextVCandidatePromotable(false)
+    if (nextVCandidateStatusRow) nextVCandidateStatusRow.hidden = true
+    if (nextVCandidateStatusBadge) nextVCandidateStatusBadge.textContent = ''
+    if (nextVCandidateIssueCount) nextVCandidateIssueCount.textContent = ''
+
+    appendNextVLogRow(`[nextv:candidate] promoted`, 'step')
+    if (data?.workspaceConfig && typeof data.workspaceConfig === 'object') {
+      appendNextVLogRow(formatWorkspaceConfigStatus(data.workspaceConfig), 'result')
+    }
+    setNextVRunControls()
+    setStatus('candidate promoted')
+  } catch (err) {
+    appendNextVErrorLog(err)
+    setStatus('candidate promotion failed', 'responding')
+  }
+}
+
 export async function sendNextVEvent() {
   const value = String(nextVEventValueInput?.value ?? '')
   const selectedChannel = getSelectedNextVInputChannel()
@@ -10475,6 +10686,8 @@ export async function sendNextVIngress() {
 export async function executeNextVCallInspector() {
   const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
   const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  const modeRaw = String(nextVCallModeInput?.value ?? 'call').trim().toLowerCase()
+  const mode = modeRaw === 'try' ? 'try' : 'call'
   await refreshNextVCallInspectorAgents({ quiet: true })
   const target = getNextVCallInspectorTargetValue(targetKind)
   const instructions = String(nextVCallInstructionsInput?.value ?? '')
@@ -10502,6 +10715,7 @@ export async function executeNextVCallInspector() {
   const requestBody = {
     workspaceDir: normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? ''),
     targetKind,
+    mode,
     instructions,
     prompt,
     validate,
@@ -10573,6 +10787,10 @@ function persistNextVCallInspectorInputs() {
   const targetKind = String(nextVCallTargetKindInput?.value ?? '').trim()
   if (targetKind) localStorage.setItem(storageKeys.nextVCallInspectorTargetKind, targetKind)
 
+  const modeRaw = String(nextVCallModeInput?.value ?? '').trim().toLowerCase()
+  const mode = modeRaw === 'try' ? 'try' : 'call'
+  localStorage.setItem(storageKeys.nextVCallInspectorMode, mode)
+
   const targetAgent = String(nextVCallTargetAgentInput?.value ?? '').trim()
   if (targetAgent) localStorage.setItem(storageKeys.nextVCallInspectorTargetAgent, targetAgent)
 
@@ -10594,6 +10812,11 @@ function persistNextVCallInspectorInputs() {
 function restoreNextVCallInspectorInputs() {
   const targetKind = String(localStorage.getItem(storageKeys.nextVCallInspectorTargetKind) ?? '').trim()
   if (targetKind && nextVCallTargetKindInput) nextVCallTargetKindInput.value = targetKind
+
+  const storedMode = String(localStorage.getItem(storageKeys.nextVCallInspectorMode) ?? '').trim().toLowerCase()
+  if (nextVCallModeInput) {
+    nextVCallModeInput.value = storedMode === 'try' ? 'try' : 'call'
+  }
 
   const validate = String(localStorage.getItem(storageKeys.nextVCallInspectorValidate) ?? '').trim()
   if (validate && nextVCallValidateInput) nextVCallValidateInput.value = validate
@@ -10701,10 +10924,22 @@ function renderNextVCallInspectorTargetConfig() {
 function renderNextVCallInspectorResolvedCall(resolvedCall = null) {
   if (!nextVCallResolvedOutput || !nextVCallResolvedLabel) return
 
-  nextVCallResolvedLabel.textContent = 'resolved call'
-  nextVCallResolvedOutput.textContent = resolvedCall
-    ? stringifyInspectorPane(resolvedCall)
-    : '(run call to inspect resolved invocation)'
+  nextVCallResolvedLabel.textContent = 'resolved call · final model-facing request'
+  if (!resolvedCall) {
+    nextVCallResolvedOutput.textContent = '(run call to inspect resolved invocation)'
+    return
+  }
+
+  const compact = {
+    ...resolvedCall,
+    finalRequest: resolvedCall?.finalRequest ?? {
+      model: String(resolvedCall?.resolvedModel ?? '').trim(),
+      messageCount: Number(resolvedCall?.messageCount ?? 0),
+      messages: Array.isArray(resolvedCall?.finalMessages) ? resolvedCall.finalMessages : [],
+    },
+  }
+
+  nextVCallResolvedOutput.textContent = stringifyInspectorPane(compact)
 }
 
 function getNextVCallInspectorTargetValue(targetKind) {
@@ -10849,23 +11084,130 @@ export async function refreshNextVCallInspectorAgents(options = {}) {
   }
 }
 
+function ensureNextVCallInspectorOption(selectEl, value) {
+  if (!selectEl) return false
+  const targetValue = String(value ?? '').trim()
+  if (!targetValue) return false
+
+  const existingOption = [...selectEl.options].find((option) => String(option.value ?? '').trim() === targetValue)
+  if (existingOption) {
+    selectEl.value = targetValue
+    return true
+  }
+
+  const option = document.createElement('option')
+  option.value = targetValue
+  option.textContent = targetValue
+  selectEl.appendChild(option)
+  selectEl.value = targetValue
+  return true
+}
+
+function applyNextVCallInspectorPrefill(prefill = {}) {
+  if (!prefill || typeof prefill !== 'object') return
+
+  const instructions = String(prefill.instructions ?? '').trim()
+  if (instructions && nextVCallInstructionsInput) {
+    nextVCallInstructionsInput.value = instructions
+  }
+
+  const prompt = String(prefill.prompt ?? '').trim()
+  if (prompt && nextVCallPromptInput) {
+    nextVCallPromptInput.value = prompt
+  }
+
+  const returnsText = String(prefill.returnsText ?? '').trim()
+  if (returnsText && nextVCallReturnsInput) {
+    nextVCallReturnsInput.value = returnsText
+  }
+
+  let decideText = ''
+  if (Array.isArray(prefill.decide)) {
+    decideText = prefill.decide.map((value) => String(value ?? '').trim()).filter(Boolean).join(', ')
+  } else {
+    decideText = String(prefill.decideText ?? '').trim()
+  }
+  if (decideText && nextVCallDecideInput) {
+    nextVCallDecideInput.value = decideText
+  }
+
+  const validateRaw = String(prefill.validate ?? '').trim().toLowerCase()
+  if (['strict', 'coerce', 'none'].includes(validateRaw) && nextVCallValidateInput) {
+    nextVCallValidateInput.value = validateRaw
+  }
+
+  const retryNumeric = Number(prefill.retry)
+  if (Number.isInteger(retryNumeric) && nextVCallRetryInput) {
+    nextVCallRetryInput.value = String(Math.max(0, Math.min(8, retryNumeric)))
+  }
+}
+
+export async function openNextVCallInspectorForToken(kind, value, options = {}) {
+  const targetKind = String(kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  const targetValue = String(value ?? '').trim()
+
+  if (nextVCallInspectorPanel?.hidden) {
+    toggleNextVCallInspectorPanel()
+  }
+
+  await refreshNextVCallInspectorAgents({ quiet: true })
+
+  if (nextVCallTargetKindInput) {
+    nextVCallTargetKindInput.value = targetKind
+  }
+  syncNextVCallInspectorTargetMode()
+
+  if (targetKind === 'model') {
+    if (targetValue) {
+      ensureNextVCallInspectorOption(nextVCallTargetInput, targetValue)
+    }
+  } else {
+    if (targetValue) {
+      ensureNextVCallInspectorOption(nextVCallTargetAgentInput, targetValue)
+    }
+  }
+
+  applyNextVCallInspectorPrefill(options?.prefill)
+
+  persistNextVCallInspectorInputs()
+  renderNextVCallInspectorTargetConfig()
+  renderNextVCallInspectorSnippet()
+
+  if (options?.focusPrompt !== false && nextVCallPromptInput) {
+    nextVCallPromptInput.focus()
+  }
+
+  setStatus(
+    targetValue
+      ? `call inspector target set to ${targetKind}.${targetValue}`
+      : `call inspector opened for ${targetKind} target`
+  )
+  return true
+}
+
 export function setNextVCallInspectorResultTab(tab) {
-  const nextTab = ['raw', 'parsed', 'validation', 'retry', 'metadata'].includes(String(tab ?? '').trim())
-    ? String(tab).trim()
+  const rawTab = String(tab ?? '').trim()
+  const normalizedTab = rawTab === 'result'
+    ? 'parsed'
+    : (rawTab === 'retry' ? 'try' : rawTab)
+  const nextTab = ['raw', 'actual', 'parsed', 'validation', 'try', 'metadata'].includes(normalizedTab)
+    ? normalizedTab
     : 'raw'
 
   const buttons = {
     raw: nextVCallResultTabRaw,
+    actual: nextVCallResultTabActual,
     parsed: nextVCallResultTabParsed,
     validation: nextVCallResultTabValidation,
-    retry: nextVCallResultTabRetry,
+    try: nextVCallResultTabTry,
     metadata: nextVCallResultTabMetadata,
   }
   const panes = {
     raw: nextVCallResultRaw,
+    actual: nextVCallResultActual,
     parsed: nextVCallResultParsed,
     validation: nextVCallResultValidation,
-    retry: nextVCallResultRetry,
+    try: nextVCallResultTry,
     metadata: nextVCallResultMetadata,
   }
 
@@ -10886,8 +11228,11 @@ export function setNextVCallInspectorResultTab(tab) {
 }
 
 function getStoredNextVCallInspectorResultTab() {
-  const stored = String(localStorage.getItem(storageKeys.nextVCallInspectorResultTab) ?? '').trim()
-  return ['raw', 'parsed', 'validation', 'retry', 'metadata'].includes(stored)
+  const storedRaw = String(localStorage.getItem(storageKeys.nextVCallInspectorResultTab) ?? '').trim()
+  const stored = storedRaw === 'result'
+    ? 'parsed'
+    : (storedRaw === 'retry' ? 'try' : storedRaw)
+  return ['raw', 'actual', 'parsed', 'validation', 'try', 'metadata'].includes(stored)
     ? stored
     : 'raw'
 }
@@ -10897,12 +11242,33 @@ export function renderNextVCallInspectorResult(data, options = {}) {
   const call = response?.call ?? null
   const result = response?.result ?? null
   const metadata = result?.metadata ?? null
+  const modeRaw = String(call?.mode ?? nextVCallModeInput?.value ?? 'call').trim().toLowerCase()
+  const mode = modeRaw === 'try' ? 'try' : 'call'
+  const outputCandidates = [
+    result?.actual,
+    result?.output,
+    result?.outputText,
+    typeof result?.value === 'string' ? result.value : '',
+    typeof result?.violation?.actual === 'string' ? result.violation.actual : '',
+  ]
+  const outputText = outputCandidates
+    .map((value) => String(value ?? '').trim())
+    .find((value) => value.length > 0) ?? ''
+  const parsedValue = Object.prototype.hasOwnProperty.call(result ?? {}, 'parsed')
+    ? result?.parsed
+    : result?.value
 
   if (nextVCallResultRaw) {
     nextVCallResultRaw.textContent = stringifyInspectorPane(response)
   }
+  if (nextVCallResultActual) {
+    nextVCallResultActual.textContent = outputText || '(no output text captured)'
+  }
   if (nextVCallResultParsed) {
-    nextVCallResultParsed.textContent = stringifyInspectorPane(result?.value ?? null)
+    const parsedDisplayValue = mode === 'try'
+      ? (parsedValue ?? result)
+      : parsedValue
+    nextVCallResultParsed.textContent = stringifyInspectorPane(parsedDisplayValue)
   }
   if (nextVCallResultValidation) {
     nextVCallResultValidation.textContent = stringifyInspectorPane({
@@ -10911,12 +11277,21 @@ export function renderNextVCallInspectorResult(data, options = {}) {
       validate: call?.validate ?? null,
     })
   }
-  if (nextVCallResultRetry) {
-    nextVCallResultRetry.textContent = stringifyInspectorPane({
+  if (nextVCallResultTry) {
+    const finalRequest = response?.resolvedCall?.finalRequest ?? null
+    const finalMessages = Array.isArray(finalRequest?.messages)
+      ? finalRequest.messages
+      : (Array.isArray(metadata?.request?.messages) ? metadata.request.messages : [])
+    const retryGuidanceInjected = finalMessages.length > 0
+      ? /the previous response/i.test(String([...finalMessages].reverse().find((entry) => String(entry?.role ?? '').trim() === 'user')?.content ?? ''))
+      : false
+    nextVCallResultTry.textContent = stringifyInspectorPane({
       configuredRetries: Number(call?.retry_on_contract_violation ?? 0),
       attempt: Number(metadata?.request?.attempt ?? 1),
       retryLimit: Number(metadata?.request?.retryLimit ?? call?.retry_on_contract_violation ?? 0),
-      note: 'Per-attempt transcript is not yet included in the host response payload.',
+      retryGuidanceInjected,
+      finalMessages,
+      finalRequest,
     })
   }
   if (nextVCallResultMetadata) {
@@ -10930,6 +11305,8 @@ export function renderNextVCallInspectorResult(data, options = {}) {
 export function buildNextVCallInspectorSnippet() {
   const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
   const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  const modeRaw = String(nextVCallModeInput?.value ?? 'call').trim().toLowerCase()
+  const mode = modeRaw === 'try' ? 'try' : 'call'
   const target = getNextVCallInspectorTargetValue(targetKind)
   const instructions = String(nextVCallInstructionsInput?.value ?? '').trim()
   const prompt = String(nextVCallPromptInput?.value ?? '').trim()
@@ -10942,7 +11319,7 @@ export function buildNextVCallInspectorSnippet() {
 
   const lines = []
   const head = target || (targetKind === 'agent' ? 'router' : 'model-id')
-  lines.push(`result = ${targetKind}(`)
+  lines.push(`result = ${mode === 'try' ? 'try ' : ''}${targetKind}(`)
   lines.push(`  ${JSON.stringify(head)},`)
   lines.push(`  ${JSON.stringify(prompt || 'prompt')},`)
   if (instructions) {
@@ -11001,6 +11378,7 @@ export function insertNextVCallInspectorSnippet() {
 
 export function initNextVCallInspector() {
   const controls = [
+    nextVCallModeInput,
     nextVCallTargetKindInput,
     nextVCallTargetAgentInput,
     nextVCallTargetInput,
@@ -11046,9 +11424,10 @@ export function initNextVCallInspector() {
 
   const tabButtons = [
     ['raw', nextVCallResultTabRaw],
+    ['actual', nextVCallResultTabActual],
     ['parsed', nextVCallResultTabParsed],
     ['validation', nextVCallResultTabValidation],
-    ['retry', nextVCallResultTabRetry],
+    ['try', nextVCallResultTabTry],
     ['metadata', nextVCallResultTabMetadata],
   ]
   for (const [tabId, button] of tabButtons) {
@@ -11548,8 +11927,13 @@ import {
   closeNextVStream
 } from './11_state_panels.js'
 import {
-  ensureStatusBar
+  ensureStatusBar,
+  openNextVCallInspectorForToken
 } from './12_stream.js'
+
+const SCRIPT_CALL_TARGET_REGEX = /\b(agent|model)\s*\(\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/g
+const SCRIPT_TOOL_KIND_REGEX = /\btool\s*\(\s*("agent"|'agent'|"model"|'model')/g
+const SCRIPT_CALL_KIND_WORD_REGEX = /\b(agent|model)\b/g
 
 export function setStatus(text, cls = '') {
   const bar = ensureStatusBar()
@@ -11764,16 +12148,53 @@ export function normalizeNewlines(textValue) {
   return String(textValue ?? '').replace(/\r\n/g, '\n')
 }
 
+function getApproximateTextareaOffsetAtPoint(textarea, clientX, clientY) {
+  if (!textarea) return null
+  const rect = textarea.getBoundingClientRect()
+  if (
+    clientX < rect.left
+    || clientX > rect.right
+    || clientY < rect.top
+    || clientY > rect.bottom
+  ) {
+    return null
+  }
+
+  const text = normalizeNewlines(textarea.value)
+  const lines = text.split('\n')
+  const style = window.getComputedStyle(textarea)
+  const lineHeight = Math.max(1, Number.parseFloat(style.lineHeight) || 20)
+  const fontSize = Math.max(1, Number.parseFloat(style.fontSize) || 13)
+  const charWidth = Math.max(6, fontSize * 0.62)
+  const paddingTop = Number.parseFloat(style.paddingTop) || 0
+  const paddingLeft = Number.parseFloat(style.paddingLeft) || 0
+
+  const contentY = clientY - rect.top + textarea.scrollTop - paddingTop
+  const contentX = clientX - rect.left + textarea.scrollLeft - paddingLeft
+  const lineIndex = Math.max(0, Math.min(lines.length - 1, Math.floor(contentY / lineHeight)))
+  const lineText = lines[lineIndex] ?? ''
+  const column = Math.max(0, Math.min(lineText.length, Math.floor(contentX / charWidth)))
+
+  let offset = 0
+  for (let i = 0; i < lineIndex; i += 1) {
+    offset += (lines[i]?.length ?? 0) + 1
+  }
+  offset += column
+  return Math.max(0, Math.min(text.length, offset))
+}
+
 export function getTextareaOffsetAtPoint(textarea, clientX, clientY) {
   if (typeof document.caretPositionFromPoint === 'function') {
     const pos = document.caretPositionFromPoint(clientX, clientY)
-    return pos && pos.offsetNode === textarea ? pos.offset : null
+    const offset = Number(pos?.offset)
+    if (Number.isFinite(offset)) return offset
   }
   if (typeof document.caretRangeFromPoint === 'function') {
     const range = document.caretRangeFromPoint(clientX, clientY)
-    return range && range.startContainer === textarea ? range.startOffset : null
+    const offset = Number(range?.startOffset)
+    if (Number.isFinite(offset)) return offset
   }
-  return null
+  return getApproximateTextareaOffsetAtPoint(textarea, clientX, clientY)
 }
 
 export function bindTextareaFileRefCursor(textarea, getTextFn) {
@@ -11782,7 +12203,7 @@ export function bindTextareaFileRefCursor(textarea, getTextFn) {
     if (offset === null) { textarea.style.cursor = ''; return }
     const text = normalizeNewlines(getTextFn())
     const candidates = [offset, Math.max(0, offset - 1)]
-    const hit = candidates.some(o => findScriptReferenceAtOffset(text, o) !== null)
+    const hit = candidates.some((candidateOffset) => findEditorClickTargetAtOffset(text, candidateOffset) !== null)
     textarea.style.cursor = hit ? 'pointer' : ''
   })
   textarea.addEventListener('mouseleave', () => { textarea.style.cursor = '' })
@@ -11837,6 +12258,342 @@ export function findScriptReferenceAtOffset(textValue, offset) {
   return null
 }
 
+function decodeCallTargetLiteral(literal) {
+  const rawLiteral = String(literal ?? '').trim()
+  if (!rawLiteral) return ''
+  if (rawLiteral.startsWith('"')) {
+    try {
+      return String(JSON.parse(rawLiteral))
+    } catch {
+      return rawLiteral.slice(1, -1)
+    }
+  }
+  if (rawLiteral.startsWith("'")) {
+    return rawLiteral
+      .slice(1, -1)
+      .replace(/\\'/g, "'")
+      .replace(/\\\\/g, '\\')
+  }
+  return rawLiteral
+}
+
+function extractFirstStringLiteral(value) {
+  const source = String(value ?? '')
+  const match = /(\"([^\"\\]|\\.)*\"|'([^'\\]|\\.)*')/.exec(source)
+  if (!match) return ''
+  return decodeCallTargetLiteral(match[1])
+}
+
+function findMatchingParen(text, openParenIndex) {
+  const source = String(text ?? '')
+  const start = Number(openParenIndex)
+  if (!Number.isInteger(start) || start < 0 || start >= source.length || source[start] !== '(') return -1
+
+  let depth = 0
+  let inSingle = false
+  let inDouble = false
+  let escaped = false
+  for (let i = start; i < source.length; i += 1) {
+    const ch = source[i]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (ch === '\\') {
+      escaped = true
+      continue
+    }
+    if (inSingle) {
+      if (ch === "'") inSingle = false
+      continue
+    }
+    if (inDouble) {
+      if (ch === '"') inDouble = false
+      continue
+    }
+    if (ch === "'") {
+      inSingle = true
+      continue
+    }
+    if (ch === '"') {
+      inDouble = true
+      continue
+    }
+    if (ch === '(') {
+      depth += 1
+      continue
+    }
+    if (ch === ')') {
+      depth -= 1
+      if (depth === 0) return i
+    }
+  }
+
+  return -1
+}
+
+function findCallSegmentAtOffset(textValue, kind, offset) {
+  const text = normalizeNewlines(textValue)
+  const normalizedKind = String(kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  const safeOffset = Math.max(0, Math.min(text.length, Number(offset) || 0))
+
+  const directRegex = /\b(agent|model)\s*\(/g
+  let match
+  while ((match = directRegex.exec(text)) !== null) {
+    const callKind = String(match[1] ?? '').trim().toLowerCase()
+    if (callKind !== normalizedKind) continue
+    const openParenIndex = text.indexOf('(', match.index)
+    if (openParenIndex < 0) continue
+    const closeParenIndex = findMatchingParen(text, openParenIndex)
+    if (closeParenIndex < 0) continue
+    if (safeOffset < match.index || safeOffset > closeParenIndex) continue
+    return text.slice(match.index, closeParenIndex + 1)
+  }
+
+  const toolRegex = /\btool\s*\(/g
+  while ((match = toolRegex.exec(text)) !== null) {
+    const openParenIndex = text.indexOf('(', match.index)
+    if (openParenIndex < 0) continue
+    const closeParenIndex = findMatchingParen(text, openParenIndex)
+    if (closeParenIndex < 0) continue
+    if (safeOffset < match.index || safeOffset > closeParenIndex) continue
+
+    const segment = text.slice(match.index, closeParenIndex + 1)
+    const toolKindMatch = /\btool\s*\(\s*(\"agent\"|'agent'|\"model\"|'model')/s.exec(segment)
+    if (!toolKindMatch) continue
+    const callKind = decodeCallTargetLiteral(toolKindMatch[1]).toLowerCase() === 'model' ? 'model' : 'agent'
+    if (callKind !== normalizedKind) continue
+    return segment
+  }
+
+  return ''
+}
+
+function inferCallInspectorPrefillFromDocument(textValue, kind, offset) {
+  const segment = findCallSegmentAtOffset(textValue, kind, offset)
+  if (!segment) return null
+
+  const prefill = {}
+
+  const directPromptMatch = /^\s*(agent|model)\s*\(\s*(\"([^\"\\]|\\.)*\"|'([^'\\]|\\.)*')\s*,\s*(\"([^\"\\]|\\.)*\"|'([^'\\]|\\.)*')/s.exec(segment)
+  if (directPromptMatch) {
+    const prompt = decodeCallTargetLiteral(directPromptMatch[6])
+    if (prompt) prefill.prompt = prompt
+  }
+
+  const instructionsMatch = /\binstructions\s*[:=]\s*(\"([^\"\\]|\\.)*\"|'([^'\\]|\\.)*')/s.exec(segment)
+  if (instructionsMatch) {
+    prefill.instructions = decodeCallTargetLiteral(instructionsMatch[1])
+  }
+
+  const validateMatch = /\bvalidate\s*[:=]\s*(strict|coerce|none|\"strict\"|\"coerce\"|\"none\"|'strict'|'coerce'|'none')/s.exec(segment)
+  if (validateMatch) {
+    const validate = decodeCallTargetLiteral(validateMatch[1]).toLowerCase()
+    if (['strict', 'coerce', 'none'].includes(validate)) {
+      prefill.validate = validate
+    }
+  }
+
+  const retryMatch = /\bretry_on_contract_violation\s*[:=]\s*(\d+)/s.exec(segment)
+  if (retryMatch) {
+    prefill.retry = Number(retryMatch[1])
+  }
+
+  const decideMatch = /\bdecide\s*[:=]\s*\[([\s\S]*?)\]/s.exec(segment)
+  if (decideMatch) {
+    const decideRaw = decideMatch[1]
+    const options = []
+    const literalRegex = /(\"([^\"\\]|\\.)*\"|'([^'\\]|\\.)*')/g
+    let literal
+    while ((literal = literalRegex.exec(decideRaw)) !== null) {
+      const value = decodeCallTargetLiteral(literal[1])
+      if (value) options.push(value)
+    }
+    if (options.length > 0) {
+      prefill.decide = options
+    }
+  }
+
+  const returnsMatch = /\breturns\s*[:=]\s*(\{[\s\S]*?\}|\[[\s\S]*?\])/s.exec(segment)
+  if (returnsMatch) {
+    prefill.returnsText = String(returnsMatch[1] ?? '').trim()
+  }
+
+  return Object.keys(prefill).length > 0 ? prefill : null
+}
+
+function inferToolCallTargetValue(line, kind, searchStart = 0) {
+  const source = String(line ?? '')
+  const normalizedKind = String(kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  const valuePattern = normalizedKind === 'model'
+    ? /\b(model|name|target|id)\b\s*[:=]\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/
+    : /\b(agent|name|target|id)\b\s*[:=]\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/
+
+  const match = valuePattern.exec(source.slice(Math.max(0, Number(searchStart) || 0)))
+  if (!match) return ''
+  return decodeCallTargetLiteral(match[2])
+}
+
+function inferCallTargetValueFromLine(line, kind, searchStart = 0) {
+  const source = String(line ?? '')
+  const normalizedKind = String(kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  const directPattern = normalizedKind === 'model'
+    ? /\bmodel\s*\(\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/
+    : /\bagent\s*\(\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/
+  const directMatch = directPattern.exec(source.slice(Math.max(0, Number(searchStart) || 0)))
+  if (directMatch) {
+    return decodeCallTargetLiteral(directMatch[1])
+  }
+
+  return inferToolCallTargetValue(source, normalizedKind, searchStart)
+}
+
+function inferCallTargetValueFromDocument(textValue, kind, offset) {
+  const text = normalizeNewlines(textValue)
+  const normalizedKind = String(kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  const safeOffset = Math.max(0, Math.min(text.length, Number(offset) || 0))
+  const sliceStart = Math.max(0, safeOffset - 80)
+  const sliceEnd = Math.min(text.length, safeOffset + 1200)
+  const scope = text.slice(sliceStart, sliceEnd)
+  const localOffset = safeOffset - sliceStart
+
+  const directPattern = normalizedKind === 'model'
+    ? /\bmodel\s*\(\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/s
+    : /\bagent\s*\(\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/s
+  const directMatch = directPattern.exec(scope.slice(Math.max(0, localOffset - 16)))
+  if (directMatch) {
+    return decodeCallTargetLiteral(directMatch[1])
+  }
+
+  const toolPattern = normalizedKind === 'model'
+    ? /\btool\s*\(\s*("model"|'model')[\s\S]{0,800}?\b(model|name|target|id)\b\s*[:=]\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/s
+    : /\btool\s*\(\s*("agent"|'agent')[\s\S]{0,800}?\b(agent|name|target|id)\b\s*[:=]\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/s
+  const toolMatch = toolPattern.exec(scope.slice(Math.max(0, localOffset - 32)))
+  if (toolMatch) {
+    return decodeCallTargetLiteral(toolMatch[3])
+  }
+
+  return ''
+}
+
+function collectCallInspectorTargetsInLine(line) {
+  const text = String(line ?? '')
+  const matches = []
+  SCRIPT_CALL_TARGET_REGEX.lastIndex = 0
+  let match
+  while ((match = SCRIPT_CALL_TARGET_REGEX.exec(text)) !== null) {
+    const kind = String(match[1] ?? '').trim().toLowerCase()
+    const literal = String(match[2] ?? '')
+    const literalIndex = String(match[0] ?? '').indexOf(literal)
+    if (literalIndex < 0) continue
+
+    const start = Number(match.index) + literalIndex
+    const end = start + literal.length
+    matches.push({
+      start,
+      end,
+      text: literal,
+      kind,
+      value: decodeCallTargetLiteral(literal),
+    })
+  }
+
+  SCRIPT_TOOL_KIND_REGEX.lastIndex = 0
+  while ((match = SCRIPT_TOOL_KIND_REGEX.exec(text)) !== null) {
+    const kind = decodeCallTargetLiteral(match[1]).toLowerCase() === 'model' ? 'model' : 'agent'
+    const literal = String(match[1] ?? '')
+    const literalIndex = String(match[0] ?? '').indexOf(literal)
+    if (literalIndex < 0) continue
+
+    const start = Number(match.index) + literalIndex
+    const end = start + literal.length
+    matches.push({
+      start,
+      end,
+      text: literal,
+      kind,
+      value: inferToolCallTargetValue(text, kind, end),
+    })
+  }
+
+  return matches
+}
+
+export function findCallInspectorTargetAtOffset(textValue, offset) {
+  const text = normalizeNewlines(textValue)
+  if (!text) return null
+
+  const safeOffset = Math.max(0, Math.min(text.length, Number(offset) || 0))
+  const lineStart = text.lastIndexOf('\n', Math.max(0, safeOffset - 1)) + 1
+  const nextNewline = text.indexOf('\n', safeOffset)
+  const lineEnd = nextNewline === -1 ? text.length : nextNewline
+  const line = text.slice(lineStart, lineEnd)
+  const lineOffset = safeOffset - lineStart
+
+  const matches = collectCallInspectorTargetsInLine(line)
+  for (const match of matches) {
+    if (lineOffset < match.start || lineOffset > match.end) continue
+    if (match.kind !== 'agent' && match.kind !== 'model') continue
+    return {
+      kind: match.kind,
+      value: String(match.value ?? '').trim(),
+      prefill: inferCallInspectorPrefillFromDocument(text, match.kind, safeOffset),
+    }
+  }
+
+  SCRIPT_CALL_KIND_WORD_REGEX.lastIndex = 0
+  let keywordMatch
+  while ((keywordMatch = SCRIPT_CALL_KIND_WORD_REGEX.exec(line)) !== null) {
+    const start = keywordMatch.index
+    const end = start + String(keywordMatch[0] ?? '').length
+    if (lineOffset < start || lineOffset > end) continue
+    const kind = String(keywordMatch[1] ?? '').trim().toLowerCase()
+    if (kind !== 'agent' && kind !== 'model') continue
+    return {
+      kind,
+      value: inferCallTargetValueFromLine(line, kind, start) || inferCallTargetValueFromDocument(text, kind, safeOffset),
+      prefill: inferCallInspectorPrefillFromDocument(text, kind, safeOffset),
+    }
+  }
+
+  const contextualKindMatch = /\b(agent|model)\b/i.exec(line)
+  if (contextualKindMatch) {
+    const kind = String(contextualKindMatch[1] ?? '').trim().toLowerCase()
+    if (kind === 'agent' || kind === 'model') {
+      const value = inferCallTargetValueFromDocument(text, kind, safeOffset)
+      if (value) {
+        return {
+          kind,
+          value,
+          prefill: inferCallInspectorPrefillFromDocument(text, kind, safeOffset),
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+export function findEditorClickTargetAtOffset(textValue, offset) {
+  const callTarget = findCallInspectorTargetAtOffset(textValue, offset)
+  if (callTarget) {
+    return {
+      type: 'call-target',
+      value: callTarget,
+    }
+  }
+
+  const fileReference = findScriptReferenceAtOffset(textValue, offset)
+  if (fileReference) {
+    return {
+      type: 'file-reference',
+      value: fileReference,
+    }
+  }
+
+  return null
+}
+
 export function buildScriptMirrorLine(textValue) {
   const row = document.createElement('div')
   row.className = 'script-editor-line'
@@ -11859,17 +12616,44 @@ export function buildScriptMirrorLine(textValue) {
     tokens.push({ start: match.index, end: match.index + match[0].length, text: match[0], filePath: match[1], kind: 'file' })
   }
 
+  const callTargets = collectCallInspectorTargetsInLine(line)
+  for (const target of callTargets) {
+    tokens.push({
+      start: target.start,
+      end: target.end,
+      text: target.text,
+      kind: target.kind,
+      callTarget: target.value,
+    })
+  }
+
+  SCRIPT_CALL_KIND_WORD_REGEX.lastIndex = 0
+  while ((match = SCRIPT_CALL_KIND_WORD_REGEX.exec(line)) !== null) {
+    const kind = String(match[1] ?? '').trim().toLowerCase()
+    if (kind !== 'agent' && kind !== 'model') continue
+    tokens.push({
+      start: match.index,
+      end: match.index + String(match[0] ?? '').length,
+      text: match[0],
+      kind,
+      callTarget: inferCallTargetValueFromLine(line, kind, match.index),
+    })
+  }
+
   tokens.sort((a, b) => a.start - b.start)
 
   let lastIndex = 0
   for (const tok of tokens) {
+    if (tok.start < lastIndex) continue
     if (tok.start > lastIndex) {
       textWrap.appendChild(document.createTextNode(line.slice(lastIndex, tok.start)))
     }
     const token = document.createElement('span')
     token.className = `script-ref-token ${tok.kind}`
     token.textContent = tok.text
-    token.title = `${tok.kind}: ${tok.filePath}`
+    token.title = tok.kind === 'agent' || tok.kind === 'model'
+      ? `${tok.kind}: ${tok.callTarget}`
+      : `${tok.kind}: ${tok.filePath}`
     textWrap.appendChild(token)
     lastIndex = tok.end
   }
@@ -11935,6 +12719,37 @@ export async function openEditorReference(filePath) {
     appendScriptLogRow(`[file:error] ${err.message}`, 'error')
     setStatus('file open error', 'responding')
   }
+}
+
+export async function openEditorCallInspectorTarget(target) {
+  const kind = String(target?.kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  const value = String(target?.value ?? '').trim()
+
+  const opened = await openNextVCallInspectorForToken(kind, value, {
+    focusPrompt: true,
+    prefill: target?.prefill ?? null,
+  })
+  if (!opened) {
+    const label = value ? `${kind}.${value}` : `${kind}`
+    setStatus(`unable to open call inspector target ${label}`, 'responding')
+  }
+}
+
+export async function openEditorClickTargetAtOffset(textValue, offset) {
+  const target = findEditorClickTargetAtOffset(textValue, offset)
+  if (!target) return false
+
+  if (target.type === 'call-target') {
+    await openEditorCallInspectorTarget(target.value)
+    return true
+  }
+
+  if (target.type === 'file-reference') {
+    await openEditorReference(target.value.filePath)
+    return true
+  }
+
+  return false
 }
 
 export function getScriptEditorText() {
@@ -12667,10 +13482,8 @@ export function bindEditorPaneEvents(paneId) {
     const candidateOffsets = [primaryOffset, Math.max(0, primaryOffset - 1)]
 
     for (const offset of candidateOffsets) {
-      const ref = findScriptReferenceAtOffset(text, offset)
-      if (!ref) continue
-      await openEditorReference(ref.filePath)
-      return
+      const opened = await openEditorClickTargetAtOffset(text, offset)
+      if (opened) return
     }
   })
 }
@@ -12866,10 +13679,20 @@ import {
   refreshNextVSnapshot,
   handleNextVImageInput,
   reloadNextVRuntimeConfig,
+  submitNextVCandidate,
+  promoteNextVCandidate,
   executeNextVCallInspector,
   insertNextVCallInspectorSnippet,
   initNextVCallInspector,
 } from './12_stream.js'
+import {
+  initNextVEditorSurfaceBeta,
+  setNextVEditorSurfaceBetaEnabled,
+  setNextVEditorSurfaceTelemetryVisible,
+} from './15_surface_beta.js'
+import {
+  initNextVTokenClickPlugin,
+} from './16_token_click_plugin.js'
 import {
   loadSession,
   clearScriptOutput,
@@ -12897,6 +13720,7 @@ export function initLayoutState() {
 
   restoreNextVConfig()
   setEditorLayout(editorLayoutState.layoutMode, { persist: false })
+  initNextVEditorSurfaceBeta()
 
   const queryWorkspaceDir = normalizeNextVWorkspaceDir(
     new URLSearchParams(window.location.search).get('workspaceDir') ?? ''
@@ -12990,6 +13814,7 @@ updateNextVEventImageUI()
 setupVerticalSplitters()
 initNextVCallInspectorPanelChrome()
 initNextVCallInspector()
+initNextVTokenClickPlugin()
 setupNextVEventsScrollListener()
 initLayoutState()
 initFileTreeCtxMenu()
@@ -13036,6 +13861,8 @@ Object.assign(window, {
   saveAllNextVFiles,
   setEditorLayout,
   setNextVEditorTabSize,
+  setNextVEditorSurfaceBetaEnabled,
+  setNextVEditorSurfaceTelemetryVisible,
   // 10_file_tree.js
   clearNextVStateDiff,
   setNextVStateCollapseAll,
@@ -13048,6 +13875,8 @@ Object.assign(window, {
   refreshNextVSnapshot,
   runNextVRuntime,
   reloadNextVRuntimeConfig,
+  submitNextVCandidate,
+  promoteNextVCandidate,
   sendNextVEvent,
   sendNextVIngress,
   startNextVRuntime,
@@ -13066,3 +13895,1980 @@ Object.assign(window, {
   saveNextVEntrypoint,
   saveScriptBuffer,
 })
+
+// --- Imports (auto-generated by gen-es-modules.js) ---
+import {
+  storageKeys,
+  nextVEditorSurfaceBetaToggle,
+  nextVEditorSurfaceTelemetryToggle,
+  nextVGraphState,
+} from './state.js'
+import {
+  getPaneEditorShell,
+  getPaneEl,
+  getPaneState,
+  getPaneTextarea,
+} from './09_editor.js'
+import {
+  openEditorClickTargetAtOffset,
+} from './13_layout.js'
+import {
+  Surface,
+  Renderer,
+  DiagnosticsChannel,
+  createMarkdownPlugin,
+  createJsonPlugin,
+  tokenizeJson,
+} from '../editor-core/index.js'
+
+const SURFACE_BETA_EDITOR_PANE_IDS = ['A', 'B', 'C', 'D']
+const SURFACE_BETA_FLOAT_PANE_IDS = ['FLOAT1', 'FLOAT2']
+const SURFACE_BETA_PANE_IDS = [...SURFACE_BETA_EDITOR_PANE_IDS, ...SURFACE_BETA_FLOAT_PANE_IDS]
+let surfaceBetaEnabled = false
+let surfaceTelemetryVisible = true
+const paneBindings = new Map()
+const paneSurfaceSwitchState = new Map()
+const paneSwitchButtons = new Map()
+let surfacePaneSwitchPollTimer = null
+
+const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown', '.mdx'])
+const NERVE_EXTENSIONS = new Set(['.nrv', '.wfs'])
+const JSON_EXTENSIONS = new Set(['.json', '.jsonc', '.json5'])
+
+function escapeHtml(text) {
+  return String(text ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+}
+
+function inferModeFromPath(filePath) {
+  const value = String(filePath ?? '').trim().toLowerCase()
+  if (!value) return ''
+  const lastDot = value.lastIndexOf('.')
+  if (lastDot < 0) return ''
+  const ext = value.slice(lastDot)
+  if (NERVE_EXTENSIONS.has(ext)) return 'nerve'
+  if (MARKDOWN_EXTENSIONS.has(ext)) return 'markdown'
+  if (JSON_EXTENSIONS.has(ext)) return 'json'
+  return ''
+}
+
+function inferModeFromContent(text) {
+  const trimmed = String(text ?? '').trim()
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    return 'json'
+  }
+  return 'markdown'
+}
+
+function parseJsonStringTokenValue(value) {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return String(value ?? '').replace(/^"|"$/g, '')
+  }
+}
+
+function buildLineOffsets(text) {
+  const value = String(text ?? '')
+  const offsets = [0]
+  for (let i = 0; i < value.length; i += 1) {
+    if (value[i] === '\n') {
+      offsets.push(i + 1)
+    }
+  }
+  return offsets
+}
+
+function buildTokenEntries(text) {
+  const lineOffsets = buildLineOffsets(text)
+  return tokenizeJson(text).map((token) => {
+    const lineOffset = lineOffsets[Math.max(0, Number(token.line) - 1)] ?? 0
+    return {
+      token,
+      startOffset: lineOffset + Number(token.start ?? 0),
+      endOffset: lineOffset + Number(token.end ?? 0),
+    }
+  })
+}
+
+function inferJsonObjectPathAtCursor(text, cursorOffset) {
+  const value = String(text ?? '')
+  const cursor = Math.max(0, Math.min(Number.isInteger(cursorOffset) ? cursorOffset : 0, value.length))
+  const entries = buildTokenEntries(value)
+  const stack = []
+  let bestPath = []
+
+  const enterContainer = (type) => {
+    const parent = stack[stack.length - 1]
+    let path = []
+
+    if (parent) {
+      if (parent.type === 'object') {
+        if (typeof parent.pendingKey === 'string' && parent.pendingKey.length > 0) {
+          path = [...parent.path, parent.pendingKey]
+        } else {
+          path = [...parent.path]
+        }
+        parent.pendingKey = null
+        parent.expecting = 'commaOrClose'
+      } else if (parent.type === 'array') {
+        path = [...parent.path, parent.nextIndex]
+        parent.nextIndex += 1
+        parent.expecting = 'commaOrClose'
+      }
+    }
+
+    stack.push({
+      type,
+      path,
+      expecting: type === 'object' ? 'keyOrClose' : 'valueOrClose',
+      pendingKey: null,
+      nextIndex: 0,
+    })
+  }
+
+  const markPrimitiveValueConsumed = () => {
+    const parent = stack[stack.length - 1]
+    if (!parent) return
+    if (parent.type === 'object' && parent.expecting === 'value') {
+      parent.pendingKey = null
+      parent.expecting = 'commaOrClose'
+      return
+    }
+    if (parent.type === 'array' && parent.expecting === 'valueOrClose') {
+      parent.nextIndex += 1
+      parent.expecting = 'commaOrClose'
+    }
+  }
+
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i]
+    if (entry.startOffset > cursor) {
+      break
+    }
+
+    const token = entry.token
+    const top = stack[stack.length - 1]
+    const nextType = entries[i + 1]?.token?.type ?? ''
+
+    if (token.type === 'brace-open') {
+      enterContainer('object')
+    } else if (token.type === 'bracket-open') {
+      enterContainer('array')
+    } else if (token.type === 'brace-close') {
+      if (stack[stack.length - 1]?.type === 'object') {
+        stack.pop()
+      }
+    } else if (token.type === 'bracket-close') {
+      if (stack[stack.length - 1]?.type === 'array') {
+        stack.pop()
+      }
+    } else if (token.type === 'comma') {
+      if (top?.expecting === 'commaOrClose') {
+        top.expecting = top.type === 'object' ? 'keyOrClose' : 'valueOrClose'
+      }
+    } else if (token.type === 'colon') {
+      if (top?.type === 'object' && top.expecting === 'colon') {
+        top.expecting = 'value'
+      }
+    } else if (token.type === 'string') {
+      if (top?.type === 'object' && top.expecting === 'keyOrClose' && nextType === 'colon') {
+        top.pendingKey = parseJsonStringTokenValue(token.value)
+        top.expecting = 'colon'
+      } else {
+        markPrimitiveValueConsumed()
+      }
+    } else if (token.type === 'number' || token.type === 'boolean' || token.type === 'null') {
+      markPrimitiveValueConsumed()
+    }
+
+    const currentObject = [...stack].reverse().find((frame) => frame.type === 'object')
+    if (currentObject) {
+      bestPath = currentObject.path
+    }
+  }
+
+  return Array.isArray(bestPath) ? bestPath : []
+}
+
+function buildJsonObjectKeyEntries(text) {
+  const value = String(text ?? '')
+  const entries = buildTokenEntries(value)
+  const stack = []
+  const keys = []
+
+  const enterContainer = (type) => {
+    const parent = stack[stack.length - 1]
+    let path = []
+
+    if (parent) {
+      if (parent.type === 'object') {
+        if (typeof parent.pendingKey === 'string' && parent.pendingKey.length > 0) {
+          path = [...parent.path, parent.pendingKey]
+        } else {
+          path = [...parent.path]
+        }
+        parent.pendingKey = null
+        parent.expecting = 'commaOrClose'
+      } else if (parent.type === 'array') {
+        path = [...parent.path, parent.nextIndex]
+        parent.nextIndex += 1
+        parent.expecting = 'commaOrClose'
+      }
+    }
+
+    stack.push({
+      type,
+      path,
+      expecting: type === 'object' ? 'keyOrClose' : 'valueOrClose',
+      pendingKey: null,
+      nextIndex: 0,
+    })
+  }
+
+  const markPrimitiveValueConsumed = () => {
+    const parent = stack[stack.length - 1]
+    if (!parent) return
+    if (parent.type === 'object' && parent.expecting === 'value') {
+      parent.pendingKey = null
+      parent.expecting = 'commaOrClose'
+      return
+    }
+    if (parent.type === 'array' && parent.expecting === 'valueOrClose') {
+      parent.nextIndex += 1
+      parent.expecting = 'commaOrClose'
+    }
+  }
+
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i]
+    const token = entry.token
+    const top = stack[stack.length - 1]
+    const nextType = entries[i + 1]?.token?.type ?? ''
+
+    if (token.type === 'brace-open') {
+      enterContainer('object')
+      continue
+    }
+    if (token.type === 'bracket-open') {
+      enterContainer('array')
+      continue
+    }
+    if (token.type === 'brace-close') {
+      if (stack[stack.length - 1]?.type === 'object') {
+        stack.pop()
+      }
+      continue
+    }
+    if (token.type === 'bracket-close') {
+      if (stack[stack.length - 1]?.type === 'array') {
+        stack.pop()
+      }
+      continue
+    }
+    if (token.type === 'comma') {
+      if (top?.expecting === 'commaOrClose') {
+        top.expecting = top.type === 'object' ? 'keyOrClose' : 'valueOrClose'
+      }
+      continue
+    }
+    if (token.type === 'colon') {
+      if (top?.type === 'object' && top.expecting === 'colon') {
+        top.expecting = 'value'
+      }
+      continue
+    }
+    if (token.type === 'string') {
+      if (top?.type === 'object' && top.expecting === 'keyOrClose' && nextType === 'colon') {
+        const key = parseJsonStringTokenValue(token.value)
+        keys.push({ path: top.path, key, startOffset: entry.startOffset })
+        top.pendingKey = key
+        top.expecting = 'colon'
+      } else {
+        markPrimitiveValueConsumed()
+      }
+      continue
+    }
+    if (token.type === 'number' || token.type === 'boolean' || token.type === 'null') {
+      markPrimitiveValueConsumed()
+    }
+  }
+
+  return keys
+}
+
+function inferJsonObjectTargetAtCursor(text, cursorOffset) {
+  const value = String(text ?? '')
+  const cursor = Math.max(0, Math.min(Number.isInteger(cursorOffset) ? cursorOffset : 0, value.length))
+  const path = inferJsonObjectPathAtCursor(value, cursor)
+  const pathKey = JSON.stringify(path)
+  const nextKey = buildJsonObjectKeyEntries(value)
+    .filter((entry) => JSON.stringify(entry.path) === pathKey && entry.startOffset >= cursor)
+    .map((entry) => entry.key)[0]
+
+  return {
+    path,
+    anchorKey: typeof nextKey === 'string' && nextKey.length > 0 ? nextKey : null,
+  }
+}
+
+function buildJsonValueEntries(text) {
+  const entries = buildTokenEntries(text)
+  const stack = []
+  const values = []
+
+  const pushValue = (path, startOffset, startLine) => {
+    values.push({
+      path: Array.isArray(path) ? path : [],
+      startOffset: Number.isInteger(startOffset) ? startOffset : 0,
+      startLine: Number.isInteger(startLine) && startLine > 0 ? startLine : 1,
+    })
+  }
+
+  const enterContainer = (type, startOffset, startLine) => {
+    const parent = stack[stack.length - 1]
+    let path = []
+
+    if (parent) {
+      if (parent.type === 'object') {
+        if (typeof parent.pendingKey === 'string' && parent.pendingKey.length > 0) {
+          path = [...parent.path, parent.pendingKey]
+        } else {
+          path = [...parent.path]
+        }
+        parent.pendingKey = null
+        parent.expecting = 'commaOrClose'
+      } else if (parent.type === 'array') {
+        path = [...parent.path, parent.nextIndex]
+        parent.nextIndex += 1
+        parent.expecting = 'commaOrClose'
+      }
+    }
+
+    stack.push({
+      type,
+      path,
+      expecting: type === 'object' ? 'keyOrClose' : 'valueOrClose',
+      pendingKey: null,
+      nextIndex: 0,
+    })
+
+    pushValue(path, startOffset, startLine)
+  }
+
+  const markPrimitiveValue = (startOffset, startLine) => {
+    const parent = stack[stack.length - 1]
+    if (!parent) {
+      pushValue([], startOffset, startLine)
+      return
+    }
+
+    if (parent.type === 'object' && parent.expecting === 'value' && typeof parent.pendingKey === 'string') {
+      pushValue([...parent.path, parent.pendingKey], startOffset, startLine)
+      parent.pendingKey = null
+      parent.expecting = 'commaOrClose'
+      return
+    }
+
+    if (parent.type === 'array' && parent.expecting === 'valueOrClose') {
+      pushValue([...parent.path, parent.nextIndex], startOffset, startLine)
+      parent.nextIndex += 1
+      parent.expecting = 'commaOrClose'
+    }
+  }
+
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i]
+    const token = entry.token
+    const top = stack[stack.length - 1]
+    const nextType = entries[i + 1]?.token?.type ?? ''
+
+    if (token.type === 'brace-open') {
+      enterContainer('object', entry.startOffset, Number(token.line) || 1)
+      continue
+    }
+
+    if (token.type === 'bracket-open') {
+      enterContainer('array', entry.startOffset, Number(token.line) || 1)
+      continue
+    }
+
+    if (token.type === 'brace-close') {
+      if (stack[stack.length - 1]?.type === 'object') {
+        stack.pop()
+      }
+      continue
+    }
+
+    if (token.type === 'bracket-close') {
+      if (stack[stack.length - 1]?.type === 'array') {
+        stack.pop()
+      }
+      continue
+    }
+
+    if (token.type === 'comma') {
+      if (top?.expecting === 'commaOrClose') {
+        top.expecting = top.type === 'object' ? 'keyOrClose' : 'valueOrClose'
+      }
+      continue
+    }
+
+    if (token.type === 'colon') {
+      if (top?.type === 'object' && top.expecting === 'colon') {
+        top.expecting = 'value'
+      }
+      continue
+    }
+
+    if (token.type === 'string') {
+      if (top?.type === 'object' && top.expecting === 'keyOrClose' && nextType === 'colon') {
+        top.pendingKey = parseJsonStringTokenValue(token.value)
+        top.expecting = 'colon'
+      } else {
+        markPrimitiveValue(entry.startOffset, Number(token.line) || 1)
+      }
+      continue
+    }
+
+    if (token.type === 'number' || token.type === 'boolean' || token.type === 'null') {
+      markPrimitiveValue(entry.startOffset, Number(token.line) || 1)
+    }
+  }
+
+  return values
+}
+
+function inferJsonPathAtLine(text, line) {
+  const targetLine = Math.max(1, Number.isInteger(line) ? line : 1)
+  const entries = buildJsonValueEntries(text)
+  if (entries.length === 0) return []
+
+  let exact = entries.find((entry) => entry.startLine === targetLine)
+  if (exact) return Array.isArray(exact.path) ? exact.path : []
+
+  const next = entries.find((entry) => entry.startLine > targetLine)
+  if (next) return Array.isArray(next.path) ? next.path : []
+
+  const fallback = entries[entries.length - 1]
+  return Array.isArray(fallback?.path) ? fallback.path : []
+}
+
+function inferJsonPathAtOffset(text, offset) {
+  const value = String(text ?? '')
+  const cursor = Math.max(0, Math.min(Number.isInteger(offset) ? offset : 0, value.length))
+  const entries = buildJsonValueEntries(value)
+  let bestPath = []
+
+  for (let i = 0; i < entries.length; i += 1) {
+    if (entries[i].startOffset > cursor) {
+      break
+    }
+    bestPath = entries[i].path
+  }
+
+  return Array.isArray(bestPath) ? bestPath : []
+}
+
+function findJsonValueStartOffsetByPath(text, path) {
+  const entries = buildJsonValueEntries(text)
+  const targetPath = Array.isArray(path) ? [...path] : []
+
+  while (true) {
+    const targetKey = JSON.stringify(targetPath)
+    const match = entries.find((entry) => JSON.stringify(entry.path) === targetKey)
+    if (match) {
+      return match.startOffset
+    }
+    if (targetPath.length === 0) {
+      return 0
+    }
+    targetPath.pop()
+  }
+}
+
+function findJsonValueLineByPath(text, path) {
+  const entries = buildJsonValueEntries(text)
+  const targetPath = Array.isArray(path) ? [...path] : []
+
+  while (true) {
+    const targetKey = JSON.stringify(targetPath)
+    const match = entries.find((entry) => JSON.stringify(entry.path) === targetKey)
+    if (match) {
+      return Number.isInteger(match.startLine) ? match.startLine : 1
+    }
+    if (targetPath.length === 0) {
+      return 1
+    }
+    targetPath.pop()
+  }
+}
+
+function buildJsonPathLineLookup(text) {
+  const entries = buildJsonValueEntries(text)
+  const lookup = new Map()
+
+  for (const entry of entries) {
+    const key = JSON.stringify(Array.isArray(entry.path) ? entry.path : [])
+    if (!lookup.has(key)) {
+      lookup.set(key, Number.isInteger(entry.startLine) && entry.startLine > 0 ? entry.startLine : 1)
+    }
+  }
+
+  if (!lookup.has('[]')) {
+    lookup.set('[]', 1)
+  }
+
+  return lookup
+}
+
+function getJsonNodeByPath(root, path) {
+  let current = root
+  for (const segment of Array.isArray(path) ? path : []) {
+    if (Array.isArray(current) && Number.isInteger(segment) && segment >= 0 && segment < current.length) {
+      current = current[segment]
+      continue
+    }
+    if (current && typeof current === 'object' && !Array.isArray(current) && typeof segment === 'string' && Object.hasOwn(current, segment)) {
+      current = current[segment]
+      continue
+    }
+    return { found: false, node: undefined }
+  }
+  return { found: true, node: current }
+}
+
+function insertObjectPropertyOrdered(objectValue, newKey, newValue, anchorKey) {
+  if (!objectValue || typeof objectValue !== 'object' || Array.isArray(objectValue)) {
+    return null
+  }
+
+  const result = {}
+  let inserted = false
+  const hasAnchor = typeof anchorKey === 'string' && anchorKey.length > 0 && Object.hasOwn(objectValue, anchorKey)
+
+  for (const [key, value] of Object.entries(objectValue)) {
+    if (!inserted && hasAnchor && key === anchorKey && key !== newKey) {
+      result[newKey] = newValue
+      inserted = true
+    }
+
+    if (key === newKey) {
+      if (!inserted) {
+        result[newKey] = newValue
+        inserted = true
+      }
+      continue
+    }
+
+    result[key] = value
+  }
+
+  if (!inserted) {
+    result[newKey] = newValue
+  }
+
+  return result
+}
+
+function createSurfaceTelemetry() {
+  return {
+    mountedAt: Date.now(),
+    lastSyncAt: 0,
+    lastSyncSource: 'none',
+    status: 'starting',
+    statusReason: 'mounting',
+    counters: {
+      legacyInput: 0,
+      surfaceInput: 0,
+      legacyToSurfaceSync: 0,
+      surfaceToLegacySync: 0,
+      commandWrapBold: 0,
+      commandWrapItalic: 0,
+      commandPreviewToggle: 0,
+      commandJsonNormalizeDocument: 0,
+      commandJsonNormalizeSelection: 0,
+      commandJsonToggleBoolean: 0,
+      commandJsonAddProperty: 0,
+      commandJsonSetValue: 0,
+      syncPollTicks: 0,
+      errors: 0,
+    },
+    lengths: {
+      surfaceText: 0,
+      legacyText: 0,
+      driftChars: 0,
+    },
+  }
+}
+
+function getTelemetrySnapshot(telemetry) {
+  return {
+    ...telemetry,
+    counters: { ...telemetry.counters },
+    lengths: { ...telemetry.lengths },
+  }
+}
+
+function publishSurfaceTelemetrySnapshot(telemetry) {
+  window.__nextVSurfaceBetaTelemetry = getTelemetrySnapshot(telemetry)
+}
+
+function readStoredSurfaceBetaEnabled() {
+  return localStorage.getItem(storageKeys.nextVEditorSurfaceBeta) === '1'
+}
+
+function persistSurfaceBetaEnabled(enabled) {
+  if (enabled) {
+    localStorage.setItem(storageKeys.nextVEditorSurfaceBeta, '1')
+  } else {
+    localStorage.removeItem(storageKeys.nextVEditorSurfaceBeta)
+  }
+}
+
+function readStoredSurfaceTelemetryVisible() {
+  const stored = localStorage.getItem(storageKeys.nextVEditorSurfaceTelemetry)
+  if (stored == null) return true
+  return stored === '1'
+}
+
+function persistSurfaceTelemetryVisible(enabled) {
+  localStorage.setItem(storageKeys.nextVEditorSurfaceTelemetry, enabled ? '1' : '0')
+}
+
+function applySurfaceTelemetryVisibility(dom) {
+  const hidden = surfaceTelemetryVisible !== true
+  if (!dom) return
+  const toolbar = dom.toolbar || dom.root?.querySelector('.surface-beta-toolbar')
+  if (toolbar) {
+    toolbar.hidden = hidden
+    toolbar.style.display = hidden ? 'none' : 'flex'
+  }
+  dom.status.hidden = hidden
+  dom.metrics.hidden = hidden
+  dom.telemetry.hidden = hidden
+}
+
+function getPaneTrackedPath(paneId) {
+  if (SURFACE_BETA_EDITOR_PANE_IDS.includes(paneId)) {
+    return String(getPaneState(paneId)?.path ?? '')
+  }
+
+  if (SURFACE_BETA_FLOAT_PANE_IDS.includes(paneId)) {
+    return String(nextVGraphState.floatingPanels.get(paneId)?.filePath ?? '')
+  }
+
+  return ''
+}
+
+function getEligibleSurfaceModeForPane(paneId) {
+  const panePath = getPaneTrackedPath(paneId)
+  const mode = inferModeFromPath(panePath)
+  return mode === 'markdown' || mode === 'json' || mode === 'nerve' ? mode : ''
+}
+
+function ensureSurfacePaneSwitchControls() {
+  for (const paneId of SURFACE_BETA_PANE_IDS) {
+    const paneEl = SURFACE_BETA_EDITOR_PANE_IDS.includes(paneId) ? getPaneEl(paneId) : null
+    const shell = getPaneEditorShell(paneId)
+    const floatingPanelEl = shell?.closest('.nextv-floating-code-panel')
+    const headerEl = paneEl?.querySelector('.editor-pane-header')
+      || floatingPanelEl?.querySelector('.nextv-floating-code-header')
+    if (!headerEl) continue
+
+    let button = headerEl.querySelector('.pane-surface-switch')
+    if (!button) {
+      button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'pane-surface-switch'
+      button.textContent = 'surface'
+      button.hidden = true
+      button.addEventListener('click', () => {
+        const mode = getEligibleSurfaceModeForPane(paneId)
+        if (!mode) return
+        const currentlyActive = paneSurfaceSwitchState.get(paneId) === true
+        paneSurfaceSwitchState.set(paneId, !currentlyActive)
+        refreshSurfacePaneSwitchUi()
+      })
+      const floatingActions = headerEl.querySelector('.nextv-floating-code-actions')
+      if (floatingActions) {
+        headerEl.insertBefore(button, floatingActions)
+      } else {
+        headerEl.appendChild(button)
+      }
+    }
+
+    paneSwitchButtons.set(paneId, button)
+  }
+}
+
+function removeSurfacePaneSwitchControls() {
+  for (const button of paneSwitchButtons.values()) {
+    button?.remove()
+  }
+  paneSwitchButtons.clear()
+}
+
+function refreshSurfacePaneSwitchUi() {
+  if (surfaceBetaEnabled !== true) {
+    for (const paneId of SURFACE_BETA_PANE_IDS) {
+      paneSurfaceSwitchState.set(paneId, false)
+      unmountSurfaceBetaForPane(paneId)
+    }
+    return
+  }
+
+  ensureSurfacePaneSwitchControls()
+
+  for (const paneId of SURFACE_BETA_PANE_IDS) {
+    const button = paneSwitchButtons.get(paneId)
+    if (!button) continue
+
+    const mode = getEligibleSurfaceModeForPane(paneId)
+    if (!mode) {
+      button.hidden = true
+      button.classList.remove('active')
+      paneSurfaceSwitchState.set(paneId, false)
+      unmountSurfaceBetaForPane(paneId)
+      continue
+    }
+
+    button.hidden = false
+    const active = paneSurfaceSwitchState.get(paneId) === true
+    button.classList.toggle('active', active)
+    button.setAttribute('aria-pressed', active ? 'true' : 'false')
+    if (mode === 'nerve') {
+      button.title = active
+        ? 'nerve plugin active (original editor)'
+        : 'enable nerve plugin (original editor)'
+    } else {
+      button.title = active
+        ? `switch to original editor (${mode})`
+        : `switch to surface (${mode})`
+    }
+
+    if (mode === 'nerve') {
+      // Nerve files keep the original editor path even when surface toggle is active.
+      unmountSurfaceBetaForPane(paneId)
+      continue
+    }
+
+    if (active) {
+      mountSurfaceBetaForPane(paneId)
+    } else {
+      unmountSurfaceBetaForPane(paneId)
+    }
+  }
+}
+
+function startSurfacePaneSwitchPolling() {
+  if (surfacePaneSwitchPollTimer != null) return
+  surfacePaneSwitchPollTimer = window.setInterval(() => {
+    refreshSurfacePaneSwitchUi()
+  }, 220)
+}
+
+function stopSurfacePaneSwitchPolling() {
+  if (surfacePaneSwitchPollTimer == null) return
+  window.clearInterval(surfacePaneSwitchPollTimer)
+  surfacePaneSwitchPollTimer = null
+}
+
+function buildSurfaceBetaDom(shell) {
+  const root = document.createElement('div')
+  root.className = 'surface-beta-shell'
+
+  const toolbar = document.createElement('div')
+  toolbar.className = 'surface-beta-toolbar'
+
+  const badge = document.createElement('span')
+  badge.className = 'surface-beta-badge'
+  badge.textContent = 'surface beta'
+
+  const status = document.createElement('span')
+  status.className = 'surface-beta-status'
+  status.dataset.state = 'starting'
+  status.textContent = 'starting'
+
+  const metrics = document.createElement('span')
+  metrics.className = 'surface-beta-metrics'
+
+  const telemetry = document.createElement('span')
+  telemetry.className = 'surface-beta-telemetry'
+
+  const diagnostics = document.createElement('div')
+  diagnostics.className = 'surface-beta-diagnostics'
+  diagnostics.hidden = true
+
+  const jsonBuilder = document.createElement('div')
+  jsonBuilder.className = 'surface-beta-json-builder'
+  jsonBuilder.hidden = true
+
+  const jsonInlineEditor = document.createElement('div')
+  jsonInlineEditor.className = 'surface-beta-json-inline-editor'
+  jsonInlineEditor.hidden = true
+
+  const jsonInlineEditorLabel = document.createElement('span')
+  jsonInlineEditorLabel.className = 'surface-beta-json-inline-label'
+
+  const jsonInlineEditorKeyInput = document.createElement('input')
+  jsonInlineEditorKeyInput.className = 'surface-beta-json-inline-input'
+  jsonInlineEditorKeyInput.type = 'text'
+  jsonInlineEditorKeyInput.placeholder = 'key'
+
+  const jsonInlineEditorType = document.createElement('select')
+  jsonInlineEditorType.className = 'surface-beta-json-inline-select'
+  ;[
+    ['json', 'json'],
+    ['string', 'string'],
+    ['number', 'number'],
+    ['boolean', 'boolean'],
+    ['null', 'null'],
+  ].forEach(([value, label]) => {
+    const option = document.createElement('option')
+    option.value = value
+    option.textContent = label
+    jsonInlineEditorType.appendChild(option)
+  })
+
+  const jsonInlineEditorValueInput = document.createElement('input')
+  jsonInlineEditorValueInput.className = 'surface-beta-json-inline-input'
+  jsonInlineEditorValueInput.type = 'text'
+  jsonInlineEditorValueInput.placeholder = 'value'
+
+  const jsonInlineApplyBtn = document.createElement('button')
+  jsonInlineApplyBtn.type = 'button'
+  jsonInlineApplyBtn.className = 'surface-beta-json-inline-btn'
+  jsonInlineApplyBtn.textContent = 'apply'
+
+  const jsonInlineCancelBtn = document.createElement('button')
+  jsonInlineCancelBtn.type = 'button'
+  jsonInlineCancelBtn.className = 'surface-beta-json-inline-btn'
+  jsonInlineCancelBtn.textContent = 'cancel'
+
+  jsonInlineEditor.appendChild(jsonInlineEditorLabel)
+  jsonInlineEditor.appendChild(jsonInlineEditorKeyInput)
+  jsonInlineEditor.appendChild(jsonInlineEditorType)
+  jsonInlineEditor.appendChild(jsonInlineEditorValueInput)
+  jsonInlineEditor.appendChild(jsonInlineApplyBtn)
+  jsonInlineEditor.appendChild(jsonInlineCancelBtn)
+
+  toolbar.appendChild(badge)
+  toolbar.appendChild(status)
+  toolbar.appendChild(metrics)
+  toolbar.appendChild(telemetry)
+
+  const editorInput = document.createElement('textarea')
+  editorInput.className = 'surface-beta-input'
+  editorInput.spellcheck = false
+  editorInput.wrap = 'soft'
+  editorInput.placeholder = '# Surface beta editor enabled for pane A'
+
+  const preview = document.createElement('div')
+  preview.className = 'surface-beta-preview'
+  preview.hidden = true
+
+  root.appendChild(toolbar)
+  root.appendChild(diagnostics)
+  root.appendChild(jsonBuilder)
+  root.appendChild(jsonInlineEditor)
+  root.appendChild(editorInput)
+  root.appendChild(preview)
+  shell.appendChild(root)
+
+  return {
+    root,
+    toolbar,
+    status,
+    metrics,
+    telemetry,
+    preview,
+    diagnostics,
+    jsonBuilder,
+    jsonInlineEditor,
+    jsonInlineEditorLabel,
+    jsonInlineEditorKeyInput,
+    jsonInlineEditorType,
+    jsonInlineEditorValueInput,
+    jsonInlineApplyBtn,
+    jsonInlineCancelBtn,
+    editorInput,
+  }
+}
+
+function mountSurfaceBetaForPane(paneId) {
+  const resolvedPaneId = SURFACE_BETA_PANE_IDS.includes(String(paneId ?? '').trim().toUpperCase())
+    ? String(paneId).trim().toUpperCase()
+    : 'A'
+
+  if (paneBindings.has(resolvedPaneId)) {
+    return true
+  }
+
+  const shell = getPaneEditorShell(resolvedPaneId)
+  const legacyTextarea = getPaneTextarea(resolvedPaneId)
+  if (!shell || !legacyTextarea) {
+    return false
+  }
+
+  const dom = buildSurfaceBetaDom(shell)
+  applySurfaceTelemetryVisibility(dom)
+  const surface = new Surface({ text: legacyTextarea.value })
+  const renderer = new Renderer()
+  const diagnosticsChannel = new DiagnosticsChannel()
+  const markdownPlugin = createMarkdownPlugin({ previewEnabled: true })
+  const jsonPlugin = createJsonPlugin({ trailingNewline: false, indent: 2 })
+  const detachMarkdown = markdownPlugin.attach({ surface, renderer })
+  const detachJson = jsonPlugin.attach({ surface, diagnosticsChannel })
+  const telemetry = createSurfaceTelemetry()
+  publishSurfaceTelemetrySnapshot(telemetry)
+
+  let syncingFromLegacy = false
+  let syncingFromSurface = false
+  let activeMode = 'markdown'
+  let jsonInlineDraft = null
+  let lastPanePath = normalizePathForModeTracking(getPaneTrackedPath(resolvedPaneId))
+  const suppressScrollSync = new WeakSet()
+
+  function normalizePathForModeTracking(path) {
+    return String(path ?? '').trim()
+  }
+
+  function syncModeFromPathOrContent(options = {}) {
+    const forceContentFallback = options.forceContentFallback === true
+    const currentPanePath = normalizePathForModeTracking(getPaneTrackedPath(resolvedPaneId))
+    const pathChanged = currentPanePath !== lastPanePath
+    const currentPathMode = inferModeFromPath(currentPanePath)
+    if (pathChanged) {
+      lastPanePath = currentPanePath
+      if (currentPathMode) {
+        setMode(currentPathMode)
+        return
+      }
+    }
+
+    if (forceContentFallback) {
+      if (currentPathMode) {
+        setMode(currentPathMode)
+        return
+      }
+      setMode(inferModeFromContent(surface.getText()))
+    }
+  }
+
+  function getScrollRatio(element) {
+    if (!element) return 0
+    const max = Math.max(0, element.scrollHeight - element.clientHeight)
+    if (max <= 0) return 0
+    return Math.max(0, Math.min(1, element.scrollTop / max))
+  }
+
+  function getLineHeightForEditor() {
+    const style = window.getComputedStyle(dom.editorInput)
+    const lineHeight = Number.parseFloat(style.lineHeight)
+    if (Number.isFinite(lineHeight) && lineHeight > 0) {
+      return lineHeight
+    }
+    const fontSize = Number.parseFloat(style.fontSize)
+    if (Number.isFinite(fontSize) && fontSize > 0) {
+      return fontSize * 1.5
+    }
+    return 20
+  }
+
+  function getLineIndexForOffset(text, offset) {
+    const offsets = buildLineOffsets(text)
+    const clampedOffset = Math.max(0, Math.min(Number.isInteger(offset) ? offset : 0, String(text ?? '').length))
+
+    let low = 0
+    let high = Math.max(0, offsets.length - 1)
+    let best = 0
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2)
+      if ((offsets[mid] ?? 0) <= clampedOffset) {
+        best = mid
+        low = mid + 1
+      } else {
+        high = mid - 1
+      }
+    }
+
+    return best
+  }
+
+  function getTopOffsetForEditor(text) {
+    const lineHeight = Math.max(1, getLineHeightForEditor())
+    const topLine = Math.max(0, Math.floor(dom.editorInput.scrollTop / lineHeight))
+    const offsets = buildLineOffsets(text)
+    return offsets[Math.min(offsets.length - 1, topLine)] ?? 0
+  }
+
+  function setScrollTop(element, scrollTop) {
+    if (!element) return
+    suppressScrollSync.add(element)
+    element.scrollTop = Math.max(0, Number.isFinite(scrollTop) ? scrollTop : 0)
+    window.requestAnimationFrame(() => {
+      suppressScrollSync.delete(element)
+    })
+  }
+
+  function findTopVisibleJsonBuilderRow() {
+    const rows = dom.jsonBuilder.querySelectorAll('.surface-beta-json-row[data-path]')
+    if (!rows.length) return null
+    const top = dom.jsonBuilder.getBoundingClientRect().top + 1
+
+    for (const row of rows) {
+      const rect = row.getBoundingClientRect()
+      if (rect.bottom > top) {
+        return row
+      }
+    }
+
+    return rows[rows.length - 1]
+  }
+
+  function syncJsonBuilderFromEditorAnchored() {
+    if (dom.jsonBuilder.hidden) return
+    if (suppressScrollSync.has(dom.editorInput)) return
+
+    const topLine = Math.max(1, Math.floor(dom.editorInput.scrollTop / Math.max(1, getLineHeightForEditor())) + 1)
+    const rows = dom.jsonBuilder.querySelectorAll('.surface-beta-json-row[data-line]')
+    if (!rows.length) return
+
+    let row = null
+    for (const candidate of rows) {
+      const line = Number(candidate.dataset.line)
+      if (Number.isFinite(line) && line >= topLine) {
+        row = candidate
+        break
+      }
+    }
+    if (!row) {
+      row = rows[rows.length - 1]
+    }
+
+    const nextTop = Math.max(0, row.offsetTop - 4)
+    setScrollTop(dom.jsonBuilder, nextTop)
+  }
+
+  function syncEditorFromJsonBuilderAnchored() {
+    if (dom.jsonBuilder.hidden) return
+    if (suppressScrollSync.has(dom.jsonBuilder)) return
+
+    const row = findTopVisibleJsonBuilderRow()
+    if (!row) return
+
+    const parsedLine = Number(row.dataset.line)
+    const lineNumber = Number.isFinite(parsedLine) && parsedLine > 0 ? parsedLine : 1
+    const nextTop = Math.max(0, (lineNumber - 1) * getLineHeightForEditor())
+    setScrollTop(dom.editorInput, nextTop)
+  }
+
+  function setScrollRatio(element, ratio) {
+    if (!element) return
+    const max = Math.max(0, element.scrollHeight - element.clientHeight)
+    const nextTop = max <= 0 ? 0 : Math.round(max * Math.max(0, Math.min(1, ratio)))
+    setScrollTop(element, nextTop)
+  }
+
+  function syncScroll(source, target) {
+    if (!source || !target) return
+    if (suppressScrollSync.has(source)) return
+    setScrollRatio(target, getScrollRatio(source))
+  }
+
+  function syncPartnerScrollFromEditor() {
+    if (activeMode === 'markdown') {
+      if (dom.preview.hidden) return
+      syncScroll(dom.editorInput, dom.preview)
+      return
+    }
+
+    if (activeMode === 'json') {
+      syncJsonBuilderFromEditorAnchored()
+    }
+  }
+
+  function renderPreview(text) {
+    if (activeMode === 'markdown') {
+      dom.preview.hidden = false
+      dom.preview.innerHTML = markdownPlugin.renderPreview(text)
+      return
+    }
+
+    dom.preview.hidden = true
+    dom.preview.innerHTML = ''
+  }
+
+  function tryParsePath(value) {
+    try {
+      const parsed = JSON.parse(String(value ?? '[]'))
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+
+  function createJsonNodeRow({
+    path,
+    keyLabel,
+    value,
+    lineNumber,
+    depth,
+    parentType,
+    parentPath,
+    parentKey,
+  }) {
+    const row = document.createElement('div')
+    row.className = 'surface-beta-json-row'
+    row.style.paddingLeft = `${Math.max(0, depth) * 14 + 8}px`
+    row.dataset.path = JSON.stringify(path)
+    row.dataset.line = String(Math.max(1, Number.isInteger(lineNumber) ? lineNumber : 1))
+
+    if (keyLabel) {
+      const title = document.createElement('span')
+      title.className = 'surface-beta-json-row-title'
+      title.textContent = keyLabel
+      if (parentType === 'object' && typeof parentKey === 'string') {
+        title.classList.add('is-clickable')
+        title.dataset.jsonInlineAction = 'rename-key'
+        title.dataset.parentPath = JSON.stringify(parentPath ?? [])
+        title.dataset.key = parentKey
+      }
+      row.appendChild(title)
+    }
+
+    const isArray = Array.isArray(value)
+    const isObject = value && typeof value === 'object' && !isArray
+
+    const valuePreview = document.createElement('span')
+    valuePreview.className = 'surface-beta-json-row-value'
+    if (isArray || isObject) {
+      valuePreview.textContent = ''
+    } else if (typeof value === 'string') {
+      valuePreview.textContent = value.length > 36 ? `${value.slice(0, 36)}...` : value
+      valuePreview.classList.add('is-clickable')
+      valuePreview.dataset.jsonInlineAction = 'set-value'
+      valuePreview.dataset.path = JSON.stringify(path)
+      valuePreview.dataset.valueType = 'string'
+      valuePreview.dataset.valueRaw = value
+    } else {
+      valuePreview.textContent = String(value)
+    }
+    row.appendChild(valuePreview)
+
+    const actions = document.createElement('div')
+    actions.className = 'surface-beta-json-row-actions'
+
+    const addAction = (label, actionName, extra = {}) => {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'surface-beta-json-row-btn'
+      btn.textContent = label
+      btn.dataset.jsonAction = actionName
+      btn.dataset.path = JSON.stringify(path)
+      btn.dataset.parentPath = JSON.stringify(parentPath ?? [])
+      btn.dataset.parentType = String(parentType ?? '')
+      if (typeof parentKey === 'string' || Number.isInteger(parentKey)) {
+        btn.dataset.parentKey = String(parentKey)
+      }
+      for (const [key, extraValue] of Object.entries(extra)) {
+        btn.dataset[key] = String(extraValue)
+      }
+      actions.appendChild(btn)
+    }
+
+    if (isObject) {
+      addAction('+prop', 'add-property')
+    }
+    if (isArray) {
+      addAction('+item', 'add-item')
+    }
+
+    if (!isObject && !isArray) {
+      if (typeof value === 'boolean') {
+        addAction('toggle', 'toggle-bool')
+      }
+    }
+
+    if (parentType === 'object' && typeof parentKey === 'string') {
+      addAction('remove', 'remove-property', { key: parentKey })
+    }
+
+    if (parentType === 'array' && Number.isInteger(parentKey)) {
+      addAction('remove', 'remove-item', { index: parentKey })
+    }
+
+    row.appendChild(actions)
+    return row
+  }
+
+  function renderJsonBuilderNode(container, node, path, depth, relation = {}, lineLookup = null) {
+    const keyLabel = relation.kind === 'object'
+      ? String(relation.key)
+      : (relation.kind === 'array' ? '' : '$')
+    const pathKey = JSON.stringify(path)
+    const lineNumber = lineLookup instanceof Map
+      ? (lineLookup.get(pathKey) ?? 1)
+      : 1
+
+    container.appendChild(createJsonNodeRow({
+      path,
+      keyLabel,
+      value: node,
+      lineNumber,
+      depth,
+      parentType: relation.kind ?? '',
+      parentPath: relation.parentPath ?? [],
+      parentKey: relation.key,
+    }))
+
+    if (Array.isArray(node)) {
+      for (let index = 0; index < node.length; index += 1) {
+        renderJsonBuilderNode(container, node[index], [...path, index], depth + 1, {
+          kind: 'array',
+          parentPath: path,
+          key: index,
+        }, lineLookup)
+      }
+      return
+    }
+
+    if (node && typeof node === 'object') {
+      for (const [key, value] of Object.entries(node)) {
+        renderJsonBuilderNode(container, value, [...path, key], depth + 1, {
+          kind: 'object',
+          parentPath: path,
+          key,
+        }, lineLookup)
+      }
+    }
+  }
+
+  function renderJsonBuilder(text) {
+    if (activeMode !== 'json') {
+      dom.jsonBuilder.hidden = true
+      dom.jsonBuilder.innerHTML = ''
+      closeJsonInlineEditor()
+      return
+    }
+
+    dom.jsonBuilder.hidden = false
+    dom.jsonBuilder.innerHTML = ''
+
+    let parsed
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      const hint = document.createElement('div')
+      hint.className = 'surface-beta-json-builder-empty'
+      hint.textContent = 'builder disabled until JSON is valid'
+      dom.jsonBuilder.appendChild(hint)
+      return
+    }
+
+    const lineLookup = buildJsonPathLineLookup(text)
+    renderJsonBuilderNode(dom.jsonBuilder, parsed, [], 0, { kind: 'root', key: '$', parentPath: [] }, lineLookup)
+  }
+
+  function setStatus(status, reason = '') {
+    telemetry.status = status
+    telemetry.statusReason = reason
+    dom.status.dataset.state = status
+    dom.status.textContent = reason ? `${status}: ${reason}` : status
+    publishSurfaceTelemetrySnapshot(telemetry)
+  }
+
+  function recordError(error, reason) {
+    telemetry.counters.errors += 1
+    const message = String(error?.message ?? reason ?? 'error')
+    setStatus('error', message)
+  }
+
+  function renderSurfaceMetrics() {
+    const text = surface.getText()
+    telemetry.lengths.surfaceText = text.length
+    telemetry.lengths.legacyText = legacyTextarea.value.length
+    telemetry.lengths.driftChars = Math.abs(telemetry.lengths.surfaceText - telemetry.lengths.legacyText)
+    const lineCount = text.length === 0 ? 1 : text.split('\n').length
+    const tokenCount = activeMode === 'json'
+      ? tokenizeJson(text).length
+      : renderer.getTokens().length
+    dom.metrics.textContent = `${lineCount} lines, ${tokenCount} tokens, drift ${telemetry.lengths.driftChars}`
+
+    const uptimeSeconds = Math.max(0, Math.floor((Date.now() - telemetry.mountedAt) / 1000))
+    const sinceLastSyncMs = telemetry.lastSyncAt > 0 ? Date.now() - telemetry.lastSyncAt : -1
+    const syncAgeLabel = sinceLastSyncMs >= 0 ? `${sinceLastSyncMs}ms ago` : 'n/a'
+    dom.telemetry.textContent = [
+      `src=${telemetry.lastSyncSource}`,
+      `mode=${activeMode}`,
+      `legacy->surface=${telemetry.counters.legacyToSurfaceSync}`,
+      `surface->legacy=${telemetry.counters.surfaceToLegacySync}`,
+      `errors=${telemetry.counters.errors}`,
+      `last=${syncAgeLabel}`,
+      `up=${uptimeSeconds}s`,
+    ].join(' | ')
+
+    publishSurfaceTelemetrySnapshot(telemetry)
+  }
+
+  function syncSurfaceToDom(statusReason = 'surface active') {
+    let text = ''
+    try {
+      text = surface.getText()
+    } catch (error) {
+      recordError(error, 'surface read failed')
+      return
+    }
+    telemetry.lastSyncAt = Date.now()
+    telemetry.lastSyncSource = 'surface'
+    telemetry.counters.surfaceToLegacySync += 1
+
+    if (dom.editorInput.value !== text) {
+      const selection = surface.getSelection()
+      dom.editorInput.value = text
+      dom.editorInput.setSelectionRange(selection.start, selection.end)
+    }
+
+    if (legacyTextarea.value !== text) {
+      try {
+        syncingFromSurface = true
+        legacyTextarea.value = text
+        legacyTextarea.dispatchEvent(new Event('input', { bubbles: true }))
+      } catch (error) {
+        recordError(error, 'legacy sync failed')
+      } finally {
+        syncingFromSurface = false
+      }
+    }
+
+    renderPreview(text)
+    renderJsonBuilder(text)
+    syncPartnerScrollFromEditor()
+
+    setStatus('live', statusReason)
+    renderSurfaceMetrics()
+  }
+
+  function syncLegacyToSurface() {
+    if (syncingFromSurface) {
+      return
+    }
+
+    const value = legacyTextarea.value
+    syncModeFromPathOrContent()
+    if (value === surface.getText()) {
+      telemetry.counters.syncPollTicks += 1
+      return
+    }
+
+    setStatus('syncing', 'legacy -> surface')
+    try {
+      syncingFromLegacy = true
+      telemetry.lastSyncAt = Date.now()
+      telemetry.lastSyncSource = 'legacy'
+      telemetry.counters.legacyToSurfaceSync += 1
+      surface.setText(value)
+    } catch (error) {
+      recordError(error, 'surface sync failed')
+    } finally {
+      syncingFromLegacy = false
+    }
+  }
+
+  const onLegacyInput = () => {
+    telemetry.counters.legacyInput += 1
+    syncLegacyToSurface()
+  }
+
+  const onSurfaceChange = () => {
+    syncSurfaceToDom(syncingFromLegacy ? 'legacy mirrored' : 'surface active')
+  }
+
+  const onSurfaceInput = () => {
+    if (activeMode === 'json') {
+      return
+    }
+    if (syncingFromSurface) {
+      return
+    }
+    telemetry.counters.surfaceInput += 1
+    setStatus('syncing', 'surface -> legacy')
+    try {
+      surface.setSelection(dom.editorInput.selectionStart, dom.editorInput.selectionEnd)
+      surface.setText(dom.editorInput.value)
+    } catch (error) {
+      recordError(error, 'surface write failed')
+    }
+  }
+
+  const onSurfaceClick = async () => {
+    if (dom.editorInput.selectionStart !== dom.editorInput.selectionEnd) return
+
+    const text = String(dom.editorInput.value ?? '')
+    const primaryOffset = Number(dom.editorInput.selectionStart)
+    const candidateOffsets = [primaryOffset, Math.max(0, primaryOffset - 1)]
+
+    for (const offset of candidateOffsets) {
+      const opened = await openEditorClickTargetAtOffset(text, offset)
+      if (opened) return
+    }
+  }
+
+  const onSurfaceKeyDown = (event) => {
+    const isCommandKey = event.ctrlKey || event.metaKey
+    if (!isCommandKey || event.altKey) {
+      return
+    }
+
+    if (event.key.toLowerCase() === 'z') {
+      event.preventDefault()
+      if (event.shiftKey) {
+        surface.redo()
+      } else {
+        surface.undo()
+      }
+      syncSurfaceToDom()
+      return
+    }
+
+    if (event.key.toLowerCase() === 'y') {
+      event.preventDefault()
+      surface.redo()
+      syncSurfaceToDom()
+      return
+    }
+
+    if (event.key.toLowerCase() === 'b' && activeMode === 'markdown') {
+      event.preventDefault()
+      telemetry.counters.commandWrapBold += 1
+      try {
+        surface.setSelection(dom.editorInput.selectionStart, dom.editorInput.selectionEnd)
+        surface.dispatchCommand('markdown.wrapBold')
+        syncSurfaceToDom()
+      } catch (error) {
+        recordError(error, 'bold command failed')
+      }
+      return
+    }
+
+    if (event.key.toLowerCase() === 'i' && activeMode === 'markdown') {
+      event.preventDefault()
+      telemetry.counters.commandWrapItalic += 1
+      try {
+        surface.setSelection(dom.editorInput.selectionStart, dom.editorInput.selectionEnd)
+        surface.dispatchCommand('markdown.wrapItalic')
+        syncSurfaceToDom()
+      } catch (error) {
+        recordError(error, 'italic command failed')
+      }
+      return
+    }
+
+  }
+
+  function renderDiagnostics() {
+    const diagnostics = diagnosticsChannel.getDiagnostics()
+    if (activeMode !== 'json') {
+      dom.diagnostics.hidden = true
+      dom.diagnostics.textContent = ''
+      return
+    }
+
+    if (diagnostics.length === 0) {
+      dom.diagnostics.hidden = false
+      dom.diagnostics.dataset.level = 'ok'
+      dom.diagnostics.textContent = 'json diagnostics: clean'
+      return
+    }
+
+    const first = diagnostics[0]
+    dom.diagnostics.hidden = false
+    dom.diagnostics.dataset.level = first.severity === 'error' ? 'error' : 'warn'
+    dom.diagnostics.textContent = `json diagnostics: ${first.severity} L${first.line}:C${first.column} ${first.message}`
+  }
+
+  function setMode(nextMode) {
+    activeMode = nextMode === 'json'
+      ? 'json'
+      : (nextMode === 'nerve' ? 'nerve' : 'markdown')
+    const useOriginalEditor = activeMode === 'nerve'
+    dom.root.hidden = useOriginalEditor
+    shell.classList.toggle('surface-beta-enabled', !useOriginalEditor)
+    dom.editorInput.readOnly = activeMode === 'json'
+    dom.editorInput.wrap = activeMode === 'json' ? 'off' : 'soft'
+    dom.editorInput.classList.toggle('is-json-output', activeMode === 'json')
+    if (activeMode !== 'json') {
+      closeJsonInlineEditor()
+    }
+    renderDiagnostics()
+    renderPreview(surface.getText())
+    renderJsonBuilder(surface.getText())
+    syncPartnerScrollFromEditor()
+    renderSurfaceMetrics()
+  }
+
+  function parseJsonPromptValue(inputValue) {
+    const raw = String(inputValue ?? '').trim()
+    if (!raw) return null
+    try {
+      return JSON.parse(raw)
+    } catch {
+      return raw
+    }
+  }
+
+  function parseJsonInlineValue() {
+    const type = String(dom.jsonInlineEditorType.value ?? 'json')
+    const raw = String(dom.jsonInlineEditorValueInput.value ?? '')
+    if (type === 'null') return null
+    if (type === 'string') return raw
+    if (type === 'number') {
+      const numeric = Number(raw)
+      return Number.isFinite(numeric) ? numeric : 0
+    }
+    if (type === 'boolean') {
+      return String(raw).trim().toLowerCase() === 'true'
+    }
+    return parseJsonPromptValue(raw)
+  }
+
+  function closeJsonInlineEditor() {
+    jsonInlineDraft = null
+    dom.jsonInlineEditor.hidden = true
+    dom.jsonInlineEditorLabel.textContent = ''
+    dom.jsonInlineEditorKeyInput.value = ''
+    dom.jsonInlineEditorValueInput.value = ''
+  }
+
+  function openJsonInlineEditor(draft) {
+    jsonInlineDraft = draft
+    dom.jsonInlineEditor.hidden = false
+    dom.jsonInlineEditorLabel.textContent = String(draft?.label ?? 'edit')
+    dom.jsonInlineEditorKeyInput.hidden = draft?.needsKey !== true
+    dom.jsonInlineEditorType.hidden = draft?.needsValue !== true
+    dom.jsonInlineEditorValueInput.hidden = draft?.needsValue !== true
+    dom.jsonInlineEditorKeyInput.value = String(draft?.keyValue ?? '')
+    dom.jsonInlineEditorValueInput.value = String(draft?.valueRaw ?? '')
+    dom.jsonInlineEditorType.value = String(draft?.valueType ?? 'json')
+    if (draft?.needsKey === true) {
+      dom.jsonInlineEditorKeyInput.focus()
+      dom.jsonInlineEditorKeyInput.select()
+    } else if (draft?.needsValue === true) {
+      dom.jsonInlineEditorValueInput.focus()
+      dom.jsonInlineEditorValueInput.select()
+    }
+  }
+
+  function applyJsonInlineEditor() {
+    if (!jsonInlineDraft) {
+      return
+    }
+
+    const draft = jsonInlineDraft
+    const keyValue = String(dom.jsonInlineEditorKeyInput.value ?? '').trim()
+    const value = parseJsonInlineValue()
+
+    withJsonMode(() => {
+      if (draft.action === 'add-property') {
+        if (!keyValue) return
+        surface.dispatchCommand('json.addProperty', { path: draft.path, key: keyValue, value })
+      } else if (draft.action === 'rename-key') {
+        if (!keyValue || keyValue === draft.key) return
+        surface.dispatchCommand('json.renameKey', { path: draft.parentPath, fromKey: draft.key, toKey: keyValue })
+      } else if (draft.action === 'set-value') {
+        surface.dispatchCommand('json.setValue', { path: draft.path, value })
+      } else if (draft.action === 'add-item') {
+        surface.dispatchCommand('json.addArrayItem', { path: draft.path, value })
+      }
+    })
+
+    closeJsonInlineEditor()
+  }
+
+  function withJsonMode(operation) {
+    if (activeMode !== 'json') {
+      setMode('json')
+    }
+    try {
+      operation()
+    } catch (error) {
+      recordError(error, 'json control failed')
+    } finally {
+      syncSurfaceToDom()
+      renderDiagnostics()
+    }
+  }
+
+  const onJsonBuilderClick = (event) => {
+    const actionButton = event.target.closest('[data-json-action]')
+    if (!actionButton) {
+      const inlineTarget = event.target.closest('[data-json-inline-action]')
+      if (!inlineTarget) {
+        return
+      }
+
+      const inlineAction = String(inlineTarget.dataset.jsonInlineAction ?? '').trim()
+      if (inlineAction === 'rename-key') {
+        const inlineParentPath = tryParsePath(inlineTarget.dataset.parentPath)
+        const inlineKey = String(inlineTarget.dataset.key ?? '').trim()
+        if (!inlineKey) return
+        openJsonInlineEditor({
+          action: 'rename-key',
+          label: `rename ${inlineKey}`,
+          parentPath: inlineParentPath,
+          key: inlineKey,
+          needsKey: true,
+          keyValue: inlineKey,
+          needsValue: false,
+        })
+        return
+      }
+
+      if (inlineAction === 'set-value') {
+        const inlinePath = tryParsePath(inlineTarget.dataset.path)
+        const inlineValueType = String(inlineTarget.dataset.valueType ?? 'json')
+        const inlineValueRaw = String(inlineTarget.dataset.valueRaw ?? '')
+        openJsonInlineEditor({
+          action: 'set-value',
+          label: 'set value',
+          path: inlinePath,
+          needsKey: false,
+          needsValue: true,
+          valueType: inlineValueType,
+          valueRaw: inlineValueRaw,
+        })
+      }
+
+      return
+    }
+
+    const action = String(actionButton.dataset.jsonAction ?? '').trim()
+    const path = tryParsePath(actionButton.dataset.path)
+    const parentPath = tryParsePath(actionButton.dataset.parentPath)
+    const key = String(actionButton.dataset.key ?? '').trim()
+    const index = Number(actionButton.dataset.index)
+
+    if (action === 'add-property') {
+      openJsonInlineEditor({
+        action,
+        label: 'add property',
+        path,
+        needsKey: true,
+        needsValue: true,
+        valueType: 'json',
+        valueRaw: '{}',
+      })
+      return
+    }
+
+    if (action === 'rename-key') {
+      if (!key) return
+      openJsonInlineEditor({
+        action,
+        label: `rename ${key}`,
+        parentPath,
+        key,
+        needsKey: true,
+        keyValue: key,
+        needsValue: false,
+      })
+      return
+    }
+
+    if (action === 'set-value') {
+      openJsonInlineEditor({
+        action,
+        label: 'set value',
+        path,
+        needsKey: false,
+        needsValue: true,
+        valueType: 'json',
+        valueRaw: 'null',
+      })
+      return
+    }
+
+    if (action === 'add-item') {
+      openJsonInlineEditor({
+        action,
+        label: 'add array item',
+        path,
+        needsKey: false,
+        needsValue: true,
+        valueType: 'json',
+        valueRaw: 'null',
+      })
+      return
+    }
+
+    withJsonMode(() => {
+      if (action === 'remove-property') {
+        if (!key) return
+        surface.dispatchCommand('json.removeProperty', { path: parentPath, key })
+        return
+      }
+
+      if (action === 'toggle-bool') {
+        surface.dispatchCommand('json.toggleBoolean', { path })
+        return
+      }
+
+      if (action === 'remove-item') {
+        if (!Number.isInteger(index)) return
+        surface.dispatchCommand('json.removeArrayItem', { path: parentPath, index })
+      }
+    })
+  }
+
+  const onJsonInlineApply = () => {
+    applyJsonInlineEditor()
+  }
+
+  const onJsonInlineCancel = () => {
+    closeJsonInlineEditor()
+  }
+
+  const onJsonInlineKeyDown = (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      applyJsonInlineEditor()
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeJsonInlineEditor()
+    }
+  }
+
+  const onEditorScroll = () => {
+    syncPartnerScrollFromEditor()
+  }
+
+  const onPreviewScroll = () => {
+    if (activeMode !== 'markdown' || dom.preview.hidden) {
+      return
+    }
+    syncScroll(dom.preview, dom.editorInput)
+  }
+
+  const onJsonBuilderScroll = () => {
+    if (activeMode !== 'json' || dom.jsonBuilder.hidden) {
+      return
+    }
+    syncEditorFromJsonBuilderAnchored()
+  }
+
+  legacyTextarea.addEventListener('input', onLegacyInput)
+  dom.editorInput.addEventListener('input', onSurfaceInput)
+  dom.editorInput.addEventListener('click', onSurfaceClick)
+  dom.editorInput.addEventListener('keydown', onSurfaceKeyDown)
+  dom.editorInput.addEventListener('scroll', onEditorScroll)
+  dom.preview.addEventListener('scroll', onPreviewScroll)
+  dom.jsonBuilder.addEventListener('scroll', onJsonBuilderScroll)
+  dom.jsonBuilder.addEventListener('click', onJsonBuilderClick)
+  dom.jsonInlineApplyBtn.addEventListener('click', onJsonInlineApply)
+  dom.jsonInlineCancelBtn.addEventListener('click', onJsonInlineCancel)
+  dom.jsonInlineEditorKeyInput.addEventListener('keydown', onJsonInlineKeyDown)
+  dom.jsonInlineEditorValueInput.addEventListener('keydown', onJsonInlineKeyDown)
+
+  const unsubscribeSurface = surface.on('change', onSurfaceChange)
+  const unsubscribeDiagnostics = diagnosticsChannel.subscribe(() => {
+    renderDiagnostics()
+  })
+
+  // Capture programmatic textarea updates that bypass input events.
+  const syncTimer = window.setInterval(syncLegacyToSurface, 180)
+  const telemetryTimer = window.setInterval(() => {
+    telemetry.counters.syncPollTicks += 1
+    renderSurfaceMetrics()
+  }, 1000)
+
+  syncModeFromPathOrContent({ forceContentFallback: true })
+  renderDiagnostics()
+  syncSurfaceToDom()
+
+  const paneBinding = {
+    paneId: resolvedPaneId,
+    shell,
+    dom,
+    detachMarkdown,
+    detachJson,
+    unsubscribeSurface,
+    unsubscribeDiagnostics,
+    syncTimer,
+    telemetryTimer,
+    onLegacyInput,
+    onSurfaceInput,
+    onSurfaceClick,
+    onSurfaceKeyDown,
+    onEditorScroll,
+    onPreviewScroll,
+    onJsonBuilderScroll,
+    onJsonBuilderClick,
+    onJsonInlineApply,
+    onJsonInlineCancel,
+    onJsonInlineKeyDown,
+    legacyTextarea,
+    setStatus,
+    telemetry,
+  }
+
+  paneBindings.set(resolvedPaneId, paneBinding)
+
+  return true
+}
+
+function unmountSurfaceBetaForPane(paneId) {
+  const resolvedPaneId = SURFACE_BETA_PANE_IDS.includes(String(paneId ?? '').trim().toUpperCase())
+    ? String(paneId).trim().toUpperCase()
+    : 'A'
+  const paneBinding = paneBindings.get(resolvedPaneId)
+  if (!paneBinding) {
+    return
+  }
+
+  const {
+    shell,
+    dom,
+    detachMarkdown,
+    detachJson,
+    unsubscribeSurface,
+    unsubscribeDiagnostics,
+    syncTimer,
+    telemetryTimer,
+    onLegacyInput,
+    onSurfaceInput,
+    onSurfaceClick,
+    onSurfaceKeyDown,
+    onEditorScroll,
+    onPreviewScroll,
+    onJsonBuilderScroll,
+    onJsonBuilderClick,
+    onJsonInlineApply,
+    onJsonInlineCancel,
+    onJsonInlineKeyDown,
+    legacyTextarea,
+    setStatus,
+    telemetry,
+  } = paneBinding
+
+  window.clearInterval(syncTimer)
+  window.clearInterval(telemetryTimer)
+  legacyTextarea.removeEventListener('input', onLegacyInput)
+  dom.editorInput.removeEventListener('input', onSurfaceInput)
+  dom.editorInput.removeEventListener('click', onSurfaceClick)
+  dom.editorInput.removeEventListener('keydown', onSurfaceKeyDown)
+  dom.editorInput.removeEventListener('scroll', onEditorScroll)
+  dom.preview.removeEventListener('scroll', onPreviewScroll)
+  dom.jsonBuilder.removeEventListener('scroll', onJsonBuilderScroll)
+  dom.jsonBuilder.removeEventListener('click', onJsonBuilderClick)
+  dom.jsonInlineApplyBtn.removeEventListener('click', onJsonInlineApply)
+  dom.jsonInlineCancelBtn.removeEventListener('click', onJsonInlineCancel)
+  dom.jsonInlineEditorKeyInput.removeEventListener('keydown', onJsonInlineKeyDown)
+  dom.jsonInlineEditorValueInput.removeEventListener('keydown', onJsonInlineKeyDown)
+
+  if (typeof unsubscribeSurface === 'function') unsubscribeSurface()
+  if (typeof unsubscribeDiagnostics === 'function') unsubscribeDiagnostics()
+  if (typeof detachMarkdown === 'function') detachMarkdown()
+  if (typeof detachJson === 'function') detachJson()
+
+  setStatus('stopped', 'disabled')
+  publishSurfaceTelemetrySnapshot(telemetry)
+
+  shell.classList.remove('surface-beta-enabled')
+  dom.root.remove()
+  paneBindings.delete(resolvedPaneId)
+}
+
+export function setNextVEditorSurfaceBetaEnabled(enabled, options = {}) {
+  const nextEnabled = Boolean(enabled)
+  surfaceBetaEnabled = nextEnabled
+
+  if (nextVEditorSurfaceBetaToggle) {
+    nextVEditorSurfaceBetaToggle.checked = nextEnabled
+  }
+
+  if (nextEnabled) {
+    ensureSurfacePaneSwitchControls()
+    refreshSurfacePaneSwitchUi()
+    startSurfacePaneSwitchPolling()
+  } else {
+    stopSurfacePaneSwitchPolling()
+    for (const paneId of SURFACE_BETA_PANE_IDS) {
+      paneSurfaceSwitchState.set(paneId, false)
+      unmountSurfaceBetaForPane(paneId)
+    }
+    removeSurfacePaneSwitchControls()
+  }
+
+  if (options.persist !== false) {
+    persistSurfaceBetaEnabled(nextEnabled)
+  }
+
+  return surfaceBetaEnabled
+}
+
+export function setNextVEditorSurfaceTelemetryVisible(enabled, options = {}) {
+  const nextVisible = enabled !== false
+  surfaceTelemetryVisible = nextVisible
+
+  if (nextVEditorSurfaceTelemetryToggle) {
+    nextVEditorSurfaceTelemetryToggle.checked = nextVisible
+  }
+
+  for (const paneBinding of paneBindings.values()) {
+    applySurfaceTelemetryVisibility(paneBinding.dom)
+  }
+
+  if (options.persist !== false) {
+    persistSurfaceTelemetryVisible(nextVisible)
+  }
+
+  return surfaceTelemetryVisible
+}
+
+export function isNextVEditorSurfaceTelemetryVisible() {
+  return surfaceTelemetryVisible
+}
+
+export function isNextVEditorSurfaceBetaEnabled() {
+  return surfaceBetaEnabled
+}
+
+export function initNextVEditorSurfaceBeta() {
+  setNextVEditorSurfaceTelemetryVisible(readStoredSurfaceTelemetryVisible(), { persist: false })
+  const enabled = readStoredSurfaceBetaEnabled()
+  setNextVEditorSurfaceBetaEnabled(enabled, { persist: false })
+}
+
+// --- Imports (auto-generated by gen-es-modules.js) ---
+import {
+  nextVEventsOutput,
+} from './state.js'
+import {
+  openNextVCallInspectorForToken,
+} from './12_stream.js'
+
+let nextVTokenClickPluginBound = false
+
+export function initNextVTokenClickPlugin() {
+  if (!nextVEventsOutput || nextVTokenClickPluginBound) return
+  nextVTokenClickPluginBound = true
+
+  nextVEventsOutput.addEventListener('click', (event) => {
+    const target = event.target instanceof Element
+      ? event.target.closest('.exec-event-token[data-nerve-token-kind][data-nerve-token-value]')
+      : null
+    if (!target) return
+
+    const kind = String(target.dataset.nerveTokenKind ?? '').trim().toLowerCase()
+    const value = String(target.dataset.nerveTokenValue ?? '').trim()
+    if (!value || (kind !== 'agent' && kind !== 'model')) return
+
+    event.preventDefault()
+    openNextVCallInspectorForToken(kind, value, { focusPrompt: true }).catch(() => {})
+  })
+}

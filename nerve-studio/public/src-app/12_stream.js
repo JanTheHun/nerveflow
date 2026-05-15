@@ -1182,16 +1182,22 @@ export async function executeNextVCallInspector() {
   const retryRaw = Number(nextVCallRetryInput?.value)
   const retryCount = Number.isInteger(retryRaw) ? Math.max(0, Math.min(8, retryRaw)) : 0
 
+  function failInspectorValidation(message) {
+    renderNextVCallInspectorResolvedCall({ status: 'call inspector validation failed before runtime invocation' })
+    renderNextVCallInspectorResult({ error: message })
+    setStatus(message, 'responding')
+  }
+
   if (!target) {
-    setStatus('call inspector target is required', 'responding')
+    failInspectorValidation('call inspector target is required')
     return
   }
   if (!prompt.trim()) {
-    setStatus('call inspector prompt is required', 'responding')
+    failInspectorValidation('call inspector prompt is required')
     return
   }
   if (returnsText && decideText) {
-    setStatus('use either returns or decide, not both', 'responding')
+    failInspectorValidation('use either returns or decide, not both')
     return
   }
 
@@ -1214,7 +1220,7 @@ export async function executeNextVCallInspector() {
     try {
       requestBody.returns = JSON.parse(returnsText)
     } catch {
-      setStatus('returns contract must be valid JSON', 'responding')
+      failInspectorValidation('returns contract must be valid JSON')
       return
     }
   }

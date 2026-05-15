@@ -66,7 +66,81 @@ const result = await runNextVScript(source, {
 console.log(result.state)
 ```
 
-## 5. Run as a standalone runtime (optional)
+## 5. Model server (required for `agent()` calls)
+
+Workflows that use `agent(...)` calls need a local model server reachable over HTTP. Nerveflow supports two transports, selected by the `AGENT_TRANSPORT` environment variable (default: `ollama`).
+
+### Option A — Ollama (default, easiest)
+
+**Install:**
+
+```bash
+# macOS / Linux
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Windows
+# Download the installer from https://ollama.com/download/windows
+```
+
+**Start and pull a model:**
+
+```bash
+ollama serve          # starts the server on http://127.0.0.1:11434
+ollama pull llama3.2  # or any model from https://ollama.com/library
+```
+
+**Verify:**
+
+```bash
+npm run model:doctor -- --model llama3.2
+```
+
+### Option B — llama.cpp
+
+**Install:**
+
+```bash
+# macOS
+brew install llama.cpp
+
+# Windows / Linux — download a prebuilt release binary:
+# https://github.com/ggml-org/llama.cpp/releases
+```
+
+**Get a GGUF model and start the server:**
+
+```bash
+# Download a model (e.g. from https://huggingface.co/models?library=gguf)
+llama-server --model /path/to/model.gguf --port 8080
+```
+
+**Verify:**
+
+```bash
+npm run model:doctor -- --transport llama.cpp
+```
+
+### Doctor command reference
+
+```bash
+# Check default transport (Ollama)
+npm run model:doctor
+
+# Check llama.cpp transport
+npm run model:doctor -- --transport llama.cpp
+
+# Check that a specific model is loaded
+npm run model:doctor -- --model llama3.2
+
+# Full smoke test — checks reachability, model presence, and a live chat round-trip
+npm run model:doctor -- --model llama3.2 --ping
+```
+
+Exit code 0 means all required checks passed. Exit code 1 means something is missing; the output includes the exact install step to run next.
+
+---
+
+## 6. Run as a standalone runtime (optional)
 
 Start the runtime process:
 
@@ -90,7 +164,7 @@ node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws listen
 
 For command semantics and transport details, see the host integration guide.
 
-## 6. Attach Studio UI to the standalone runtime (optional)
+## 7. Attach Studio UI to the standalone runtime (optional)
 
 With the runtime process running, attach Studio in remote WS full-control mode:
 

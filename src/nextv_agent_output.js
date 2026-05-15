@@ -483,3 +483,79 @@ export function buildAgentRetryPrompt(error) {
 
   return `The previous response violated the return contract:\n\nField "${path}" must be ${expected}.\nYou returned: ${actual}\n\nReturn exactly one valid JSON object matching the declared contract.`
 }
+
+// ─── decide contract ──────────────────────────────────────────────────────────
+
+const ASCII_PUNCTUATION_RE = /^[!"#$%&'()*+,\-./:;<=>?@[\\\]^_{|}~]+|[!"#$%&'()*+,\-./:;<=>?@[\\\]^_{|}~]+$/g
+
+export function normalizeDecideText(text) {
+  // Step 1: trim Unicode whitespace
+  let s = String(text ?? '').trim()
+  // Step 2: ASCII lowercase fold (A-Z → a-z; non-ASCII unchanged)
+  s = s.replace(/[A-Z]/g, (ch) => ch.toLowerCase())
+  // Steps 3–4: strip leading/trailing ASCII punctuation repeatedly until stable
+  let prev
+  do {
+    prev = s
+    s = s.replace(ASCII_PUNCTUATION_RE, '')
+  } while (s !== prev)
+  return s
+}
+
+export function assertValidDecideOptions(options) {
+  if (!Array.isArray(options) || options.length < 2) {
+    const err = new Error('decide must be an array of at least 2 string literals.')
+    err.code = 'INVALID_CALL_CONFIG'
+    throw err
+  }
+  for (let i = 0; i < options.length; i++) {
+    if (typeof options[i] !== 'string') {
+      const err = new Error(`decide option at index ${i} must be a string.`)
+      err.code = 'INVALID_CALL_CONFIG'
+      throw err
+    }
+    if (options[i] === '') {
+      const err = new Error(`decide option at index ${i} must not be an empty string.`)
+      err.code = 'INVALID_CALL_CONFIG'
+      throw err
+    }
+  }
+  const seen = new Map()
+  for (const option of options) {
+    const canonical = normalizeDecideText(option)
+    if (seen.has(canonical)) {
+      const err = new Error(`decide options "${seen.get(canonical)}" and "${option}" are duplicates after normalization (both normalize to "${canonical}").`)
+      err.code = 'INVALID_CALL_CONFIG'
+      throw err
+    }
+    seen.set(canonical, option)
+  }
+}
+
+export function buildDecideGuidance(options) {
+  const list = options.map((o) => `- ${o}`).join('\n')
+  return `Select exactly one of the following options and return only that value — nothing else. No JSON, no explanation, no punctuation around it.\n\n${list}`
+}
+
+export function buildDecideRetryPrompt(options, previousOutput) {
+  const list = options.map((o) => `- ${o}`).join('\n')
+  const prev = String(previousOutput ?? '').trim()
+  const prevLine = prev ? `\nYou returned: ${prev}` : ''
+  return `The previous response did not match any allowed value.${prevLine}\n\nAllowed values:\n\n${list}\n\nReturn only one of these exact values and nothing else.`
+}
+
+export function validateDecideOutput(rawText, options) {
+  const normalized = normalizeDecideText(rawText)
+  for (const option of options) {
+    if (normalizeDecideText(option) === normalized) {
+      return option
+    }
+  }
+  const err = new Error(`decide contract violation: output does not match any allowed value.`)
+  err.code = 'CONTRACT_VIOLATION'
+  err.type = 'contract_violation'
+  err.subtype = 'decide_mismatch'
+  err.expected = options
+  err.actual = String(rawText ?? '')
+  throw err
+}

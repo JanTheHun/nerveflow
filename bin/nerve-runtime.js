@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 import { createServer } from 'node:http'
-import { appendFileSync, mkdirSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+import {
+  createOllamaTransport,
+  createOllamaFileDebugLogger,
+  createLlamaCppTransport,
+  createLlamaCppFileDebugLogger,
+  createOpenAICompatTransport,
+  createOpenAICompatFileDebugLogger,
+} from '../src/host_core/agent_transports/index.js'
 
 import {
   createRuntimeCore,
@@ -76,180 +85,204 @@ function parseCliOptions(argv) {
   return options
 }
 
-async function callOllamaAgent({ model, messages }) {
-  const baseUrl = String(process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/+$/, '')
-  const requestPayload = {
-    model,
-    messages,
-    stream: false,
-  }
-
-  appendOllamaDebugRecord({
-    source: 'nerve-runtime',
-    phase: 'request',
-    url: `${baseUrl}/api/chat`,
-    payload: requestPayload,
-  })
-
-  let response
-  try {
-    response = await fetch(`${baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestPayload),
-    })
-  } catch (err) {
-    appendOllamaDebugRecord({
-      source: 'nerve-runtime',
-      phase: 'fetch_error',
-      url: `${baseUrl}/api/chat`,
-      error: String(err?.message ?? err),
-    })
-    throw err
-  }
-
-  if (!response.ok) {
-    const bodyText = await response.text().catch(() => '')
-    appendOllamaDebugRecord({
-      source: 'nerve-runtime',
-      phase: 'response',
-      ok: false,
-      status: response.status,
-      statusText: response.statusText,
-      bodyText,
-    })
-    throw new Error(`Ollama chat failed (${response.status}): ${bodyText || response.statusText}`)
-  }
-
-  const payload = await response.json()
-  appendOllamaDebugRecord({
-    source: 'nerve-runtime',
-    phase: 'response',
-    ok: true,
-    status: response.status,
-    payload,
-  })
-
-  const promptTokens = Number.isFinite(Number(payload?.prompt_eval_count))
-    ? Number(payload.prompt_eval_count)
-    : null
-  const completionTokens = Number.isFinite(Number(payload?.eval_count))
-    ? Number(payload.eval_count)
-    : null
-  const totalTokens = (
-    Number.isFinite(promptTokens) && Number.isFinite(completionTokens)
-      ? promptTokens + completionTokens
-      : null
-  )
-
-  return {
-    text: String(payload?.message?.content ?? payload?.response ?? '').trim(),
-    metadata: {
-      provider: 'ollama',
-      model: String(model ?? payload?.model ?? '').trim(),
-      usage: {
-        promptTokens,
-        completionTokens,
-        totalTokens,
-      },
-      timings: {
-        totalDurationNs: Number.isFinite(Number(payload?.total_duration)) ? Number(payload.total_duration) : null,
-        loadDurationNs: Number.isFinite(Number(payload?.load_duration)) ? Number(payload.load_duration) : null,
-        promptEvalDurationNs: Number.isFinite(Number(payload?.prompt_eval_duration)) ? Number(payload.prompt_eval_duration) : null,
-        evalDurationNs: Number.isFinite(Number(payload?.eval_duration)) ? Number(payload.eval_duration) : null,
-      },
-      rawProvider: {
-        createdAt: String(payload?.created_at ?? ''),
-        doneReason: String(payload?.done_reason ?? ''),
-        prompt_eval_count: Number.isFinite(Number(payload?.prompt_eval_count)) ? Number(payload.prompt_eval_count) : null,
-        eval_count: Number.isFinite(Number(payload?.eval_count)) ? Number(payload.eval_count) : null,
-        prompt_eval_duration: Number.isFinite(Number(payload?.prompt_eval_duration)) ? Number(payload.prompt_eval_duration) : null,
-        eval_duration: Number.isFinite(Number(payload?.eval_duration)) ? Number(payload.eval_duration) : null,
-        total_duration: Number.isFinite(Number(payload?.total_duration)) ? Number(payload.total_duration) : null,
-        load_duration: Number.isFinite(Number(payload?.load_duration)) ? Number(payload.load_duration) : null,
-      },
-    },
-  }
-}
-
-function previewDebugText(value, maxLength = 240) {
+function stripMatchingQuotes(value) {
   const text = String(value ?? '')
-  if (text.length <= maxLength) return text
-  return `${text.slice(0, maxLength)}...`
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+    return text.slice(1, -1)
+  }
+  return text
 }
 
-function summarizeDebugValue(value) {
-  if (Array.isArray(value)) {
-    return value.map((entry) => summarizeDebugValue(entry))
+function loadWorkspaceEnvFile(workspaceDirRaw) {
+  const workspaceDir = resolve(process.cwd(), String(workspaceDirRaw ?? ''))
+  const envPath = resolve(workspaceDir, '.env')
+  if (!existsSync(envPath)) return
+
+  let content = ''
+  try {
+    content = readFileSync(envPath, 'utf8')
+  } catch {
+    return
   }
 
-  if (!value || typeof value !== 'object') {
-    return value
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = String(line ?? '').trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+
+    const cleaned = trimmed.startsWith('export ') ? trimmed.slice(7).trim() : trimmed
+    const eqIndex = cleaned.indexOf('=')
+    if (eqIndex <= 0) continue
+
+    const key = cleaned.slice(0, eqIndex).trim()
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue
+    if (Object.prototype.hasOwnProperty.call(process.env, key)) continue
+
+    const valueRaw = cleaned.slice(eqIndex + 1)
+    process.env[key] = stripMatchingQuotes(valueRaw)
   }
-
-  const summary = {}
-  for (const [key, entry] of Object.entries(value)) {
-    if (key === 'messages' && Array.isArray(entry)) {
-      summary.messages = entry.map((message) => {
-        const base = {
-          role: String(message?.role ?? ''),
-          contentLength: String(message?.content ?? '').length,
-          contentPreview: previewDebugText(message?.content ?? ''),
-        }
-        if (Array.isArray(message?.images)) {
-          base.imageCount = message.images.length
-          base.imageLengths = message.images.map((image) => String(image ?? '').length)
-        }
-        return base
-      })
-      continue
-    }
-
-    if (key === 'bodyText') {
-      summary.bodyTextLength = String(entry ?? '').length
-      summary.bodyTextPreview = previewDebugText(entry ?? '')
-      continue
-    }
-
-    if (typeof entry === 'string') {
-      summary[key] = entry.length > 400
-        ? { length: entry.length, preview: previewDebugText(entry, 240) }
-        : entry
-      continue
-    }
-
-    summary[key] = summarizeDebugValue(entry)
-  }
-
-  return summary
 }
 
 let options
 try {
   options = parseCliOptions(process.argv.slice(2))
+  loadWorkspaceEnvFile(options.workspaceDir)
 } catch (err) {
   console.error(`nerve-runtime argument error: ${err?.message ?? err}`)
   process.exit(1)
 }
 
 const repoRoot = resolve(process.cwd())
+const AGENT_TRANSPORT = String(process.env.AGENT_TRANSPORT ?? 'ollama').trim().toLowerCase()
+const AGENT_ROUTING_DEFAULT = String(process.env.AGENT_ROUTING_DEFAULT ?? 'external').trim().toLowerCase()
+const AGENT_TRANSPORT_TIMEOUT_MS_RAW = Number(process.env.AGENT_TRANSPORT_TIMEOUT_MS)
+const AGENT_TRANSPORT_TIMEOUT_MS = Number.isFinite(AGENT_TRANSPORT_TIMEOUT_MS_RAW) && AGENT_TRANSPORT_TIMEOUT_MS_RAW > 0
+  ? Math.floor(AGENT_TRANSPORT_TIMEOUT_MS_RAW)
+  : 60000
+const PARALLEL_MAX_CONCURRENCY_RAW = Number(process.env.PARALLEL_MAX_CONCURRENCY)
+const PARALLEL_MAX_CONCURRENCY = Number.isFinite(PARALLEL_MAX_CONCURRENCY_RAW) && PARALLEL_MAX_CONCURRENCY_RAW > 0
+  ? Math.floor(PARALLEL_MAX_CONCURRENCY_RAW)
+  : null
+
 const OLLAMA_DEBUG_LOG_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.OLLAMA_DEBUG_LOG ?? '').trim())
 const OLLAMA_DEBUG_SUMMARY_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.OLLAMA_DEBUG_SUMMARY ?? '').trim())
 const OLLAMA_DEBUG_LOG_PATH = String(process.env.OLLAMA_DEBUG_LOG_PATH ?? '').trim()
   || resolve(repoRoot, 'logs', 'ollama-runtime.jsonl')
 
-function appendOllamaDebugRecord(record) {
-  if (!OLLAMA_DEBUG_LOG_ENABLED) return
-  try {
-    const payload = OLLAMA_DEBUG_SUMMARY_ENABLED
-      ? summarizeDebugValue(record)
-      : record
-    mkdirSync(dirname(OLLAMA_DEBUG_LOG_PATH), { recursive: true })
-    appendFileSync(OLLAMA_DEBUG_LOG_PATH, `${JSON.stringify({ timestamp: new Date().toISOString(), ...payload })}\n`, 'utf8')
-  } catch {
-    // Debug logging must never break runtime agent calls.
+const LLAMA_CPP_DEBUG_LOG_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.LLAMA_CPP_DEBUG_LOG ?? '').trim())
+const LLAMA_CPP_DEBUG_SUMMARY_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.LLAMA_CPP_DEBUG_SUMMARY ?? '').trim())
+const LLAMA_CPP_DEBUG_LOG_PATH = String(process.env.LLAMA_CPP_DEBUG_LOG_PATH ?? '').trim()
+  || resolve(repoRoot, 'logs', 'llama-cpp-runtime.jsonl')
+
+let callAgent
+const localCallAgent = createLlamaCppTransport({
+  baseUrl: process.env.LLAMA_CPP_BASE_URL,
+  timeoutMs: AGENT_TRANSPORT_TIMEOUT_MS,
+  onDebugRecord: LLAMA_CPP_DEBUG_LOG_ENABLED
+    ? createLlamaCppFileDebugLogger({ logPath: LLAMA_CPP_DEBUG_LOG_PATH, summarize: LLAMA_CPP_DEBUG_SUMMARY_ENABLED, source: 'nerve-runtime' })
+    : null,
+})
+
+const externalCallAgent = createOllamaTransport({
+  baseUrl: process.env.OLLAMA_BASE_URL,
+  timeoutMs: AGENT_TRANSPORT_TIMEOUT_MS,
+  onDebugRecord: OLLAMA_DEBUG_LOG_ENABLED
+    ? createOllamaFileDebugLogger({ logPath: OLLAMA_DEBUG_LOG_PATH, summarize: OLLAMA_DEBUG_SUMMARY_ENABLED, source: 'nerve-runtime' })
+    : null,
+})
+
+const openAICompatCallAgent = createOpenAICompatTransport({
+  timeoutMs: AGENT_TRANSPORT_TIMEOUT_MS,
+})
+
+function parseModelRouteHint(modelRaw) {
+  const model = String(modelRaw ?? '').trim()
+  const localMatch = model.match(/^(?:local|llama(?:\.cpp)?):\s*(.+)$/i)
+  if (localMatch) {
+    return { route: 'local', model: localMatch[1].trim(), strategy: 'model-hint' }
+  }
+
+  const externalMatch = model.match(/^(?:external|remote|ollama):\s*(.+)$/i)
+  if (externalMatch) {
+    return { route: 'external', model: externalMatch[1].trim(), strategy: 'model-hint' }
+  }
+
+  return { route: '', model, strategy: '' }
+}
+
+function normalizeForcedRoute(rawTransport) {
+  if (rawTransport === 'llama.cpp' || rawTransport === 'llama_cpp') return 'local'
+  if (rawTransport === 'ollama') return 'external'
+  if (rawTransport === 'auto' || rawTransport === 'mixed' || rawTransport === '') return ''
+  return 'external'
+}
+
+const forcedRoute = normalizeForcedRoute(AGENT_TRANSPORT)
+
+callAgent = async ({ model, messages, transport: callTransportConfig }) => {
+  const hint = parseModelRouteHint(model)
+  const selectedRoute = forcedRoute || hint.route || (AGENT_ROUTING_DEFAULT === 'local' ? 'local' : 'external')
+  const selectedModel = hint.model || String(model ?? '').trim()
+  const strategy = forcedRoute
+    ? 'forced-transport'
+    : (hint.route ? hint.strategy : 'default-route')
+
+  const provider = String(callTransportConfig?.provider ?? '').trim().toLowerCase()
+  let transport
+  if (provider === 'openai_compat') {
+    transport = openAICompatCallAgent
+  } else if (selectedRoute === 'local') {
+    transport = localCallAgent
+  } else {
+    transport = externalCallAgent
+  }
+  const transportResult = await transport({ model: selectedModel, messages, transport: callTransportConfig })
+
+  if (typeof transportResult === 'string') {
+    return {
+      text: transportResult,
+      metadata: {
+        route: selectedRoute,
+        strategy,
+        model: selectedModel,
+      },
+    }
+  }
+
+  if (transportResult && typeof transportResult === 'object' && !Array.isArray(transportResult)) {
+    const metadata = (transportResult.metadata && typeof transportResult.metadata === 'object' && !Array.isArray(transportResult.metadata))
+      ? transportResult.metadata
+      : {}
+    return {
+      ...transportResult,
+      metadata: {
+        ...metadata,
+        route: selectedRoute,
+        strategy,
+        model: selectedModel,
+      },
+    }
+  }
+
+  return {
+    text: String(transportResult ?? ''),
+    metadata: {
+      route: selectedRoute,
+      strategy,
+      model: selectedModel,
+    },
   }
 }
+
+callAgent.capabilities = {
+  routingMode: forcedRoute ? 'forced' : 'mixed',
+  defaultRoute: AGENT_ROUTING_DEFAULT === 'local' ? 'local' : 'external',
+  supports_preload: true,
+  local: {
+    id: 'llama.cpp',
+    locality: 'local',
+  },
+  external: {
+    id: 'ollama',
+    locality: 'external',
+  },
+}
+
+callAgent.load = async ({ model, transport: callTransportConfig }) => {
+  const hint = parseModelRouteHint(model)
+  const selectedRoute = forcedRoute || hint.route || (AGENT_ROUTING_DEFAULT === 'local' ? 'local' : 'external')
+  const selectedModel = hint.model || String(model ?? '').trim()
+  const selectedTransport = selectedRoute === 'local' ? localCallAgent : externalCallAgent
+  if (typeof selectedTransport.load !== 'function' || !selectedTransport.capabilities?.supports_preload) {
+    return { ok: false, model: selectedModel, reason: 'transport does not support preload' }
+  }
+  return await selectedTransport.load({ model: selectedModel, transport: callTransportConfig })
+}
+
+const DEFAULT_AGENT_MODEL = forcedRoute === 'local'
+  ? (process.env.LLAMA_CPP_MODEL ?? '')
+  : forcedRoute === 'external'
+    ? (process.env.OLLAMA_MODEL ?? '')
+    : (process.env.AGENT_DEFAULT_MODEL ?? process.env.OLLAMA_MODEL ?? process.env.LLAMA_CPP_MODEL ?? '')
 
 const resolvers = createRuntimeResolvers({ repoRoot })
 
@@ -261,11 +294,12 @@ const effectRuntime = createEffectRealizerRuntime({ realizers: roles.effectReali
 
 const runtimeCore = createRuntimeCore({
   resolvers,
-  callAgent: callOllamaAgent,
+  callAgent,
   toolRuntime,
   ingressRuntime,
   effectRuntime,
-  defaultModel: process.env.OLLAMA_MODEL ?? '',
+  defaultModel: DEFAULT_AGENT_MODEL,
+  parallelMaxConcurrency: PARALLEL_MAX_CONCURRENCY,
 })
 
 function sendJson(res, statusCode, payload) {

@@ -14,6 +14,8 @@ export function hasMeaningfulNextVExecutionEvents(events) {
     if (
       type === 'state_update'
       || type === 'output'
+      || type === 'agent_call'
+      || type === 'agent_result'
       || type === 'tool_call'
       || type === 'tool_result'
       || type === 'input'

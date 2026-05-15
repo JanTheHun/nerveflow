@@ -83,6 +83,8 @@ The `host-modules` layer provides tool capability composition separate from the 
 
 For a concrete example of building a real PostgreSQL + pgvector capability with this split, see [10-host-db-connectors.md](10-host-db-connectors.md).
 
+`nerveflow/host-modules` is a supported npm subpath export.
+
 ```js
 import {
   loadHostModules,
@@ -144,6 +146,37 @@ Compatibility note:
 
 - `loadHostModules()` remains tool-only and is preserved for existing hosts
 - role-aware APIs are additive and can be adopted incrementally
+
+### Compose CLI (workspace capability scaffolding)
+
+`nerve-compose` provides additive workspace composition helpers. It does not install infrastructure and does not mutate runtime semantics.
+
+Current commands:
+
+- `node bin/nerve-compose.js modules [workspaceDir] [--json] [--builtin-only]`
+- `node bin/nerve-compose.js doctor [workspaceDir] [--json] [--strict]`
+- `node bin/nerve-compose.js add memory-pgvector [workspaceDir] [--json]`
+- `node bin/nerve-compose.js add speech [workspaceDir] [--json]`
+
+`add memory-pgvector` scaffolds workspace wiring using the existing host-modules loading path:
+
+- creates or updates `host_modules/index.js` (generated provider wiring)
+- creates or updates `.env.example` with `MEMORY_*` placeholders
+- updates `nextv.json` `requires.memory` and `modules.memory` when `nextv.json` exists
+
+`add speech` scaffolds a reference speech ingress surface from the voice-spa template:
+
+- creates or updates `.env.example` with `VOICE_*`, `WHISPER_*`, `PIPER_*`, and runtime endpoint placeholders
+- updates `nextv.json` `requires.speech` and `modules.speech` when `nextv.json` exists
+- creates `speech-surface/` with record/stop SPA assets and a bridge server (`/api/voice-command`, `/api/output/stream`)
+
+Behavior and boundaries:
+
+- compose commands are workspace-local and deterministic
+- runtime behavior remains unchanged; startup still loads builtin/public/workspace providers through existing loader order
+- external prerequisites remain explicit (PostgreSQL + pgvector and embedding service are not provisioned by compose)
+- external speech prerequisites remain explicit (Whisper/Piper binaries/models and runtime endpoint availability are not provisioned by compose)
+- if `host_modules/index.js` already exists and is not compose-generated, `add` reports a manual-merge skip instead of rewriting user code
 
 ## Host protocol utilities (v1)
 
@@ -223,6 +256,7 @@ Supported WebSocket command types map directly to protocol v1 commands:
 - `stop`
 - `enqueue_event`
 - `dispatch_ingress`
+- `call_inspector_execute`
 - `snapshot`
 - `subscribe`
 - `unsubscribe`
@@ -269,6 +303,7 @@ Notes:
 - `nerve-attach` uses protocol command types `snapshot`, `enqueue_event`, `dispatch_ingress`, `stop`, `start`, and `subscribe`.
 - one-shot attach commands may print event envelopes before their final response envelope when runtime events occur concurrently.
 - disconnecting one attach client does not stop the runtime; other surfaces remain attached.
+- `nerve-dev-remote` remains a repository development launcher and is intentionally not part of the published npm runtime artifact.
 
 Implementation notes for the runtime module itself live in `src/runtime/README.md`.
 

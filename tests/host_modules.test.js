@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert'
-import { loadHostModules, loadHostModulesByRole } from '../src/host_modules/index.js'
+import { loadHostModuleComposition, loadHostModules, loadHostModulesByRole } from '../src/host_modules/index.js'
 import { createEffectRealizerRuntime, createIngressConnectorRuntime, createToolRuntime } from '../src/host_core/index.js'
 import path from 'node:path'
 import fs from 'node:fs/promises'
@@ -194,6 +194,27 @@ test('loadHostModulesByRole returns separated role buckets and preserves tool co
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true })
   }
+})
+
+test('loadHostModuleComposition reports deterministic source ordering and totals', async () => {
+  const composition = await loadHostModuleComposition({ workspaceDir: repoRoot })
+
+  assert(Array.isArray(composition.sources), 'sources should be an array')
+  assert(composition.sources.length >= 2, 'sources should include builtin and public entries')
+  assert.strictEqual(composition.sources[0].name, 'builtin', 'builtin source should be first')
+
+  const totals = composition.totals
+  assert(typeof totals.toolProviders === 'number', 'toolProviders total should be numeric')
+  assert(typeof totals.ingressConnectors === 'number', 'ingressConnectors total should be numeric')
+  assert(typeof totals.effectRealizers === 'number', 'effectRealizers total should be numeric')
+
+  const sumTools = composition.sources.reduce((count, source) => count + Number(source?.counts?.toolProviders ?? 0), 0)
+  const sumConnectors = composition.sources.reduce((count, source) => count + Number(source?.counts?.ingressConnectors ?? 0), 0)
+  const sumRealizers = composition.sources.reduce((count, source) => count + Number(source?.counts?.effectRealizers ?? 0), 0)
+
+  assert.strictEqual(sumTools, totals.toolProviders, 'tool total should equal source sum')
+  assert.strictEqual(sumConnectors, totals.ingressConnectors, 'connector total should equal source sum')
+  assert.strictEqual(sumRealizers, totals.effectRealizers, 'realizer total should equal source sum')
 })
 
 test('loadHostModulesByRole discovers explicit role exports', async () => {

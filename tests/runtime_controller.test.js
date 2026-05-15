@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createEventBus } from '../src/host_core/event_bus.js'
 import {
+  buildInactiveCandidateStatus,
   buildInactiveSnapshot,
   createNextVRuntimeController,
 } from '../src/host_core/runtime_controller.js'
@@ -61,6 +62,10 @@ function createController(options = {}) {
   const FakeRunner = createFakeRunnerFactory()
   const {
     createRunner = () => new FakeRunner(),
+    createHostAdapter = () => ({
+      callAgent: async () => '',
+      callTool: async () => '',
+    }),
     workspaceConfig = {
       agents: { status: 'missing', source: '' },
       tools: { status: 'missing', source: '' },
@@ -74,17 +79,17 @@ function createController(options = {}) {
     validateCapabilityBindings = null,
     ingressRuntime = null,
     effectRuntime = null,
+    validateConfigReferences = () => [],
+    validateNoForbiddenAgentFields = () => [],
+    loadWorkspaceConfig = () => workspaceConfig,
   } = options
 
   const controller = createNextVRuntimeController({
     eventBus,
     createRunner,
-    createHostAdapter: () => ({
-      callAgent: async () => '',
-      callTool: async () => '',
-    }),
+    createHostAdapter,
     resolveWorkspaceDirectory: () => ({ absolutePath: '/workspace', relativePath: '.' }),
-    loadWorkspaceConfig: () => workspaceConfig,
+    loadWorkspaceConfig,
     resolveEntrypoint: () => ({ absolutePath: '/workspace/main.nrv', relativePath: 'main.nrv' }),
     resolveOptionalStatePath: () => '',
     resolveStateDiscoveryBaseDir: () => '/workspace',
@@ -102,6 +107,7 @@ function createController(options = {}) {
     normalizeEffectsPolicy,
     validateDeclaredEffectBindings,
     validateRequiredCapabilityBindings,
+    validateNoForbiddenAgentFields,
     areJsonStatesEqual: (left, right) => JSON.stringify(left) === JSON.stringify(right),
     hasMeaningfulNextVExecutionEvents: (events) => Array.isArray(events) && events.length > 0,
     normalizeInputEvent: (event) => event,
@@ -115,6 +121,7 @@ function createController(options = {}) {
     effectRuntime,
     callAgent: async () => '',
     defaultModel: '',
+    validateConfigReferences,
   })
 
   return { controller, published }
@@ -127,6 +134,17 @@ test('buildInactiveSnapshot returns deterministic shape', () => {
     pendingEvents: 0,
     state: {},
     locals: {},
+  })
+})
+
+test('buildInactiveCandidateStatus returns deterministic shape', () => {
+  assert.deepEqual(buildInactiveCandidateStatus(), {
+    status: 'none',
+    policy: 'warn',
+    submittedAt: null,
+    workspaceDir: '',
+    entrypointPath: '',
+    issues: [],
   })
 })
 
@@ -171,6 +189,205 @@ test('controller stop publishes stopped event and deactivates runtime', async ()
   assert.equal(snapshot.running, false)
   assert.equal(controller.isActive(), false)
   assert.equal(published.some((entry) => entry.eventName === 'nextv_stopped'), true)
+})
+
+test('controller reloadConfig throws when runtime is inactive', () => {
+  const { controller } = createController()
+
+  assert.throws(
+    () => controller.reloadConfig(),
+    /nextV runtime not active/,
+  )
+})
+
+test('controller submitCandidate throws when runtime is inactive', () => {
+  const { controller } = createController()
+
+  assert.throws(
+    () => controller.submitCandidate(),
+    /nextV runtime not active/,
+  )
+})
+
+test('controller reloadConfig refreshes live config and clears adapter cache', async () => {
+  const configA = {
+    agents: { status: 'loaded', source: 'agents.json', profiles: { alpha: { model: 'm1' } } },
+    tools: { status: 'loaded', source: 'tools.json', allow: null, aliases: {} },
+    nextv: { status: 'loaded', file: 'nextv.json', config: {}, timers: [], timersSource: '' },
+    operators: { status: 'missing', source: '', map: {} },
+  }
+  const configB = {
+    agents: { status: 'loaded', source: 'agents.v2.json', profiles: { beta: { model: 'm2' } } },
+    tools: { status: 'loaded', source: 'tools.json', allow: null, aliases: {} },
+    nextv: { status: 'loaded', file: 'nextv.json', config: {}, timers: [], timersSource: '' },
+    operators: { status: 'missing', source: '', map: {} },
+  }
+
+  const loadedConfigs = [configA, configB]
+  let loadIndex = 0
+  let clearConfigCacheCount = 0
+
+  const { controller, published } = createController({
+    loadWorkspaceConfig: () => loadedConfigs[Math.min(loadIndex++, loadedConfigs.length - 1)],
+    createHostAdapter: ({ getWorkspaceConfig }) => ({
+      clearConfigCache: () => {
+        clearConfigCacheCount += 1
+      },
+      getAgentCapabilities: () => {
+        const profiles = getWorkspaceConfig()?.agents?.profiles ?? {}
+        return { source: 'config', agentCount: Object.keys(profiles).length }
+      },
+      callAgent: async () => '',
+      callTool: async () => '',
+    }),
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  const reloaded = controller.reloadConfig()
+
+  assert.equal(reloaded.workspaceConfig.agentsSource, 'agents.v2.json')
+  assert.equal(clearConfigCacheCount, 1)
+  assert.equal(published.some((entry) => entry.eventName === 'nextv_config_reloaded'), true)
+})
+
+test('controller submitCandidate reports rejected candidate without mutating active routing', async () => {
+  const configStart = {
+    agents: { status: 'loaded', source: 'agents.json', profiles: {} },
+    tools: { status: 'loaded', source: 'tools.json', allow: null, aliases: {} },
+    nextv: { status: 'loaded', file: 'nextv.json', config: { effectsPolicy: 'strict' }, timers: [], timersSource: '' },
+    operators: { status: 'missing', source: '', map: {} },
+  }
+  const configCandidate = {
+    agents: {
+      status: 'loaded',
+      source: 'agents.bad.json',
+      profiles: {},
+      map: {
+        planner: {
+          model: 'default',
+          transport: 'should-not-be-here',
+        },
+      },
+    },
+    tools: { status: 'loaded', source: 'tools.json', allow: null, aliases: {} },
+    nextv: { status: 'loaded', file: 'nextv.json', config: { effectsPolicy: 'strict' }, timers: [], timersSource: '' },
+    operators: { status: 'missing', source: '', map: {} },
+  }
+
+  const loadedConfigs = [configStart, configCandidate]
+  let loadIndex = 0
+  const { controller, published } = createController({
+    loadWorkspaceConfig: () => loadedConfigs[Math.min(loadIndex++, loadedConfigs.length - 1)],
+    validateNoForbiddenAgentFields: (workspaceConfig) => {
+      if (workspaceConfig?.agents?.source !== 'agents.bad.json') return []
+      return [{ code: 'FORBIDDEN_AGENT_FIELD', message: 'transport is forbidden on agent profile planner' }]
+    },
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  const queuedBefore = controller.enqueue({ type: 'user_message', value: 'before-candidate' })
+  const candidate = controller.submitCandidate()
+  const queuedAfter = controller.enqueue({ type: 'user_message', value: 'after-candidate' })
+
+  assert.equal(candidate.status, 'rejected')
+  assert.equal(candidate.workspaceConfig.agentsSource, 'agents.bad.json')
+  assert.equal(candidate.issues.some((issue) => issue.code === 'FORBIDDEN_AGENT_FIELD'), true)
+  assert.equal(queuedBefore.snapshot.running, true)
+  assert.equal(queuedAfter.snapshot.running, true)
+  assert.equal(queuedAfter.snapshot.pendingEvents, queuedBefore.snapshot.pendingEvents + 1)
+  assert.equal(
+    published.some((entry) => entry.eventName === 'nextv_candidate_validation_failed' && entry.payload?.status === 'rejected'),
+    true,
+  )
+
+  const status = controller.getDefinitionStatus()
+  assert.equal(status.active.running, true)
+  assert.equal(status.candidate.status, 'rejected')
+})
+
+test('controller promoteCandidate throws when runtime is inactive', () => {
+  const { controller } = createController()
+
+  assert.throws(
+    () => controller.promoteCandidate(),
+    /nextV runtime not active/,
+  )
+})
+
+test('controller promoteCandidate throws when no promotable candidate exists', async () => {
+  const { controller } = createController()
+  await controller.start({ entrypointPath: 'main.nrv' })
+
+  assert.throws(
+    () => controller.promoteCandidate(),
+    /no promotable candidate/i,
+  )
+})
+
+test('controller promoteCandidate throws when candidate was rejected', async () => {
+  const configStart = {
+    agents: { status: 'loaded', source: 'agents.json', profiles: {} },
+    tools: { status: 'loaded', source: 'tools.json', allow: null, aliases: {} },
+    nextv: { status: 'loaded', file: 'nextv.json', config: { effectsPolicy: 'strict' }, timers: [], timersSource: '' },
+    operators: { status: 'missing', source: '', map: {} },
+  }
+  const configRejected = {
+    ...configStart,
+    agents: { status: 'loaded', source: 'agents.bad.json', profiles: {}, map: { x: { model: 'a', transport: 'bad' } } },
+  }
+  const loadedConfigs = [configStart, configRejected]
+  let loadIndex = 0
+  const { controller } = createController({
+    loadWorkspaceConfig: () => loadedConfigs[Math.min(loadIndex++, loadedConfigs.length - 1)],
+    validateNoForbiddenAgentFields: (wc) => {
+      if (wc?.agents?.source !== 'agents.bad.json') return []
+      return [{ code: 'FORBIDDEN_AGENT_FIELD', message: 'transport is forbidden on agent x' }]
+    },
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  controller.submitCandidate()
+
+  assert.throws(
+    () => controller.promoteCandidate(),
+    /no promotable candidate/i,
+  )
+})
+
+test('controller promoteCandidate applies candidate and resets candidate status', async () => {
+  const configStart = {
+    agents: { status: 'loaded', source: 'agents.v1.json', profiles: {} },
+    tools: { status: 'loaded', source: 'tools.json', allow: null, aliases: {} },
+    nextv: { status: 'loaded', file: 'nextv.json', config: {}, timers: [], timersSource: '' },
+    operators: { status: 'missing', source: '', map: {} },
+  }
+  const configCandidate = {
+    ...configStart,
+    agents: { status: 'loaded', source: 'agents.v2.json', profiles: {} },
+  }
+  const loadedConfigs = [configStart, configCandidate]
+  let loadIndex = 0
+  const { controller, published } = createController({
+    loadWorkspaceConfig: () => loadedConfigs[Math.min(loadIndex++, loadedConfigs.length - 1)],
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  const candidate = controller.submitCandidate()
+  assert.equal(candidate.status, 'promotable')
+
+  const promoted = controller.promoteCandidate()
+
+  assert.equal(promoted.workspaceConfig.agentsSource, 'agents.v2.json')
+  assert.equal(
+    published.some((entry) => entry.eventName === 'nextv_candidate_promoted'),
+    true,
+  )
+  assert.equal(
+    published.some((entry) => entry.eventName === 'nextv_config_reloaded'),
+    true,
+  )
+  const status = controller.getDefinitionStatus()
+  assert.equal(status.candidate.status, 'none')
 })
 
 test('controller start warns for unsupported declared effects in warn mode and continues startup', async () => {
@@ -449,6 +666,151 @@ test('controller warns when effect realizer fails', async () => {
   )
 })
 
+test('controller publishes timer-sourced agent runtime events when suppressTimerNoOps is enabled', async () => {
+  class TimerAgentRunner {
+    constructor(options = {}) {
+      this.options = options
+      this.running = false
+    }
+
+    start() {
+      this.running = true
+    }
+
+    stop() {
+      this.running = false
+    }
+
+    enqueue(event) {
+      if (!this.running) return false
+      if (typeof this.options.onEvent === 'function') {
+        this.options.onEvent({
+          event: { ...event, source: 'timer' },
+          runtimeEvent: {
+            type: 'agent_call',
+            agent: 'intent',
+            sourcePath: 'timer.nrv',
+            sourceLine: 12,
+            timestamp: new Date().toISOString(),
+          },
+          snapshot: this.getSnapshot(),
+        })
+      }
+      return true
+    }
+
+    getSnapshot() {
+      return {
+        running: this.running,
+        executionCount: 0,
+        pendingEvents: 0,
+        state: {},
+        locals: {},
+      }
+    }
+  }
+
+  const { controller, published } = createController({
+    createRunner: (options) => new TimerAgentRunner(options),
+    workspaceConfig: {
+      agents: { status: 'missing', source: '' },
+      tools: { status: 'missing', source: '' },
+      nextv: {
+        status: 'loaded',
+        file: 'nextv.json',
+        config: { suppressTimerNoOps: true },
+        timers: [],
+        timersSource: '',
+      },
+      operators: { status: 'missing', source: '' },
+    },
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  controller.enqueue({ type: 'tick', source: 'timer' })
+
+  assert.equal(
+    published.some(
+      (entry) => entry.eventName === 'nextv_runtime_event' && entry.payload?.runtimeEvent?.type === 'agent_call',
+    ),
+    true,
+  )
+})
+
+test('controller publishes nextv_warning for slow agent calls', async () => {
+  class AgentCallingRunner {
+    constructor(options = {}) {
+      this.options = options
+      this.running = false
+    }
+
+    start() {
+      this.running = true
+    }
+
+    stop() {
+      this.running = false
+    }
+
+    async enqueue(event) {
+      if (!this.running) return false
+      await this.options.runOptions.hostAdapter.callAgent({
+        agent: 'router',
+        prompt: 'route this',
+        event,
+        line: 7,
+        statement: 'route = agent("router", event.value)',
+        sourcePath: 'intent.nrv',
+        sourceLine: 7,
+      })
+      return true
+    }
+
+    getSnapshot() {
+      return {
+        running: this.running,
+        executionCount: 0,
+        pendingEvents: 0,
+        state: {},
+        locals: {},
+      }
+    }
+  }
+
+  const { controller, published } = createController({
+    createRunner: (options) => new AgentCallingRunner(options),
+    createHostAdapter: ({ onSlowAgentCallWarning }) => ({
+      callTool: async () => '',
+      callAgent: async () => {
+        onSlowAgentCallWarning({
+          agent: 'router',
+          model: 'test-model',
+          thresholdMs: 15,
+          elapsedMs: 15,
+          attempt: 1,
+          retryLimit: 0,
+          line: 7,
+          statement: 'route = agent("router", event.value)',
+          sourcePath: 'intent.nrv',
+          sourceLine: 7,
+          eventType: 'user_message',
+          eventSource: 'external',
+          workspaceDir: '.',
+        })
+        return 'ok'
+      },
+    }),
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  await controller.enqueue({ type: 'user_message', value: 'hello', source: 'external' })
+
+  assert.equal(
+    published.some((entry) => entry.eventName === 'nextv_warning' && entry.payload?.code === 'SLOW_AGENT_CALL'),
+    true,
+  )
+})
+
 test('controller dispatchIngress routes ingress connector output into runtime queue', async () => {
   const enqueuedEvents = []
 
@@ -656,4 +1018,54 @@ test('[AC-6] Handler failure is isolated; other handlers unaffected', () => {
   assert.deepEqual(goodHandler2Events, ['nextv_execution'])
 
   // Runtime unaffected; surfaces continue
+})
+
+test('controller start throws on TRANSPORT_NOT_FOUND in strict mode', async () => {
+  const { controller } = createController({
+    validateConfigReferences: () => [
+      { code: 'TRANSPORT_NOT_FOUND', model: 'my-model', transport: 'typo-transport' },
+    ],
+    workspaceConfig: {
+      agents: { status: 'missing', source: '' },
+      tools: { status: 'missing', source: '' },
+      nextv: {
+        status: 'loaded',
+        file: 'nextv.json',
+        config: { effectsPolicy: 'strict' },
+        timers: [],
+        timersSource: '',
+      },
+      operators: { status: 'missing', source: '' },
+    },
+  })
+
+  await assert.rejects(
+    () => controller.start({ entrypointPath: 'main.nrv' }),
+    /Transport configuration error/,
+  )
+})
+
+test('controller start throws on TRANSPORT_NOT_FOUND in warn mode (always fatal)', async () => {
+  const { controller } = createController({
+    validateConfigReferences: () => [
+      { code: 'TRANSPORT_NOT_FOUND', model: 'my-model', transport: 'typo-transport' },
+    ],
+    workspaceConfig: {
+      agents: { status: 'missing', source: '' },
+      tools: { status: 'missing', source: '' },
+      nextv: {
+        status: 'loaded',
+        file: 'nextv.json',
+        config: { effectsPolicy: 'warn' },
+        timers: [],
+        timersSource: '',
+      },
+      operators: { status: 'missing', source: '' },
+    },
+  })
+
+  await assert.rejects(
+    () => controller.start({ entrypointPath: 'main.nrv' }),
+    /Transport configuration error/,
+  )
 })

@@ -2,13 +2,18 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   appendAgentFormatInstructions,
+  assertValidDecideOptions,
   buildAgentReturnContractGuidance,
   buildAgentRetryPrompt,
+  buildDecideGuidance,
+  buildDecideRetryPrompt,
   extractCodeOutput,
   extractJsonOutput,
   extractTextOutput,
   normalizeAgentFormattedOutput,
+  normalizeDecideText,
   validateAgentReturnContract,
+  validateDecideOutput,
 } from '../src/index.js'
 
 test('appendAgentFormatInstructions appends deterministic format contract', () => {
@@ -265,4 +270,86 @@ test('contract violation with missing field provides path and expected type', ()
     assert.equal(err.path, 'status')
     assert.equal(err.actual, 'undefined')
   }
+})
+
+// ── decide contract ─────────────────────────────────────────────────────────
+
+test('normalizeDecideText trims whitespace, lowercases, strips punctuation', () => {
+  assert.equal(normalizeDecideText('  Yes!  '), 'yes')
+  assert.equal(normalizeDecideText('NO'), 'no')
+  assert.equal(normalizeDecideText('...maybe...'), 'maybe')
+  assert.equal(normalizeDecideText('  '), '')
+  assert.equal(normalizeDecideText(''), '')
+})
+
+test('normalizeDecideText strips only ASCII punctuation not Unicode letters', () => {
+  assert.equal(normalizeDecideText('résumé'), 'résumé')
+  assert.equal(normalizeDecideText('"approve"'), 'approve')
+})
+
+test('assertValidDecideOptions throws INVALID_CALL_CONFIG for non-array', () => {
+  assert.throws(() => assertValidDecideOptions('yes'), (err) => {
+    assert.equal(err.code, 'INVALID_CALL_CONFIG')
+    return true
+  })
+})
+
+test('assertValidDecideOptions throws INVALID_CALL_CONFIG for fewer than 2 options', () => {
+  assert.throws(() => assertValidDecideOptions(['yes']), (err) => {
+    assert.equal(err.code, 'INVALID_CALL_CONFIG')
+    return true
+  })
+})
+
+test('assertValidDecideOptions throws INVALID_CALL_CONFIG for empty string option', () => {
+  assert.throws(() => assertValidDecideOptions(['yes', '']), (err) => {
+    assert.equal(err.code, 'INVALID_CALL_CONFIG')
+    return true
+  })
+})
+
+test('assertValidDecideOptions throws INVALID_CALL_CONFIG for canonical duplicates', () => {
+  assert.throws(() => assertValidDecideOptions(['Yes', 'yes']), (err) => {
+    assert.equal(err.code, 'INVALID_CALL_CONFIG')
+    return true
+  })
+})
+
+test('assertValidDecideOptions accepts valid 2+ distinct options', () => {
+  assert.doesNotThrow(() => assertValidDecideOptions(['approve', 'reject', 'defer']))
+})
+
+test('validateDecideOutput returns declared literal on match', () => {
+  assert.equal(validateDecideOutput('  Yes!  ', ['Yes', 'No']), 'Yes')
+  assert.equal(validateDecideOutput('NO', ['Yes', 'No']), 'No')
+  assert.equal(validateDecideOutput('approve', ['Approve', 'Reject']), 'Approve')
+})
+
+test('validateDecideOutput throws contract_violation on mismatch', () => {
+  assert.throws(() => validateDecideOutput('maybe', ['yes', 'no']), (err) => {
+    assert.equal(err.type, 'contract_violation')
+    assert.equal(err.subtype, 'decide_mismatch')
+    return true
+  })
+})
+
+test('validateDecideOutput throws contract_violation for empty-after-normalization', () => {
+  assert.throws(() => validateDecideOutput('...', ['yes', 'no']), (err) => {
+    assert.equal(err.subtype, 'decide_mismatch')
+    return true
+  })
+})
+
+test('buildDecideGuidance returns string listing allowed options', () => {
+  const guidance = buildDecideGuidance(['approve', 'reject'])
+  assert.equal(typeof guidance, 'string')
+  assert.match(guidance, /approve/)
+  assert.match(guidance, /reject/)
+})
+
+test('buildDecideRetryPrompt includes previous output and allowed values', () => {
+  const prompt = buildDecideRetryPrompt(['approve', 'reject'], 'maybe')
+  assert.equal(typeof prompt, 'string')
+  assert.match(prompt, /maybe/)
+  assert.match(prompt, /approve/)
 })

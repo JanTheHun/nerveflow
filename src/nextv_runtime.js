@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { NEXTV_AGENT_OUTPUT_FORMATS } from './nextv_agent_output.js'
+import { NEXTV_AGENT_OUTPUT_FORMATS, validateAgentReturnContract, normalizeAgentFormattedOutput, assertValidDecideOptions, validateDecideOutput } from './nextv_agent_output.js'
 import { compileAST } from './nextv_compiler.js'
 import { extractEventGraph } from './nextv_event_graph.js'
 
@@ -12,12 +12,28 @@ const AGENT_NAMED_ARG_ALLOWLIST = new Set([
   'prompt',
   'instructions',
   'messages',
+  'tools',
+  'format',
+  'returns',
+  'validate',
+  'decide',
+  'retry_on_contract_violation',
+  'on_contract_violation',
+])
+const MODEL_NAMED_ARG_ALLOWLIST = new Set([
+  'model',
+  'prompt',
+  'instructions',
+  'messages',
+  'tools',
   'format',
   'returns',
   'validate',
   'retry_on_contract_violation',
   'on_contract_violation',
 ])
+const TRY_ALLOWED_CALLS = new Set(['tool', 'agent', 'model', 'script', 'operator', 'try_bind'])
+const TRY_SUPPRESSIBLE_ERROR_CODES = new Set(['FUNCTION_CALL_ERROR', 'AGENT_RETURN_CONTRACT_VIOLATION'])
 
 function isoNow() {
   return new Date().toISOString()
@@ -73,6 +89,49 @@ function nextvError(partial) {
 
 function isPlainObject(value) {
   return value != null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function describeRuntimeValueType(value) {
+  if (value === null) return 'null'
+  if (Array.isArray(value)) return 'array'
+  return typeof value
+}
+
+function previewRuntimeValue(value, maxLength = 120) {
+  if (value === undefined) return 'undefined'
+  if (value === null) return 'null'
+
+  if (typeof value === 'string') {
+    const compact = value.replace(/\s+/g, ' ').trim()
+    const sliced = compact.length > maxLength ? `${compact.slice(0, maxLength)}...` : compact
+    return `"${sliced}"`
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value)
+  }
+
+  if (typeof value === 'function') {
+    return '[function]'
+  }
+
+  if (Array.isArray(value)) {
+    return `array(len=${value.length})`
+  }
+
+  if (isPlainObject(value)) {
+    const keys = Object.keys(value)
+    const previewKeys = keys.slice(0, 5).join(', ')
+    const suffix = keys.length > 5 ? ', ...' : ''
+    return `object(keys=${previewKeys}${suffix})`
+  }
+
+  try {
+    const text = String(value)
+    return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text
+  } catch {
+    return '[unprintable value]'
+  }
 }
 
 function createDelimiterState() {
@@ -423,6 +482,73 @@ function parseTerm(raw, line, statement) {
 
   if (/^[-+]?\d+(?:\.\d+)?$/.test(text)) {
     return { type: 'number', value: Number(text) }
+  }
+
+  const parallelMatch = /^parallel\(([\s\S]*)\)$/.exec(text)
+  if (parallelMatch) {
+    const innerRaw = parallelMatch[1].trim()
+    if (!hasOuterBalancedPair(innerRaw, '[', ']')) {
+      throw nextvError({
+        line,
+        kind: 'parse',
+        code: 'PARALLEL_INVALID_SYNTAX',
+        statement,
+        message: 'parallel() requires a single array literal argument: parallel([...]).',
+      })
+    }
+    const arrayInner = innerRaw.slice(1, -1).trim()
+    const isCommentedOutElement = (raw) => {
+      const nonEmpty = raw.split('\n').map((l) => l.trim()).filter(Boolean)
+      return nonEmpty.length > 0 && nonEmpty.every((l) => l.startsWith('#'))
+    }
+    const elementRaws = arrayInner
+      ? splitTopLevel(arrayInner, ',').filter(Boolean).filter((r) => !isCommentedOutElement(r))
+      : []
+    const elements = elementRaws.map((elemRaw, idx) => {
+      const elemText = elemRaw.trim()
+      const elemMatch = /^([A-Za-z_][A-Za-z0-9_]*)\(([\s\S]*)\)$/.exec(elemText)
+      if (!elemMatch || (elemMatch[1] !== 'agent' && elemMatch[1] !== 'model')) {
+        throw nextvError({
+          line,
+          kind: 'parse',
+          code: 'PARALLEL_INVALID_ELEMENT',
+          statement,
+          message: `parallel([...]) element at index ${idx} must be a direct agent() or model() call.`,
+        })
+      }
+      const callArgs = parseFunctionArgs(elemMatch[2], line, statement)
+      for (const arg of callArgs) {
+        if (arg.kind === 'named' && arg.name === 'on_contract_violation') {
+          throw nextvError({
+            line,
+            kind: 'parse',
+            code: 'PARALLEL_ON_CONTRACT_VIOLATION_FORBIDDEN',
+            statement,
+            message: `parallel([...]) element at index ${idx}: on_contract_violation is not allowed inside parallel blocks.`,
+          })
+        }
+      }
+      return { type: 'call', name: elemMatch[1], args: callArgs }
+    })
+    return { type: 'parallel', elements }
+  }
+
+  const tryMatch = /^try\s+([\s\S]+)$/.exec(text)
+  if (tryMatch) {
+    const innerExpr = parseExpression(tryMatch[1].trim(), line, statement)
+    if (innerExpr?.type !== 'call' || !TRY_ALLOWED_CALLS.has(innerExpr.name)) {
+      throw nextvError({
+        line,
+        kind: 'parse',
+        code: 'INVALID_TRY_TARGET',
+        statement,
+        message: 'try requires a direct call expression: tool(), agent(), model(), script(), operator(), or try_bind().',
+      })
+    }
+    return {
+      type: 'try_expr',
+      expr: innerExpr,
+    }
   }
 
   const fnMatch = /^([A-Za-z_][A-Za-z0-9_]*)\(([\s\S]*)\)$/.exec(text)
@@ -894,6 +1020,15 @@ export function parseNextVScript(source, options = {}) {
     }
 
     const expr = parseExpression(trimmed, line, statement)
+    if (expr.type === 'parallel') {
+      throw nextvError({
+        line,
+        kind: 'parse',
+        code: 'PARALLEL_STANDALONE_FORBIDDEN',
+        statement,
+        message: 'parallel([...]) must be assigned to a variable.',
+      })
+    }
     if (expr.type !== 'call') {
       throw nextvError({
         line,
@@ -1177,6 +1312,114 @@ function normalizeAgentReturnsValue(value, context) {
   return value
 }
 
+function normalizeAgentToolsPolicy(value, context, usageLabel = 'agent()') {
+  if (value == null) {
+    return {
+      mode: 'disabled',
+      maxRounds: 0,
+      allow: [],
+      timeoutMs: 0,
+      denyOnUnknownTool: true,
+    }
+  }
+  if (!isPlainObject(value)) {
+    throw nextvError({
+      line: context.line,
+      kind: 'runtime',
+      code: 'INVALID_AGENT_TOOLS',
+      statement: context.statement,
+      message: `${usageLabel} tools must be an object with mode/maxRounds/allow/timeoutMs/denyOnUnknownTool.`,
+    })
+  }
+
+  const modeRaw = String(value.mode ?? '').trim().toLowerCase() || 'disabled'
+  if (modeRaw !== 'disabled' && modeRaw !== 'governed') {
+    throw nextvError({
+      line: context.line,
+      kind: 'runtime',
+      code: 'INVALID_AGENT_TOOLS',
+      statement: context.statement,
+      message: `${usageLabel} tools.mode must be "disabled" or "governed"; received "${modeRaw}".`,
+    })
+  }
+
+  let maxRounds = 8
+  if (Object.prototype.hasOwnProperty.call(value, 'maxRounds')) {
+    const parsed = Number(value.maxRounds)
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      throw nextvError({
+        line: context.line,
+        kind: 'runtime',
+        code: 'INVALID_AGENT_TOOLS',
+        statement: context.statement,
+        message: `${usageLabel} tools.maxRounds must be a non-negative integer.`,
+      })
+    }
+    maxRounds = parsed
+  }
+
+  const allowRaw = value.allow
+  if (allowRaw != null && (!Array.isArray(allowRaw) || allowRaw.some((item) => typeof item !== 'string' || !item.trim()))) {
+    throw nextvError({
+      line: context.line,
+      kind: 'runtime',
+      code: 'INVALID_AGENT_TOOLS',
+      statement: context.statement,
+      message: `${usageLabel} tools.allow must be an array of non-empty strings.`,
+    })
+  }
+  const allow = Array.isArray(allowRaw)
+    ? [...new Set(allowRaw.map((name) => String(name).trim()).filter(Boolean))]
+    : []
+
+  let timeoutMs = 0
+  if (Object.prototype.hasOwnProperty.call(value, 'timeoutMs')) {
+    const parsed = Number(value.timeoutMs)
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      throw nextvError({
+        line: context.line,
+        kind: 'runtime',
+        code: 'INVALID_AGENT_TOOLS',
+        statement: context.statement,
+        message: `${usageLabel} tools.timeoutMs must be a non-negative integer.`,
+      })
+    }
+    timeoutMs = parsed
+  }
+
+  let denyOnUnknownTool = true
+  if (Object.prototype.hasOwnProperty.call(value, 'denyOnUnknownTool')) {
+    if (typeof value.denyOnUnknownTool !== 'boolean') {
+      throw nextvError({
+        line: context.line,
+        kind: 'runtime',
+        code: 'INVALID_AGENT_TOOLS',
+        statement: context.statement,
+        message: `${usageLabel} tools.denyOnUnknownTool must be a boolean.`,
+      })
+    }
+    denyOnUnknownTool = value.denyOnUnknownTool
+  }
+
+  if (modeRaw === 'governed' && allow.length === 0) {
+    throw nextvError({
+      line: context.line,
+      kind: 'runtime',
+      code: 'INVALID_AGENT_TOOLS',
+      statement: context.statement,
+      message: `${usageLabel} tools.allow must include at least one tool when mode is "governed".`,
+    })
+  }
+
+  return {
+    mode: modeRaw,
+    maxRounds,
+    allow,
+    timeoutMs,
+    denyOnUnknownTool,
+  }
+}
+
 function formatOutputContent(value, format, context) {
   if (format === 'interaction') {
     return toJsonText(value, context, 'output interaction')
@@ -1218,15 +1461,20 @@ function resolvePath(path, locals, state, event, context) {
     cursor = locals[root]
   }
 
-  for (const segment of rest) {
+  for (let index = 0; index < rest.length; index++) {
+    const segment = rest[index]
     if (!isPlainObject(cursor) && !Array.isArray(cursor)) {
       if (allowUndefinedPath) return undefined
+      const resolvedPath = path.slice(0, index + 1).join('.')
+      const attemptedPath = path.slice(0, index + 2).join('.')
+      const valueType = describeRuntimeValueType(cursor)
+      const valuePreview = previewRuntimeValue(cursor)
       throw nextvError({
         line: context.line,
         kind: 'runtime',
         code: 'UNDEFINED_VARIABLE',
         statement: context.statement,
-        message: `Cannot access "${segment}" on non-object value.`,
+        message: `Cannot access "${segment}" on ${valueType} value while resolving "${attemptedPath}". Resolved "${resolvedPath}" to ${valueType}: ${valuePreview}.`,
       })
     }
     if (!(segment in cursor)) {
@@ -1249,6 +1497,90 @@ function interpolateString(value, locals, state, event, context) {
     const resolved = resolvePath(pathRaw.split('.'), locals, state, event, context)
     return coerceTextValue(resolved, context, 'String interpolation')
   })
+}
+
+function cloneEventValue(event) {
+  if (!isPlainObject(event) && !Array.isArray(event)) return event
+  try {
+    return JSON.parse(JSON.stringify(event))
+  } catch {
+    return event
+  }
+}
+
+function normalizeParallelConcurrency(value, fallback) {
+  const raw = Number(value)
+  if (Number.isFinite(raw) && raw > 0) {
+    return Math.max(1, Math.floor(raw))
+  }
+  return Math.max(1, Math.floor(Number(fallback) || 1))
+}
+
+async function runParallelTasks(taskFns, maxConcurrency) {
+  const count = Array.isArray(taskFns) ? taskFns.length : 0
+  if (count === 0) return []
+
+  const results = new Array(count)
+  let nextIndex = 0
+
+  async function worker() {
+    while (true) {
+      const index = nextIndex
+      nextIndex += 1
+      if (index >= count) return
+
+      try {
+        results[index] = {
+          status: 'fulfilled',
+          value: await taskFns[index](),
+        }
+      } catch (err) {
+        results[index] = {
+          status: 'rejected',
+          reason: err,
+        }
+      }
+    }
+  }
+
+  const workerCount = Math.min(count, normalizeParallelConcurrency(maxConcurrency, count))
+  await Promise.all(Array.from({ length: workerCount }, () => worker()))
+  return results
+}
+
+function assertTryWrappedAgentModelConfig(name, named, context) {
+  if (name !== 'agent' && name !== 'model') return
+
+  if (named?.on_contract_violation != null) {
+    throw nextvError({
+      line: context.line,
+      sourcePath: context.sourcePath,
+      sourceLine: context.sourceLine,
+      kind: 'runtime',
+      code: 'INVALID_CALL_CONFIG',
+      statement: context.statement,
+      message: `${name}() with try does not allow on_contract_violation in Phase 1.`,
+    })
+  }
+}
+
+function isTrySuppressibleError(err) {
+  return TRY_SUPPRESSIBLE_ERROR_CODES.has(String(err?.code ?? '').trim())
+}
+
+function toTryFailureEnvelope(err) {
+  const code = String(err?.code ?? '').trim().toLowerCase()
+  const error = {
+    type: code || 'operation_failure',
+    message: String(err?.message ?? 'Operation failed.'),
+  }
+  if (Object.prototype.hasOwnProperty.call(err ?? {}, 'output')) {
+    error.output = err.output
+  }
+  return {
+    ok: false,
+    error,
+  }
 }
 
 async function evaluateExpression(expr, context) {
@@ -1343,6 +1675,44 @@ async function evaluateExpression(expr, context) {
     }
   }
 
+  if (expr.type === 'parallel') {
+    if (expr.elements.length === 0) return []
+
+    const snapshotLocals = cloneLocals(context.locals)
+    const snapshotState = cloneState(context.state)
+    const snapshotEvent = cloneEventValue(context.event)
+
+    const taskFns = expr.elements.map((elem) => async () => {
+      const taskContext = {
+        ...context,
+        locals: cloneLocals(snapshotLocals),
+        state: cloneState(snapshotState),
+        event: cloneEventValue(snapshotEvent),
+      }
+      return await executeFunctionCall(elem.name, elem.args, taskContext, 'expression')
+    })
+
+    const settled = await runParallelTasks(taskFns, context.parallelMaxConcurrency)
+    const failureIndex = settled.findIndex((entry) => entry?.status === 'rejected')
+    if (failureIndex !== -1) {
+      throw settled[failureIndex].reason
+    }
+
+    return settled.map((entry) => entry.value)
+  }
+
+  if (expr.type === 'try_expr') {
+    try {
+      return {
+        ok: true,
+        value: await executeFunctionCall(expr.expr.name, expr.expr.args, context, 'expression', { wrappedInTry: true }),
+      }
+    } catch (err) {
+      if (!isTrySuppressibleError(err)) throw err
+      return toTryFailureEnvelope(err)
+    }
+  }
+
   if (expr.type === 'call') {
     return executeFunctionCall(expr.name, expr.args, context, 'expression')
   }
@@ -1420,7 +1790,7 @@ function getRoleWarningForOutput(executionRole, format) {
   return null
 }
 
-async function executeFunctionCall(name, args, context, origin) {
+async function executeFunctionCall(name, args, context, origin, callOptions = null) {
   const fn = context.functions[name]
   if (typeof fn !== 'function') {
     throw nextvError({
@@ -1433,6 +1803,9 @@ async function executeFunctionCall(name, args, context, origin) {
   }
 
   const { positional, named } = await evaluateCallArgs(args, context)
+  if (callOptions?.wrappedInTry === true) {
+    assertTryWrappedAgentModelConfig(name, named, context)
+  }
 
   if (context.emitTraceCall) {
     await context.emitTraceCall({
@@ -1454,6 +1827,10 @@ async function executeFunctionCall(name, args, context, origin) {
         positional,
         named,
       },
+    }, {
+      line: context.line,
+      sourcePath: context.sourcePath,
+      sourceLine: context.sourceLine,
     })
   }
 
@@ -1490,6 +1867,10 @@ async function executeFunctionCall(name, args, context, origin) {
       type: 'tool_result',
       tool: name,
       result,
+    }, {
+      line: context.line,
+      sourcePath: context.sourcePath,
+      sourceLine: context.sourceLine,
     })
   }
 
@@ -1733,6 +2114,41 @@ function buildFunctions(options, runtimeContext) {
 
       return out
     },
+    pick: ({ positional, named }) => {
+      const collection = positional[0]
+      const key = positional[1]
+      const strict = named?.strict === true
+
+      if (!Array.isArray(collection) && !isPlainObject(collection)) {
+        collectionError('INVALID_COLLECTION_ARGUMENT', 'pick() requires an array or object as first argument.')
+      }
+
+      if (Array.isArray(collection)) {
+        if (!Number.isInteger(key) || key < 0) {
+          collectionError('INVALID_COLLECTION_ARGUMENT', `pick() requires a non-negative integer index for array access; received "${key}".`)
+        }
+        if (key >= collection.length) {
+          if (strict) {
+            collectionError('PICK_OUT_OF_BOUNDS', `pick() index ${key} is out of bounds for array of length ${collection.length}.`)
+          }
+          return null
+        }
+        return collection[key] ?? null
+      }
+
+      // plain object
+      const keyStr = String(key ?? '').trim()
+      if (!keyStr) {
+        collectionError('INVALID_COLLECTION_ARGUMENT', 'pick() requires a non-empty string key for object access.')
+      }
+      if (!(keyStr in collection)) {
+        if (strict) {
+          collectionError('PICK_MISSING_KEY', `pick() key "${keyStr}" does not exist in object.`)
+        }
+        return null
+      }
+      return collection[keyStr] ?? null
+    },
     exact_length: ({ positional }) => {
       const lengthValue = positional[0]
       const schema = positional[1]
@@ -1931,7 +2347,7 @@ function buildFunctions(options, runtimeContext) {
           kind: 'runtime',
           code: 'INVALID_AGENT_ARGUMENT',
           statement,
-          message: `agent() received unsupported named argument "${key}". Use: agent, prompt, instructions, messages, format, returns, validate, retry_on_contract_violation, on_contract_violation.`,
+          message: `agent() received unsupported named argument "${key}". Use: agent, prompt, instructions, messages, tools, format, returns, validate, decide, retry_on_contract_violation, on_contract_violation.`,
         })
       }
 
@@ -1941,6 +2357,7 @@ function buildFunctions(options, runtimeContext) {
       const instructions = coerceTextValue(positional[2] ?? named?.instructions, context, 'agent() instructions').trim()
       const messages = normalizeAgentMessagesValue(named?.messages, context)
       const format = String(named?.format ?? '').trim().toLowerCase()
+      const toolsPolicy = normalizeAgentToolsPolicy(named?.tools ?? null, context, 'agent()')
 
       if (!agentName) {
         runtimeUnavailable('AGENT_NAME_REQUIRED', 'agent() requires an agent profile name.')
@@ -1959,18 +2376,58 @@ function buildFunctions(options, runtimeContext) {
       }
 
       const returns = normalizeAgentReturnsValue(named?.returns ?? null, context)
+      const decideOptions = named?.decide ?? null
+
+      if (decideOptions != null) {
+        if (returns != null) {
+          throw nextvError({
+            line,
+            kind: 'runtime',
+            code: 'INVALID_CALL_CONFIG',
+            statement,
+            message: 'agent() decide and returns are mutually exclusive.',
+          })
+        }
+        if (named?.validate != null) {
+          throw nextvError({
+            line,
+            kind: 'runtime',
+            code: 'INVALID_CALL_CONFIG',
+            statement,
+            message: 'agent() decide sets its own validation mode. validate must not be specified alongside decide.',
+          })
+        }
+        try {
+          assertValidDecideOptions(decideOptions)
+        } catch (err) {
+          throw nextvError({
+            line,
+            kind: 'runtime',
+            code: err.code ?? 'INVALID_CALL_CONFIG',
+            statement,
+            message: String(err.message ?? 'Invalid decide options.'),
+          })
+        }
+      }
+
       const validateRaw = String(named?.validate ?? '').trim().toLowerCase()
-      if (validateRaw && validateRaw !== 'strict' && validateRaw !== 'coerce') {
+      if (validateRaw && validateRaw !== 'strict' && validateRaw !== 'coerce' && validateRaw !== 'none') {
         throw nextvError({
           line,
           kind: 'runtime',
           code: 'INVALID_AGENT_VALIDATE',
           statement,
-          message: `agent() validate must be "strict" or "coerce"; received "${validateRaw}".`,
+          message: `agent() validate must be "strict", "coerce", or "none"; received "${validateRaw}".`,
         })
       }
       const validate = returns != null ? (validateRaw || 'coerce') : validateRaw
       const effectiveFormat = returns != null ? '' : format
+
+      let finalInstructions = instructions
+      if (decideOptions != null && typeof options.buildDecideGuidance === 'function') {
+        const decideGuidance = options.buildDecideGuidance(decideOptions)
+        finalInstructions = finalInstructions ? `${finalInstructions}\n\n${decideGuidance}` : decideGuidance
+      }
 
       const retryCountRaw = named?.retry_on_contract_violation
       const retryCount = Number.isInteger(retryCountRaw) ? retryCountRaw : 0
@@ -1986,18 +2443,52 @@ function buildFunctions(options, runtimeContext) {
 
       const onViolationExpr = named?.on_contract_violation
 
+      if (validate === 'none' && (retryCount > 0 || onViolationExpr != null)) {
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_CALL_CONFIG',
+          statement,
+          message: 'agent() validate="none" is incompatible with retry_on_contract_violation and on_contract_violation.',
+        })
+      }
+
       if (typeof options.callAgent !== 'function') {
         runtimeUnavailable('AGENT_CALL_UNAVAILABLE', `agent("${agentName}") is not available in this runtime.`)
       }
 
+      await runtimeContext.emitEvent({
+        type: 'agent_call',
+        agent: agentName,
+        line,
+        statement,
+        args: {
+          prompt,
+          instructions: finalInstructions,
+          messages,
+          tools: toolsPolicy,
+          format: effectiveFormat,
+          returns,
+          validate,
+          decide: decideOptions,
+          retry_on_contract_violation: retryCount,
+        },
+      }, {
+        line,
+        sourcePath,
+        sourceLine,
+      })
+
       const callResult = await options.callAgent({
         agent: agentName,
         prompt,
-        instructions,
+        instructions: finalInstructions,
         messages,
+        tools: toolsPolicy,
         format: effectiveFormat,
         returns,
         validate,
+        decide: decideOptions,
         retry_on_contract_violation: retryCount,
         on_contract_violation: onViolationExpr,
         state,
@@ -2007,6 +2498,9 @@ function buildFunctions(options, runtimeContext) {
         statement,
         sourcePath,
         sourceLine,
+        onGovernedToolEvent: async (toolEvent) => {
+          await runtimeContext.emitEvent(toolEvent, { line, sourcePath, sourceLine })
+        },
       })
 
       if (callResult && typeof callResult === 'object' && callResult.__nextv_contract_violation__ === true) {
@@ -2032,10 +2526,215 @@ function buildFunctions(options, runtimeContext) {
           : { value: callResult, metadata: null }
       )
 
+      await runtimeContext.emitEvent({
+        type: 'agent_result',
+        agent: agentName,
+        line,
+        statement,
+        metadata: normalizedCallResult.metadata ?? null,
+      }, {
+        line,
+        sourcePath,
+        sourceLine,
+      })
+
+      // When the callAgent implementation does not handle decide internally,
+      // apply decide validation at the runtime layer.
+      if (decideOptions != null && !(callResult && typeof callResult === 'object' && callResult.__nextv_decide_validated__)) {
+        const raw = normalizedCallResult.value
+        try {
+          return validateDecideOutput(raw, decideOptions)
+        } catch {
+          const decideErr = nextvError({
+            line,
+            kind: 'runtime',
+            code: 'AGENT_RETURN_CONTRACT_VIOLATION',
+            statement,
+            sourcePath,
+            sourceLine,
+            message: `decide contract violation: output "${String(raw ?? '').slice(0, 80)}" does not match any allowed value.`,
+          })
+          throw decideErr
+        }
+      }
+
       if (normalizedCallResult.metadata && Array.isArray(runtimeContext.agentCallMetadata)) {
         runtimeContext.agentCallMetadata.push({
           agent: agentName,
           line,
+          sourcePath,
+          sourceLine,
+          statement,
+          metadata: normalizedCallResult.metadata,
+        })
+      }
+
+      return normalizedCallResult.value
+    },
+    model: async ({ positional, named, state, event, locals, line, statement, sourcePath, sourceLine }) => {
+      const context = { line, statement }
+      for (const key of Object.keys(named ?? {})) {
+        if (MODEL_NAMED_ARG_ALLOWLIST.has(key)) continue
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_MODEL_ARGUMENT',
+          statement,
+          message: `model() received unsupported named argument "${key}". Use: model, prompt, instructions, messages, tools, format, returns, validate, retry_on_contract_violation, on_contract_violation.`,
+        })
+      }
+
+      const modelName = String(positional[0] ?? named?.model ?? '').trim()
+      const promptRaw = positional[1] ?? named?.prompt
+      const prompt = coerceTextValue(promptRaw, context, 'model() prompt').trim()
+      const instructions = coerceTextValue(positional[2] ?? named?.instructions, context, 'model() instructions').trim()
+      const messages = normalizeAgentMessagesValue(named?.messages, context)
+      const format = String(named?.format ?? '').trim().toLowerCase()
+      const toolsPolicy = normalizeAgentToolsPolicy(named?.tools ?? null, context, 'model()')
+
+      if (!modelName) {
+        runtimeUnavailable('MODEL_NAME_REQUIRED', 'model() requires a model name as first argument.')
+      }
+      if (!prompt && messages.length === 0) {
+        runtimeUnavailable('MODEL_PROMPT_REQUIRED', 'model() requires a prompt as second argument, or provide messages=... .')
+      }
+      if (format && !NEXTV_AGENT_OUTPUT_FORMATS.has(format)) {
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_MODEL_FORMAT',
+          statement,
+          message: `model() format must be one of json, text, or code; received "${format}".`,
+        })
+      }
+
+      const returns = normalizeAgentReturnsValue(named?.returns ?? null, context)
+      const validateRaw = String(named?.validate ?? '').trim().toLowerCase()
+      if (validateRaw && validateRaw !== 'strict' && validateRaw !== 'coerce' && validateRaw !== 'none') {
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_MODEL_VALIDATE',
+          statement,
+          message: `model() validate must be "strict", "coerce", or "none"; received "${validateRaw}".`,
+        })
+      }
+      const validate = returns != null ? (validateRaw || 'coerce') : validateRaw
+      const effectiveFormat = returns != null ? '' : format
+
+      const retryCountRaw = named?.retry_on_contract_violation
+      const retryCount = Number.isInteger(retryCountRaw) ? retryCountRaw : 0
+      if (retryCount < 0) {
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_MODEL_RETRY',
+          statement,
+          message: `model() retry_on_contract_violation must be a non-negative integer; received ${retryCountRaw}.`,
+        })
+      }
+
+      const onViolationExpr = named?.on_contract_violation
+
+      if (validate === 'none' && (retryCount > 0 || onViolationExpr != null)) {
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_CALL_CONFIG',
+          statement,
+          message: 'model() validate="none" is incompatible with retry_on_contract_violation and on_contract_violation.',
+        })
+      }
+
+      if (typeof options.callAgent !== 'function') {
+        runtimeUnavailable('AGENT_CALL_UNAVAILABLE', `model("${modelName}") is not available in this runtime.`)
+      }
+
+      await runtimeContext.emitEvent({
+        type: 'agent_call',
+        agent: `model:${modelName}`,
+        line,
+        statement,
+        args: {
+          prompt,
+          instructions,
+          messages,
+          tools: toolsPolicy,
+          format: effectiveFormat,
+          returns,
+          validate,
+          retry_on_contract_violation: retryCount,
+        },
+      }, {
+        line,
+        sourcePath,
+        sourceLine,
+      })
+
+      const callResult = await options.callAgent({
+        model: modelName,
+        prompt,
+        instructions,
+        messages,
+        tools: toolsPolicy,
+        format: effectiveFormat,
+        returns,
+        validate,
+        retry_on_contract_violation: retryCount,
+        on_contract_violation: onViolationExpr,
+        state,
+        event,
+        locals,
+        line,
+        statement,
+        sourcePath,
+        sourceLine,
+        onGovernedToolEvent: async (toolEvent) => {
+          await runtimeContext.emitEvent(toolEvent, { line, sourcePath, sourceLine })
+        },
+      })
+
+      if (callResult && typeof callResult === 'object' && callResult.__nextv_contract_violation__ === true) {
+        if (onViolationExpr) {
+          const violationLocals = { ...locals, violation: callResult.violation }
+          const violationContext = {
+            ...runtimeContext,
+            line,
+            statement,
+            locals: violationLocals,
+            state,
+            event,
+            executionRole: 'agent',
+          }
+          await evaluateExpression(callResult.expression, violationContext)
+        }
+        return null
+      }
+
+      const normalizedCallResult = (
+        callResult && typeof callResult === 'object' && !Array.isArray(callResult) && Object.prototype.hasOwnProperty.call(callResult, 'value')
+          ? callResult
+          : { value: callResult, metadata: null }
+      )
+
+      await runtimeContext.emitEvent({
+        type: 'agent_result',
+        agent: `model:${modelName}`,
+        line,
+        statement,
+        metadata: normalizedCallResult.metadata ?? null,
+      }, {
+        line,
+        sourcePath,
+        sourceLine,
+      })
+
+      if (normalizedCallResult.metadata && Array.isArray(runtimeContext.agentCallMetadata)) {
+        runtimeContext.agentCallMetadata.push({
+          agent: `model:${modelName}`,
+          line,
+          sourcePath,
+          sourceLine,
           statement,
           metadata: normalizedCallResult.metadata,
         })
@@ -2117,6 +2816,44 @@ function buildFunctions(options, runtimeContext) {
 
       return result?.returnValue ?? null
     },
+    try_bind: async ({ positional, named, line, statement }) => {
+      const value = positional[0] ?? named?.value
+      const contract = positional[1] ?? named?.contract
+      if (contract == null || typeof contract !== 'object' || Array.isArray(contract)) {
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_CALL_CONFIG',
+          statement,
+          message: 'try_bind() requires an object contract as second argument.',
+        })
+      }
+      let parsed = value
+      const originalOutput = typeof value === 'string' ? value : undefined
+      if (typeof value === 'string') {
+        try {
+          parsed = normalizeAgentFormattedOutput(value, 'json')
+        } catch (parseErr) {
+          return { ok: false, error: { type: 'json_parse_error', message: String(parseErr?.message ?? 'JSON parse error'), output: value } }
+        }
+      }
+      try {
+        const validated = validateAgentReturnContract(parsed, contract, 'strict')
+        return { ok: true, value: validated }
+      } catch (err) {
+        return {
+          ok: false,
+          error: {
+            type: 'contract_violation',
+            message: String(err?.message ?? ''),
+            ...(originalOutput !== undefined ? { output: originalOutput } : {}),
+            field: String(err?.path ?? ''),
+            expected: String(err?.expected ?? ''),
+            actual: String(err?.actual ?? ''),
+          },
+        }
+      }
+    },
     ...customFns,
   }
 }
@@ -2177,7 +2914,7 @@ function resolveDeclaredEffectChannel(channelName, effectChannelsRaw) {
 
 export async function runNextVScript(source, options = {}) {
   const runtimeOptions = normalizeRuntimeOptions(options)
-  const statements = parseNextVScript(source, { baseDir: runtimeOptions.baseDir })
+  const statements = parseNextVScript(source, { baseDir: runtimeOptions.baseDir, filePath: runtimeOptions.filePath })
   const instructions = compileAST(statements, {
     strict: runtimeOptions.strict === true,
     errorFactory: nextvError,
@@ -2228,6 +2965,8 @@ export async function runNextVScript(source, options = {}) {
       timestamp: payload.timestamp ?? isoNow(),
       step: meta.step,
       line: meta.line,
+      sourcePath: meta.sourcePath,
+      sourceLine: meta.sourceLine,
       sequence: eventSequence,
     }
     emittedEvents.push(eventRecord)
@@ -2320,10 +3059,21 @@ export async function runNextVScript(source, options = {}) {
         state,
         event: activeEvent,
         executionRole,
+        parallelMaxConcurrency: runtimeOptions.parallelMaxConcurrency,
         agentCallMetadata,
         emitStateUpdates: runtimeOptions.emitStateUpdates === true,
-        emitEvent: (payload) => emitEvent(payload, { step: steps, line: instr.line }),
-        emitWarning: (payload) => emitEvent({ type: 'warning', severity: 'warning', ...payload }, { step: steps, line: instr.line }),
+        emitEvent: (payload) => emitEvent(payload, {
+          step: steps,
+          line: instr.line,
+          sourcePath: instr.sourcePath,
+          sourceLine: instr.sourceLine,
+        }),
+        emitWarning: (payload) => emitEvent({ type: 'warning', severity: 'warning', ...payload }, {
+          step: steps,
+          line: instr.line,
+          sourcePath: instr.sourcePath,
+          sourceLine: instr.sourceLine,
+        }),
         enqueueSignal,
         emitTraceCall: async (payload) => {
           if (runtimeOptions.emitTrace !== true) return
@@ -2601,7 +3351,7 @@ export async function runNextVScriptFromFile(filePath, options = {}) {
   const absolutePath = resolve(filePath)
   const source = readFileSync(absolutePath, 'utf8')
   const baseDir = options.baseDir ?? dirname(absolutePath)
-  return runNextVScript(source, { ...options, baseDir })
+  return runNextVScript(source, { ...options, baseDir, filePath: absolutePath })
 }
 
 export { NextVError }

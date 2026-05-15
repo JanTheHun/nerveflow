@@ -110,6 +110,27 @@ Notes:
 - WS remote mode allows full control from Studio UI/API (start/stop/enqueue/snapshot)
 - MQTT and WS remote options are mutually exclusive per launch
 
+### First-class attach mode (from local Studio)
+
+When Studio is launched in local mode (no `--remote-ws`), the UI runtime target now includes **attach WS runtime**.
+
+- choose runtime target: `attach WS runtime`
+- set attach ws url (for example: `ws://127.0.0.1:4190/api/runtime/ws`)
+- click `attach` to handshake against snapshot and bind UI controls
+- click `detach` to unbind UI controls without stopping the remote runtime
+- Studio controls that runtime over WS without spawning or owning its process lifecycle
+
+Attach URL precedence:
+
+1. UI value (sent as `attachWsUrl` query parameter)
+2. `NERVE_STUDIO_ATTACH_WS` env default
+
+Notes:
+
+- `run`/`kill` remain external-process-only controls
+- attach mode supports control operations like start/stop/enqueue/snapshot
+- existing `--remote-ws` launch mode continues to work unchanged
+
 ---
 
 ## Workspaces

@@ -1,0 +1,6 @@
+{
+  "entrypointPath": "workflow.nrv",
+  "externals": [
+    "user_message"
+  ]
+}

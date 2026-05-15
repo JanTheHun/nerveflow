@@ -154,6 +154,52 @@ test('extractEventGraph classifies pure, llm, declared_output, side_effect, and 
   assert.equal(byEvent.mixed.warnings[0].code, 'MIXED_TRANSITION')
 })
 
+test('extractEventGraph sets hasParallelAgents when parallel([agent(), agent()]) is used', () => {
+  const ast = parseNextVScript([
+    'on "entry"',
+    '  results = parallel([agent("intent"), agent("intent-2", event.value)])',
+    'end',
+    'on "sequential"',
+    '  r1 = agent("intent", event.value)',
+    '  r2 = agent("intent-2", event.value)',
+    'end',
+  ].join('\n'))
+
+  const graph = extractEventGraph(ast)
+  const byEvent = Object.fromEntries(graph.transitions.map((t) => [t.eventType, t]))
+
+  assert.equal(byEvent.entry.hasParallelAgents, true, 'parallel agents should be flagged')
+  assert.ok(!byEvent.sequential.hasParallelAgents, 'sequential agents should not be flagged')
+})
+
+test('extractEventGraph does not set hasParallelAgents for single agent in parallel([])', () => {
+  const ast = parseNextVScript([
+    'on "single"',
+    '  r = parallel([agent("intent", event.value)])',
+    'end',
+  ].join('\n'))
+
+  const graph = extractEventGraph(ast)
+  const byEvent = Object.fromEntries(graph.transitions.map((t) => [t.eventType, t]))
+
+  assert.ok(!byEvent.single.hasParallelAgents, 'single agent in parallel should not be flagged')
+})
+
+test('extractEventGraph retains duplicate agent names for parallel agent calls', () => {
+  const ast = parseNextVScript([
+    'on "entry"',
+    '  results = parallel([agent("intent-3", event.value), agent("intent-3", event.value)])',
+    'end',
+  ].join('\n'))
+
+  const graph = extractEventGraph(ast)
+  const transition = graph.transitions.find((t) => t.eventType === 'entry')
+
+  assert.ok(transition, 'expected transition for entry')
+  assert.equal(transition.hasParallelAgents, true)
+  assert.deepEqual(transition.agents, ['intent-3', 'intent-3'])
+})
+
 test('extractEventGraph emits UNHANDLED_EMIT for internally emitted events with no handler', () => {
   const ast = parseNextVScript([
     'on "trigger"',
@@ -479,4 +525,145 @@ test('extractEventGraph fixture covers bounded, unbounded, mixed, and unknown co
       assert.equal(edge.boundedControl, expected.boundedControl)
     }
   }
+})
+
+test('extractEventGraph marks agent_call with validate="none" as unbounded even when returns is present', () => {
+  const ast = parseNextVScript([
+    'on "route"',
+    '  raw = agent("classifier", event.value, returns={ intent: "" }, validate="none")',
+    '  if raw.intent == "chat"',
+    '    emit("chat", event.value)',
+    '  end',
+    'end',
+  ].join('\n'))
+
+  const graph = extractEventGraph(ast)
+  assert.equal(graph.controlEdges.length, 2)
+  for (const edge of graph.controlEdges) {
+    assert.equal(edge.provenance, 'unbounded')
+    assert.equal(edge.boundedControl, false)
+  }
+})
+
+test('extractEventGraph marks try_bind result as bounded for control flow', () => {
+  const ast = parseNextVScript([
+    'on "route"',
+    '  raw = agent("classifier", event.value, validate="none")',
+    '  result = try_bind(raw, { intent: "" })',
+    '  if result.ok',
+    '    emit("chat", result.value)',
+    '  end',
+    'end',
+  ].join('\n'))
+
+  const graph = extractEventGraph(ast)
+  assert.equal(graph.controlEdges.length, 2)
+  for (const edge of graph.controlEdges) {
+    assert.equal(edge.provenance, 'bounded')
+    assert.equal(edge.boundedControl, true)
+  }
+})
+
+test('extractEventGraph marks mixed provenance when branching on both bound and unbound values', () => {
+  const ast = parseNextVScript([
+    'on "route"',
+    '  raw = agent("classifier", event.value, validate="none")',
+    '  result = try_bind(raw, { intent: "" })',
+    '  if result.ok && raw == "fallback"',
+    '    emit("chat", event.value)',
+    '  end',
+    'end',
+  ].join('\n'))
+
+  const graph = extractEventGraph(ast)
+  assert.equal(graph.controlEdges.length, 2)
+  for (const edge of graph.controlEdges) {
+    assert.equal(edge.provenance, 'mixed')
+    assert.equal(edge.boundedControl, false)
+  }
+})
+
+test('extractEventGraph marks try envelope ok-branch control as operational', () => {
+  const ast = parseNextVScript([
+    'on "route"',
+    '  result = try tool("search", q=event.value)',
+    '  if result.ok',
+    '    emit("ok", result.value)',
+    '  else',
+    '    emit("fallback", result.error)',
+    '  end',
+    'end',
+  ].join('\n'))
+
+  const graph = extractEventGraph(ast)
+  assert.equal(graph.controlEdges.length, 2)
+  for (const edge of graph.controlEdges) {
+    assert.equal(edge.provenance, 'operational')
+    assert.equal(edge.boundedControl, false)
+    assert.equal(edge.operationalControl, true)
+  }
+})
+
+test('extractEventGraph marks mixed provenance when combining try envelope and bounded contract control', () => {
+  const ast = parseNextVScript([
+    'on "route"',
+    '  decision = agent("router", event.value, returns={ intent: "" })',
+    '  attempt = try tool("search", q=event.value)',
+    '  if decision.intent == "search" && attempt.ok',
+    '    emit("ok", event.value)',
+    '  end',
+    'end',
+  ].join('\n'))
+
+  const graph = extractEventGraph(ast)
+  assert.equal(graph.controlEdges.length, 2)
+  for (const edge of graph.controlEdges) {
+    assert.equal(edge.provenance, 'mixed')
+    assert.equal(edge.boundedControl, false)
+    assert.equal(edge.operationalControl, false)
+  }
+})
+
+test('extractEventGraph records try boundary metadata on transitions', () => {
+  const ast = parseNextVScript([
+    'on "route"',
+    '  result = try tool("search", q=event.value)',
+    'end',
+  ].join('\n'))
+
+  const graph = extractEventGraph(ast)
+  const transition = graph.transitions.find((item) => item.eventType === 'route')
+  assert.ok(transition, 'expected route transition')
+  assert.deepEqual(transition.tryBoundaries, [
+    {
+      kind: 'try',
+      operation: 'tool',
+      target: 'result',
+      line: 2,
+    },
+  ])
+})
+
+test('compileAST sets unbound=true on agent_call when validate="none" is a static literal', () => {
+  const ir = compileAST(parseNextVScript([
+    'on "route"',
+    '  raw = agent("classifier", event.value, validate="none")',
+    'end',
+  ].join('\n')))
+
+  const agentCallInstr = ir.find((instr) => instr.op === 'agent_call')
+  assert.ok(agentCallInstr, 'expected agent_call instruction')
+  assert.equal(agentCallInstr.unbound, true)
+})
+
+test('compileAST does not set unbound on agent_call when validate is strict', () => {
+  const ir = compileAST(parseNextVScript([
+    'on "route"',
+    '  result = agent("classifier", event.value, returns={ intent: "" }, validate="strict")',
+    'end',
+  ].join('\n')))
+
+  const agentCallInstr = ir.find((instr) => instr.op === 'agent_call')
+  assert.ok(agentCallInstr, 'expected agent_call instruction')
+  assert.ok(!agentCallInstr.unbound, 'expected unbound to be absent or falsy for strict mode')
 })

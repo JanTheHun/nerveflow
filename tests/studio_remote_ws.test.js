@@ -190,6 +190,99 @@ test('preview server proxies control commands over remote ws runtime', async () 
   }
 })
 
+test('preview server supports attach runtime target with per-request ws url', async () => {
+  const runtimePort = await findOpenPort()
+  const studioPort = await findOpenPort()
+
+  const runtimeChild = spawn(process.execPath, [
+    'bin/nerve-runtime.js',
+    'start',
+    'examples/mqtt-simple-host',
+    '--port',
+    String(runtimePort),
+  ], {
+    cwd: process.cwd(),
+    env: { ...process.env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  let studioChild
+
+  try {
+    await waitForOutput(runtimeChild, 'nerve-runtime listening at')
+
+    studioChild = spawn(process.execPath, [
+      'nerve-studio/preview-server.js',
+    ], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PORT: String(studioPort),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    await waitForOutput(studioChild, 'nerve-studio preview running at')
+
+    const attachWsUrl = `ws://127.0.0.1:${runtimePort}/api/runtime/ws`
+    const encodedAttachWsUrl = encodeURIComponent(attachWsUrl)
+    const snapshotUrl = `http://127.0.0.1:${studioPort}/api/nextv/snapshot?runtimeTarget=attach&attachWsUrl=${encodedAttachWsUrl}`
+
+    const initial = await waitForSnapshot(
+      snapshotUrl,
+      (response, payload) => response.ok && payload?.remoteTransport === 'ws' && payload?.running === true,
+    )
+
+    assert.equal(initial.payload.remoteMode, true)
+    assert.equal(initial.payload.remoteControl, true)
+    assert.equal(initial.payload.remoteTransport, 'ws')
+
+    const enqueueResponse = await fetch(`http://127.0.0.1:${studioPort}/api/nextv/event?runtimeTarget=attach&attachWsUrl=${encodedAttachWsUrl}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ eventType: 'sensor_reading', value: '59', source: 'external' }),
+    })
+    const enqueuePayload = await enqueueResponse.json().catch(() => ({}))
+
+    assert.equal(enqueueResponse.ok, true)
+    assert.equal(enqueuePayload.ok, true)
+
+    const stopResponse = await fetch(`http://127.0.0.1:${studioPort}/api/nextv/stop?runtimeTarget=attach&attachWsUrl=${encodedAttachWsUrl}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    const stopPayload = await stopResponse.json().catch(() => ({}))
+
+    assert.equal(stopResponse.ok, true)
+    assert.equal(stopPayload.ok, true)
+    assert.equal(stopPayload?.snapshot?.running, false)
+
+    const missingAttachUrlResponse = await fetch(`http://127.0.0.1:${studioPort}/api/nextv/start?runtimeTarget=attach`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspaceDir: 'examples/mqtt-simple-host' }),
+    })
+    const missingAttachUrlPayload = await missingAttachUrlResponse.json().catch(() => ({}))
+
+    assert.equal(missingAttachUrlResponse.status, 400)
+    assert.equal(missingAttachUrlPayload.ok, false)
+    assert.match(String(missingAttachUrlPayload.error ?? ''), /attach mode requires attachWsUrl/i)
+
+    const attachRunResponse = await fetch(`http://127.0.0.1:${studioPort}/api/nextv/run?runtimeTarget=attach&attachWsUrl=${encodedAttachWsUrl}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspaceDir: 'examples/mqtt-simple-host' }),
+    })
+    const attachRunPayload = await attachRunResponse.json().catch(() => ({}))
+
+    assert.equal(attachRunResponse.status, 400)
+    assert.equal(attachRunPayload.error, 'run endpoint is only for external runtime mode')
+  } finally {
+    await stopProcess(studioChild)
+    await stopProcess(runtimeChild)
+  }
+})
+
 test('preview server graph endpoint returns controlEdges contract', async () => {
   const studioPort = await findOpenPort()
   const workspaceAbsolutePath = mkdtempSync(join(process.cwd(), '.tmp-studio-graph-'))

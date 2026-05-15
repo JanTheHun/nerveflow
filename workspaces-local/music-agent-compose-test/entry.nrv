@@ -1,0 +1,51 @@
+include "intent_unknown.nrv"
+include "memory.nrv"
+include "music-select.nrv"
+include "tool-call-smoke.nrv"
+include "user-wants-music.nrv"
+
+on external "user_message"
+  # Classify user intent in parallel using both intent models
+  intent_instructions = file("entry-instructions.md")
+  intent_contract = {
+    intent: ["play", "unclear"]
+  }
+  target_instructions = file("target-instructions.md")
+  target_contract = {
+    target: ""
+  }
+
+
+	result = try agent(
+	  "intent-4",
+	  event.value,
+	  instructions="Classify user intent. Choose from declared possibilities.\nReturn exactly one.\nIf not sure, choose unclear.",
+		decide=["play", "unclear"],
+  	retry_on_contract_violation=1
+	)
+
+	output json result
+	  
+  # intent_results = parallel([
+    # agent(
+      # "intent-4",
+      # event.value,
+      # intent_instructions,
+      # decide=["play", "unclear"]
+    # ),
+    # agent(
+      # "intent-4",
+      # event.value,
+      # target_instructions,
+      # returns=target_contract
+    # )
+  # ])
+  
+  # output json intent_results
+  
+  emit("user_wants_music", event.value)
+end
+
+on "violation"
+  output json event.value
+end

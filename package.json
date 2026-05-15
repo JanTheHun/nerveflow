@@ -1,6 +1,6 @@
 {
   "name": "nerveflow",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Deterministic control layer for AI workflows",
   "license": "MIT",
   "type": "module",
@@ -8,25 +8,37 @@
   "bin": {
     "nerve-runtime": "bin/nerve-runtime.js",
     "nerve-attach": "bin/nerve-attach.js",
-    "nerve-dev-remote": "bin/nerve-dev-remote.js"
+    "nerve-model-check": "bin/nerve-model-check.js",
+    "nerve-compose": "bin/nerve-compose.js"
   },
   "exports": {
     ".": "./src/index.js",
     "./host_core": "./src/host_core/index.js",
     "./host_core/protocol": "./src/host_core/protocol.js",
+    "./host-modules": "./src/host_modules/index.js",
     "./runtime": "./src/runtime/index.js"
   },
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "dev:remote": "node bin/nerve-dev-remote.js"
+    "test:pack-smoke": "node scripts/verify-pack-runtime-smoke.js",
+    "sync:editor-core": "node scripts/sync-editor-core-to-studio.js",
+    "verify:editor-core-sync": "node scripts/verify-editor-core-sync.js",
+    "verify:editor-core-pack": "node scripts/verify-editor-core-pack.js",
+    "build:studio": "npm run sync:editor-core ; node scripts/build-app-js.js",
+    "dev:remote": "node bin/nerve-dev-remote.js",
+    "model:check": "node bin/nerve-model-check.js",
+    "model:doctor": "node bin/nerve-model-check.js"
   },
+  "workspaces": [
+    "packages/*"
+  ],
   "dependencies": {
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
     "aedes": "^1.0.2",
-    "mqtt": "^5.15.1",
-    "ws": "^8.18.3"
+    "mqtt": "^5.15.1"
   },
   "homepage": "https://github.com/janthehun/nerveflow",
   "repository": {
@@ -49,7 +61,8 @@
     "src/",
     "bin/nerve-runtime.js",
     "bin/nerve-attach.js",
-    "bin/nerve-dev-remote.js",
+    "bin/nerve-model-check.js",
+    "bin/nerve-compose.js",
     "docs/",
     "examples/minimal-web-host/server.js",
     "examples/minimal-web-host/README.md",

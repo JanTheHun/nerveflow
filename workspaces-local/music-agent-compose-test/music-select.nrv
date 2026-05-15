@@ -1,0 +1,33 @@
+on "user_wants_music"
+  filter = { category: "music" }
+  if event.payload
+    filter = event.payload
+  end
+  results = tool("memory_retrieve", {
+    query_text: event.value,
+    limit: 10,
+    filter_metadata: filter
+  })
+
+  limit = 0.6
+
+  relevant = cut(results.items, "similarity", ">=", limit)
+	# output json relevant
+	context = { query: event.value, candidates: relevant, require_fresh_time_tool: true }
+	  music = agent(
+	    "chat",
+	    to_json(context),
+	    to_json(file("music-select/music-select.instructions.md")),
+	    returns={
+		  type: ["band","album","song","unclear"],
+		  index: 0,
+		  confidence: 0,
+		  current_time: 1
+		},
+	    validate="strict",
+	    retry_on_contract_violation=2,
+	    tools={ mode: "governed", allow: ["get_time"], maxRounds: 2, timeoutMs: 3000, denyOnUnknownTool: true }
+    )
+  winner = pick(relevant, music.index)
+  output json { target: winner.metadata, confidence: music.confidence, time: music.current_time }
+end

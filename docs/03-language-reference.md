@@ -96,6 +96,44 @@ Core built-ins:
 - `to_json(value)`
 - `emit(type, value)`
 
+Language constructs (not regular function calls):
+
+- `parallel([agent(...), model(...), ...])`
+
+Try envelope expression:
+
+- `try <call-expression>`
+
+`parallel([...])` evaluates a group of independent `agent()` or `model()` calls and returns their results in input order. All children are evaluated under a shared context snapshot. If any child fails, the entire expression fails; if multiple fail, the error from the lowest input index is surfaced. `on_contract_violation` is not allowed inside parallel children. `parallel([...])` must be assigned to a variable.
+
+`try <call-expression>` converts supported operational call failures into explicit envelope values:
+
+- success: `{ ok: true, value: ... }`
+- failure: `{ ok: false, error: { type, message, output? } }`
+
+When the failing operation has original text output available, `error.output` preserves that source text.
+
+Phase 1 supports `try` with:
+
+- `tool(...)`
+- `script(...)`
+- `operator(...)`
+- `try_bind(...)`
+- `agent(...)`
+- `model(...)`
+
+For `try` with `agent(...)` or `model(...)`, the call must not use:
+
+- `on_contract_violation`
+
+`returns`, `decide` (agent only), and `retry_on_contract_violation` are supported with `try`.
+
+Invalid combinations raise `INVALID_CALL_CONFIG`.
+
+`try` does not suppress parse errors, compile/runtime structural errors, invalid workflow semantics, or deterministic evaluation errors.
+
+See `docs/spec-parallel-group-evaluation.md` for full semantics.
+
 Collection helper semantics:
 
 - `length`: arrays -> item count, strings -> character count, objects -> top-level key count
@@ -118,6 +156,9 @@ Recognized integration calls:
 
 - `tool(name, ...)`
 - `agent(agentName, prompt?, instructions?, messages=?, format=?, returns=?, validate=?, retry_on_contract_violation=?, on_contract_violation=?)`
+- `model(modelName, prompt?, instructions?, messages=?, format=?, returns=?, validate=?, retry_on_contract_violation=?, on_contract_violation=?)`
+
+`model()` has the same signature and semantics as `agent()`, but takes a direct model identifier instead of an agent profile name. The model name is passed directly to the transport layer.
 
 `messages` entries have the shape `{ role, content, images? }`. `role` and `content` are required. `images` is an optional array of base64-encoded image strings; empty strings are filtered and the field is omitted when no valid entries remain. Example:
 
@@ -185,6 +226,115 @@ returns={
   area: ["kitchen", "garage", "other"]
 }
 ```
+
+## 5. Configuration Layer: Models, Transports, and Agents
+
+Workflows can reference LLM models and agent profiles through a centralized three-layer configuration system. This allows you to:
+
+- Define reusable transport configurations (endpoint, credentials) separately from model logic
+- Define reusable model configurations (transport reference, model ID) once
+- Define agent profiles with shared instructions and tools
+- Keep script logic decoupled from infrastructure details
+
+### Transports Registry
+
+Define transport endpoints in `nextv.json#transports` or a separate `transports.json` file.
+`transports.json` is environment-specific and should not be committed to version control.
+
+```json
+{
+  "transports": {
+    "ollama": {
+      "provider": "ollama",
+      "base_url": "http://localhost:11434"
+    },
+    "llama.cpp": {
+      "provider": "llama.cpp",
+      "endpoint": "http://localhost:8080"
+    }
+  }
+}
+```
+
+Each transport entry requires a `provider` field (non-empty string). All other fields are passed through to the transport adapter as-is, enabling capability metadata:
+
+```json
+{
+  "transports": {
+    "ollama": {
+      "provider": "ollama",
+      "base_url": "http://localhost:11434",
+      "vision": true,
+      "context_length": 128000
+    }
+  }
+}
+```
+
+Loading precedence: `nextv.json#transports` → `nextv.json#transportsConfig` (external file reference) → `transports.json` (auto-discovered in workspace root).
+
+### Models Registry
+
+Define models in `nextv.json#models` or a separate `models.json` file:
+
+```json
+{
+  "models": {
+    "local-llama": {
+      "model": "llama3.2",
+      "transport": "ollama"
+    },
+    "remote-gpt": {
+      "model": "gpt-4-turbo",
+      "transport": "openai"
+    }
+  }
+}
+```
+
+The `transport` field must match an entry in the transports registry (or a builtin name: `ollama`, `llama.cpp`, `llama_cpp`, `openai`).
+
+### Agent Profiles
+
+Define agent profiles in `nextv.json#agents` or a separate `agents.json` file:
+
+```json
+{
+  "agents": {
+    "profiles": {
+      "qa_bot": {
+        "model": "local-llama",
+        "instructions": "You are a QA expert. Respond concisely.",
+        "tools": ["run_test", "check_coverage"]
+      }
+    }
+  }
+}
+```
+
+Agent profiles must not define `transport`; this is reserved for the models layer. Profiles must reference a model name that exists in the models registry.
+
+### Resolution Chain
+
+When you call `agent("qa_bot", ...)` in a script:
+
+1. Runtime looks up "qa_bot" in `agents.profiles`
+2. Profile specifies `model: "local-llama"`
+3. Runtime looks up "local-llama" in `models.map`
+4. Models entry specifies transport label (`ollama`) and model ID (`llama3.2`)
+5. Runtime looks up "ollama" in `transports.map` — resolves endpoint config
+6. Profile instructions and tools are merged with call-time arguments
+7. Full resolved config (`model`, `transport`) is passed to the transport adapter
+
+If the agent or model is not found in config, the runtime falls back to treating the name as a direct model identifier (for backward compatibility) or uses environment variables (`OLLAMA_MODEL`, `AGENT_TRANSPORT`).
+
+Transport labels that appear in `models.map` but are absent from `transports.map` are flagged as `TRANSPORT_NOT_FOUND` at startup — this is always a fatal error regardless of `effectsPolicy`.
+
+### Backward Compatibility
+
+- Existing scripts using `agent("modelname", ...)` without configuration still work
+- Direct `model("llama3.2", ...)` calls bypass configuration entirely
+- Environment variables (`OLLAMA_MODEL`, `AGENT_TRANSPORT`) still apply as fallback
 
 ## Cardinality Constraints
 
@@ -298,7 +448,7 @@ IR lowering note:
 - `operator(...) -> operator_call`
 - `emit(...)` currently lowers through generic call handling and queues a runtime signal
 
-## 5. Events, Subscriptions, And Queueing
+## 6. Events, Subscriptions, And Queueing
 
 Signal model:
 
@@ -313,7 +463,7 @@ External ingress model:
 - `on external "type"` is auto-bound to matching host input event type
 - manual bridge boilerplate is not required
 
-## 6. Output Model
+## 7. Output Model
 
 Built-in output channels:
 
@@ -340,14 +490,14 @@ Recommendations:
 - prefer `output json ...` for new structured output flows
 - use `interaction` only when host compatibility requires it
 
-## 7. Includes
+## 8. Includes
 
 Include behavior:
 
 - include paths resolve relative to current file directory when run from file context
 - include cycles are rejected
 
-## 8. Strict Mode
+## 9. Strict Mode
 
 Strict mode is compile-time validation.
 
@@ -358,7 +508,7 @@ Current strict-mode forbidden calls:
 
 Strict checks apply across nested expressions, not just top-level calls.
 
-## 9. Host Boundary
+## 10. Host Boundary
 
 Nerveflow runtime computes and emits events; host adapters provide side effects and integrations.
 
@@ -375,7 +525,7 @@ Agent metadata note:
 - `agent()` still returns workflow values only; per-call provider metadata is a host observability payload surfaced in `nextv_execution.result.agentCalls`
 - see [04-host-integration.md](04-host-integration.md#agent-call-metadata-contract-additive) for the additive metadata contract and example payloads
 
-## 10. Contract Notes
+## 11. Contract Notes
 
 This reference is intentionally implementation-aligned.
 

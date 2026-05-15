@@ -1,0 +1,1 @@
+Classify the user message intent for the news assistant.

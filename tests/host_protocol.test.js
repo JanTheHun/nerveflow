@@ -140,7 +140,11 @@ test('protocol constants include required v1 values', () => {
     'stop',
     'enqueue_event',
     'dispatch_ingress',
+    'call_inspector_execute',
+    'submit_candidate',
+    'promote_candidate',
     'snapshot',
+    'definition_status',
     'subscribe',
     'unsubscribe',
   ])
@@ -163,5 +167,14 @@ test('protocol constants include required v1 values', () => {
     'nextv_event_queued',
     'nextv_ingress_dispatched',
     'nextv_effect_realized',
+    'nextv_candidate_validation_started',
+    'nextv_candidate_validation_failed',
+    'nextv_candidate_promotable',
+    'nextv_candidate_promoted',
   ])
+})
+
+test('protocol constants include promote_candidate command type', () => {
+  assert.ok(HOST_COMMAND_TYPES.includes('promote_candidate'))
+  assert.ok(HOST_EVENT_NAMES.includes('nextv_candidate_promoted'))
 })

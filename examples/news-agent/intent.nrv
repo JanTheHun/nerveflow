@@ -13,7 +13,7 @@ on external "user_message"
     on_contract_violation=emit("user_output", concat("[intent-contract] field=", violation.field, " expected=", violation.expected, " actual=", violation.actual))
   )
 
-  output json route
+  output json { "result": route }
   emit("user_output", concat("[intent] ", route.intent))
 
   if route.intent == "news"

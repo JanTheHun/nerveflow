@@ -8,6 +8,17 @@ export function buildInactiveSnapshot() {
   }
 }
 
+export function buildInactiveCandidateStatus() {
+  return {
+    status: 'none',
+    policy: 'warn',
+    submittedAt: null,
+    workspaceDir: '',
+    entrypointPath: '',
+    issues: [],
+  }
+}
+
 export function createNextVRuntimeController({
   eventBus,
   createRunner,
@@ -31,6 +42,8 @@ export function createNextVRuntimeController({
   normalizeEffectsPolicy = () => 'warn',
   validateDeclaredEffectBindings = () => [],
   validateRequiredCapabilityBindings = () => [],
+  validateConfigReferences = () => [],
+  validateNoForbiddenAgentFields = () => [],
   areJsonStatesEqual,
   hasMeaningfulNextVExecutionEvents,
   normalizeInputEvent,
@@ -43,16 +56,46 @@ export function createNextVRuntimeController({
   validateAgentReturnContract = null,
   buildAgentReturnContractGuidance = null,
   buildAgentRetryPrompt = null,
+  buildDecideGuidance = null,
+  buildDecideRetryPrompt = null,
+  validateDecideOutput = null,
   toolRuntime = null,
   ingressRuntime = null,
   effectRuntime = null,
   callAgent,
   defaultModel = '',
+  slowAgentWarningMs = 15000,
+  parallelMaxConcurrency = null,
 }) {
   let nextVRunner = null
   let nextVTimerHandles = []
   let nextVWorkspaceDir = ''
   let nextVEntrypointPath = ''
+  let nextVWorkspaceDirResolved = null
+  let nextVWorkspaceConfig = null
+  let nextVRuntimeCallHooks = null
+  let nextVCandidateStatus = buildInactiveCandidateStatus()
+
+  function normalizeRuntimeEventSourcePath(pathValue) {
+    const raw = String(pathValue ?? '').trim()
+    if (!raw) return ''
+    if (raw.startsWith('(')) return raw
+    try {
+      return toWorkspaceDisplayPath(raw)
+    } catch {
+      return raw.replace(/\\/g, '/')
+    }
+  }
+
+  function normalizeRuntimeEventForStudio(runtimeEvent) {
+    if (!runtimeEvent || typeof runtimeEvent !== 'object') return runtimeEvent
+    const normalizedSourcePath = normalizeRuntimeEventSourcePath(runtimeEvent.sourcePath)
+    if (!normalizedSourcePath || normalizedSourcePath === runtimeEvent.sourcePath) return runtimeEvent
+    return {
+      ...runtimeEvent,
+      sourcePath: normalizedSourcePath,
+    }
+  }
 
   function clearNextVTimers() {
     nextVTimerHandles = clearTimerHandles(nextVTimerHandles)
@@ -74,7 +117,93 @@ export function createNextVRuntimeController({
     nextVRunner.stop()
     const snapshot = nextVRunner.getSnapshot()
     nextVRunner = null
+    nextVRuntimeCallHooks = null
+    nextVWorkspaceConfig = null
+    nextVWorkspaceDirResolved = null
+    nextVCandidateStatus = buildInactiveCandidateStatus()
     return snapshot
+  }
+
+  function summarizeWorkspaceConfig(workspaceConfig) {
+    return {
+      models: workspaceConfig?.models?.status || 'not-loaded',
+      agents: workspaceConfig?.agents?.status || 'not-loaded',
+      tools: workspaceConfig?.tools?.status || 'not-loaded',
+      nextv: workspaceConfig?.nextv?.status || 'not-loaded',
+      operators: workspaceConfig?.operators?.status || 'not-loaded',
+      modelsSource: workspaceConfig?.models?.source || null,
+      agentsSource: workspaceConfig?.agents?.source || null,
+      toolsSource: workspaceConfig?.tools?.source || null,
+      nextvSource: workspaceConfig?.nextv?.file || null,
+      operatorsSource: workspaceConfig?.operators?.source || null,
+    }
+  }
+
+  function collectCandidateIssues({ workspaceConfig, effectsPolicy }) {
+    const declaredEffectChannels = getDeclaredEffectChannels(workspaceConfig)
+    const requiredCapabilities = getRequiredCapabilities(workspaceConfig)
+    const configuredModules = getConfiguredModules(workspaceConfig)
+
+    const issues = []
+
+    const effectBindingIssues = validateDeclaredEffectBindings({
+      declaredEffectChannels,
+      validateEffectBindings,
+    })
+    if (effectBindingIssues.length > 0) {
+      issues.push({
+        code: 'UNSUPPORTED_EFFECT_BINDING',
+        message: `Detected ${effectBindingIssues.length} unsupported declared effect binding(s).`,
+        severity: effectsPolicy === 'strict' ? 'error' : 'warning',
+        details: effectBindingIssues,
+      })
+    }
+
+    const capabilityBindingIssues = validateRequiredCapabilityBindings({
+      requiredCapabilities,
+      configuredModules,
+      validateCapabilityBindings,
+    })
+    if (capabilityBindingIssues.length > 0) {
+      issues.push({
+        code: 'UNSUPPORTED_CAPABILITY_BINDING',
+        message: `Detected ${capabilityBindingIssues.length} unsupported required capability binding(s).`,
+        severity: effectsPolicy === 'strict' ? 'error' : 'warning',
+        details: capabilityBindingIssues,
+      })
+    }
+
+    const configRefIssues = validateConfigReferences(workspaceConfig)
+    const transportIssues = configRefIssues.filter((entry) => entry.code === 'TRANSPORT_NOT_FOUND')
+    if (transportIssues.length > 0) {
+      issues.push({
+        code: 'TRANSPORT_NOT_FOUND',
+        message: `Detected ${transportIssues.length} transport configuration error(s).`,
+        severity: 'error',
+        details: transportIssues,
+      })
+    }
+    const otherConfigRefIssues = configRefIssues.filter((entry) => entry.code !== 'TRANSPORT_NOT_FOUND')
+    if (otherConfigRefIssues.length > 0) {
+      issues.push({
+        code: 'CONFIG_REFERENCE_ERROR',
+        message: `Detected ${otherConfigRefIssues.length} config reference issue(s).`,
+        severity: effectsPolicy === 'strict' ? 'error' : 'warning',
+        details: otherConfigRefIssues,
+      })
+    }
+
+    const forbiddenFieldIssues = validateNoForbiddenAgentFields(workspaceConfig)
+    if (forbiddenFieldIssues.length > 0) {
+      issues.push({
+        code: 'FORBIDDEN_AGENT_FIELD',
+        message: `Detected ${forbiddenFieldIssues.length} forbidden agent field(s).`,
+        severity: effectsPolicy === 'strict' ? 'error' : 'warning',
+        details: forbiddenFieldIssues,
+      })
+    }
+
+    return issues
   }
 
   async function start(body = {}) {
@@ -128,6 +257,43 @@ export function createNextVRuntimeController({
         message,
         policy: effectsPolicy,
         issues: capabilityBindingIssues,
+      })
+    }
+
+    const configRefIssues = validateConfigReferences(workspaceConfig)
+    if (configRefIssues.length > 0) {
+      // TRANSPORT_NOT_FOUND is always fatal — it indicates broken config regardless of policy.
+      const transportIssues = configRefIssues.filter((i) => i.code === 'TRANSPORT_NOT_FOUND')
+      if (transportIssues.length > 0) {
+        const details = transportIssues.map((i) => i.message).join('; ')
+        throw new Error(`Transport configuration error(s): ${details}`)
+      }
+      const otherIssues = configRefIssues.filter((i) => i.code !== 'TRANSPORT_NOT_FOUND')
+      if (otherIssues.length > 0) {
+        const message = `Detected ${otherIssues.length} config reference issue(s).`
+        if (effectsPolicy === 'strict') {
+          throw new Error(`${message} Set nextv.json#effectsPolicy to "warn" to allow startup.`)
+        }
+        eventBus.publish('nextv_warning', {
+          code: 'CONFIG_REFERENCE_ERROR',
+          message,
+          policy: effectsPolicy,
+          issues: otherIssues,
+        })
+      }
+    }
+
+    const forbiddenFieldIssues = validateNoForbiddenAgentFields(workspaceConfig)
+    if (forbiddenFieldIssues.length > 0) {
+      const message = `Detected ${forbiddenFieldIssues.length} forbidden agent field(s).`
+      if (effectsPolicy === 'strict') {
+        throw new Error(`${message} Agents must not define transport or other execution parameters.`)
+      }
+      eventBus.publish('nextv_warning', {
+        code: 'FORBIDDEN_AGENT_FIELD',
+        message,
+        policy: effectsPolicy,
+        issues: forbiddenFieldIssues,
       })
     }
 
@@ -211,11 +377,23 @@ export function createNextVRuntimeController({
 
     nextVWorkspaceDir = workspaceDir.relativePath
     nextVEntrypointPath = entrypoint.relativePath
+    nextVWorkspaceDirResolved = workspaceDir
+    nextVWorkspaceConfig = workspaceConfig
     const runtimeCallHooks = createHostAdapter({
       workspaceDir,
       workspaceConfig,
+      getWorkspaceConfig: () => nextVWorkspaceConfig,
       callAgent,
       defaultModel,
+      captureAgentRequestPayload: true,
+      slowAgentWarningMs,
+      onSlowAgentCallWarning: (payload) => {
+        eventBus.publish('nextv_warning', {
+          code: 'SLOW_AGENT_CALL',
+          message: `agent("${payload.agent}") exceeded ${payload.thresholdMs}ms on model "${payload.model}".`,
+          ...payload,
+        })
+      },
       resolvePathFromBaseDirectory,
       existsSync,
       runNextVScriptFromFile,
@@ -225,8 +403,39 @@ export function createNextVRuntimeController({
       validateAgentReturnContract,
       buildAgentReturnContractGuidance,
       buildAgentRetryPrompt,
+      buildDecideGuidance,
+      buildDecideRetryPrompt,
+      validateDecideOutput,
       toolRuntime,
     })
+    nextVRuntimeCallHooks = runtimeCallHooks
+
+    // Preload phase — blocking, best-effort, must not abort startup
+    const preloadMode = String(workspaceConfig?.runtime?.preload ?? 'none').trim()
+    if ((preloadMode === 'marked' || preloadMode === 'all') && typeof callAgent.load === 'function') {
+      const modelsMap = workspaceConfig?.models?.map ?? {}
+      const transportsMap = workspaceConfig?.transports?.map ?? {}
+      const candidates = Object.entries(modelsMap).filter(([, modelConfig]) => {
+        if (preloadMode === 'marked' && modelConfig.preload !== true) return false
+        const transportConfig = transportsMap[modelConfig.transport] ?? null
+        return transportConfig?.capabilities?.supports_preload === true
+      })
+      for (const [modelLabel, modelConfig] of candidates) {
+        const transportConfig = transportsMap[modelConfig.transport] ?? null
+        const modelId = String(modelConfig.model ?? '').trim()
+        if (!modelId) continue
+        const startMs = Date.now()
+        eventBus.publish('nextv_preload_start', { model: modelLabel, modelId })
+        try {
+          await callAgent.load({ model: modelId, transport: transportConfig })
+          eventBus.publish('nextv_preload_success', { model: modelLabel, modelId, durationMs: Date.now() - startMs })
+        } catch (err) {
+          eventBus.publish('nextv_preload_error', { model: modelLabel, modelId, error: String(err?.message ?? err) })
+          // must not crash startup
+        }
+      }
+    }
+
     let lastObservedState = initialState
 
     nextVRunner = createRunner({
@@ -238,6 +447,7 @@ export function createNextVRuntimeController({
       runOptions: {
         emitTrace,
         emitTraceState,
+        parallelMaxConcurrency,
         declaredExternals: getDeclaredExternals(workspaceConfig),
         effectChannels: declaredEffectChannels,
         hostAdapter: runtimeCallHooks,
@@ -246,11 +456,20 @@ export function createNextVRuntimeController({
         const eventSource = String(event?.source ?? '').trim()
         if (eventSource === 'timer' && suppressTimerNoOps) {
           const runtimeEventType = String(runtimeEvent?.type ?? '').trim()
-          if (runtimeEventType !== 'output') return
+          const allowTimerRuntimeEvent = (
+            runtimeEventType === 'agent_call'
+            || runtimeEventType === 'agent_result'
+            || runtimeEventType === 'tool_call'
+            || runtimeEventType === 'tool_result'
+            || runtimeEventType === 'output'
+            || runtimeEventType === 'warning'
+          )
+          if (!allowTimerRuntimeEvent) return
         }
-        eventBus.publish('nextv_runtime_event', { event, runtimeEvent, snapshot })
-        const effectChannelId = String(runtimeEvent?.effectChannelId ?? '').trim()
-        if (runtimeEvent?.type === 'output' && effectChannelId && effectRuntime && typeof effectRuntime.realize === 'function') {
+        const runtimeEventForStudio = normalizeRuntimeEventForStudio(runtimeEvent)
+        eventBus.publish('nextv_runtime_event', { event, runtimeEvent: runtimeEventForStudio, snapshot })
+        const effectChannelId = String(runtimeEventForStudio?.effectChannelId ?? '').trim()
+        if (runtimeEventForStudio?.type === 'output' && effectChannelId && effectRuntime && typeof effectRuntime.realize === 'function') {
           Promise
             .resolve()
             .then(async () => effectRuntime.realize({
@@ -259,7 +478,7 @@ export function createNextVRuntimeController({
               channelId: effectChannelId,
               effectChannelId,
               event,
-              runtimeEvent,
+              runtimeEvent: runtimeEventForStudio,
               snapshot,
               workspaceDir: workspaceDir.relativePath,
               entrypointPath: entrypoint.relativePath,
@@ -269,7 +488,7 @@ export function createNextVRuntimeController({
                 effectChannelId,
                 result,
                 event,
-                runtimeEvent,
+                runtimeEvent: runtimeEventForStudio,
                 snapshot,
               })
             })
@@ -296,6 +515,9 @@ export function createNextVRuntimeController({
         if (suppressTimerNoOps && eventSource === 'timer' && !executionIsMeaningful) {
           return
         }
+        const normalizedEvents = Array.isArray(events)
+          ? events.map((runtimeEvent) => normalizeRuntimeEventForStudio(runtimeEvent))
+          : []
         eventBus.publish('nextv_execution', {
           event,
           result: {
@@ -303,19 +525,27 @@ export function createNextVRuntimeController({
             steps: Number(result?.steps ?? 0),
             agentCalls: Array.isArray(result?.agentCallMetadata) ? result.agentCallMetadata : [],
           },
-          events: Array.isArray(events) ? events : [],
+          events: normalizedEvents,
           snapshot,
         })
       },
       onError: (err) => {
+        const normalizedErrorEvents = Array.isArray(err?.events)
+          ? err.events.map((runtimeEvent) => normalizeRuntimeEventForStudio(runtimeEvent))
+          : []
+        const errorAgentCalls = Array.isArray(err?.agentCallMetadata) ? err.agentCallMetadata : []
         eventBus.publish('nextv_error', {
           message: String(err?.message ?? 'Unknown nextV runtime error'),
           line: Number.isFinite(Number(err?.line)) ? Number(err.line) : null,
-          sourcePath: String(err?.sourcePath ?? ''),
+          sourcePath: normalizeRuntimeEventSourcePath(err?.sourcePath),
           sourceLine: Number.isFinite(Number(err?.sourceLine)) ? Number(err.sourceLine) : null,
           kind: String(err?.kind ?? ''),
           code: String(err?.code ?? ''),
           statement: String(err?.statement ?? ''),
+          result: {
+            agentCalls: errorAgentCalls,
+          },
+          events: normalizedErrorEvents,
           snapshot: nextVRunner ? nextVRunner.getSnapshot() : null,
         })
       },
@@ -334,14 +564,16 @@ export function createNextVRuntimeController({
       stateLoadSource,
       stateLoadPath: stateLoadDisplayPath || null,
       workspaceConfig: {
-        agents: workspaceConfig.agents.status,
-        tools: workspaceConfig.tools.status,
-        nextv: workspaceConfig.nextv.status,
-        operators: workspaceConfig.operators.status,
-        agentsSource: workspaceConfig.agents.source,
-        toolsSource: workspaceConfig.tools.source,
-        nextvSource: workspaceConfig.nextv.file,
-        operatorsSource: workspaceConfig.operators.source,
+        models: workspaceConfig?.models?.status || 'not-loaded',
+        agents: workspaceConfig?.agents?.status || 'not-loaded',
+        tools: workspaceConfig?.tools?.status || 'not-loaded',
+        nextv: workspaceConfig?.nextv?.status || 'not-loaded',
+        operators: workspaceConfig?.operators?.status || 'not-loaded',
+        modelsSource: workspaceConfig?.models?.source || null,
+        agentsSource: workspaceConfig?.agents?.source || null,
+        toolsSource: workspaceConfig?.tools?.source || null,
+        nextvSource: workspaceConfig?.nextv?.file || null,
+        operatorsSource: workspaceConfig?.operators?.source || null,
       },
       timers: {
         configured: Array.isArray(workspaceConfig.nextv.timers) ? workspaceConfig.nextv.timers.length : 0,
@@ -359,6 +591,9 @@ export function createNextVRuntimeController({
       capabilities: {
         required: Object.values(requiredCapabilities).filter((entry) => entry?.required !== false).length,
         unsupportedBindings: capabilityBindingIssues.length,
+        agentRouting: typeof runtimeCallHooks?.getAgentCapabilities === 'function'
+          ? runtimeCallHooks.getAgentCapabilities()
+          : null,
       },
       snapshot,
     }
@@ -373,6 +608,98 @@ export function createNextVRuntimeController({
     const snapshot = stopRuntime()
     eventBus.publish('nextv_stopped', { snapshot })
     return snapshot
+  }
+
+  function reloadConfig() {
+    if (!nextVRunner) {
+      throw new Error('nextV runtime not active')
+    }
+
+    const workspaceDir = nextVWorkspaceDirResolved || resolveWorkspaceDirectory(nextVWorkspaceDir)
+    const workspaceConfig = loadWorkspaceConfig(workspaceDir)
+    const effectsPolicy = normalizeEffectsPolicy(workspaceConfig?.nextv?.config?.effectsPolicy)
+
+    const configRefIssues = validateConfigReferences(workspaceConfig)
+    if (configRefIssues.length > 0) {
+      const transportIssues = configRefIssues.filter((i) => i.code === 'TRANSPORT_NOT_FOUND')
+      if (transportIssues.length > 0) {
+        const details = transportIssues.map((i) => i.message).join('; ')
+        throw new Error(`Transport configuration error(s): ${details}`)
+      }
+      if (effectsPolicy === 'strict') {
+        throw new Error(`Detected ${configRefIssues.length} config reference issue(s). Set nextv.json#effectsPolicy to "warn" to allow reload.`)
+      }
+    }
+
+    const forbiddenFieldIssues = validateNoForbiddenAgentFields(workspaceConfig)
+    if (forbiddenFieldIssues.length > 0 && effectsPolicy === 'strict') {
+      throw new Error(`Detected ${forbiddenFieldIssues.length} forbidden agent field(s). Agents must not define transport or other execution parameters.`)
+    }
+
+    nextVWorkspaceDirResolved = workspaceDir
+    nextVWorkspaceConfig = workspaceConfig
+    if (nextVRuntimeCallHooks && typeof nextVRuntimeCallHooks.clearConfigCache === 'function') {
+      nextVRuntimeCallHooks.clearConfigCache()
+    }
+
+    const payload = {
+      workspaceDir: workspaceDir.relativePath,
+      entrypointPath: nextVEntrypointPath,
+      workspaceConfig: summarizeWorkspaceConfig(workspaceConfig),
+    }
+    eventBus.publish('nextv_config_reloaded', payload)
+    return payload
+  }
+
+  function submitCandidate() {
+    if (!nextVRunner) {
+      throw new Error('nextV runtime not active')
+    }
+
+    const workspaceDir = nextVWorkspaceDirResolved || resolveWorkspaceDirectory(nextVWorkspaceDir)
+    const workspaceConfig = loadWorkspaceConfig(workspaceDir)
+    const effectsPolicy = normalizeEffectsPolicy(workspaceConfig?.nextv?.config?.effectsPolicy)
+
+    eventBus.publish('nextv_candidate_validation_started', {
+      workspaceDir: workspaceDir.relativePath,
+      entrypointPath: nextVEntrypointPath,
+      policy: effectsPolicy,
+    })
+
+    const issues = collectCandidateIssues({ workspaceConfig, effectsPolicy })
+    const rejected = issues.some((issue) => issue.severity === 'error')
+    const payload = {
+      status: rejected ? 'rejected' : 'promotable',
+      policy: effectsPolicy,
+      submittedAt: new Date().toISOString(),
+      workspaceDir: workspaceDir.relativePath,
+      entrypointPath: nextVEntrypointPath,
+      workspaceConfig: summarizeWorkspaceConfig(workspaceConfig),
+      issues,
+    }
+    nextVCandidateStatus = payload
+
+    if (rejected) {
+      eventBus.publish('nextv_candidate_validation_failed', payload)
+    } else {
+      eventBus.publish('nextv_candidate_promotable', payload)
+    }
+
+    return payload
+  }
+
+  function promoteCandidate() {
+    if (!nextVRunner) {
+      throw new Error('nextV runtime not active')
+    }
+    if (nextVCandidateStatus.status !== 'promotable') {
+      throw new Error('no promotable candidate — run submitCandidate first')
+    }
+
+    const reloaded = reloadConfig()
+    nextVCandidateStatus = buildInactiveCandidateStatus()
+    eventBus.publish('nextv_candidate_promoted', reloaded)
+    return reloaded
   }
 
   function enqueue(rawEvent) {
@@ -449,13 +776,28 @@ export function createNextVRuntimeController({
     return nextVRunner ? nextVRunner.getSnapshot() : null
   }
 
+  function getDefinitionStatus() {
+    return {
+      active: {
+        running: Boolean(nextVRunner),
+        workspaceDir: nextVWorkspaceDir,
+        entrypointPath: nextVEntrypointPath,
+      },
+      candidate: nextVCandidateStatus,
+    }
+  }
+
   return {
     start,
     stop,
+    reloadConfig,
+    submitCandidate,
+    promoteCandidate,
     enqueue,
     dispatchIngress,
     getSnapshot,
     getActiveSnapshot,
+    getDefinitionStatus,
     isActive: () => Boolean(nextVRunner),
     getWorkspaceDir: () => nextVWorkspaceDir,
     getEntrypointPath: () => nextVEntrypointPath,

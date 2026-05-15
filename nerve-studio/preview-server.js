@@ -17,6 +17,9 @@ import { fileURLToPath } from 'node:url'
 import {
   NextVEventRunner,
   appendAgentFormatInstructions,
+  buildAgentRetryPrompt,
+  buildDecideGuidance,
+  buildDecideRetryPrompt,
   buildAgentReturnContractGuidance,
   detectCycles,
   extractEventGraph,
@@ -24,6 +27,7 @@ import {
   parseNextVScript,
   runNextVScriptFromFile,
   validateAgentReturnContract,
+  validateDecideOutput,
   validateOutputContract,
 } from '../src/index.js'
 import {
@@ -66,6 +70,7 @@ import {
 import {
   loadHostModulesByRole,
 } from '../src/host_modules/index.js'
+import { createOllamaTransport } from '../src/host_core/agent_transports/ollama.js'
 import { createMqttRemoteBridge } from './mqtt-remote-bridge.js'
 import { createWsRemoteBridge } from './ws-remote-bridge.js'
 import { connect as mqttConnect } from 'mqtt'
@@ -155,7 +160,31 @@ const isRemoteObserveOnlyMode = REMOTE_MODE === 'mqtt'
 const MANAGED_RUNTIME_PORT = Number(process.env.NERVE_STUDIO_MANAGED_RUNTIME_PORT || 4190)
 const MANAGED_RUNTIME_WS_PATH = String(process.env.NERVE_STUDIO_MANAGED_RUNTIME_WS_PATH || '/api/runtime/ws').trim() || '/api/runtime/ws'
 const MANAGED_RUNTIME_WS_URL = String(process.env.NERVE_STUDIO_MANAGED_RUNTIME_WS_URL || `ws://127.0.0.1:${MANAGED_RUNTIME_PORT}${MANAGED_RUNTIME_WS_PATH}`).trim()
+const ATTACH_RUNTIME_WS_URL_DEFAULT = String(process.env.NERVE_STUDIO_ATTACH_WS || '').trim()
 const MANAGED_RUNTIME_START_TIMEOUT_MS = Number(process.env.NERVE_STUDIO_MANAGED_RUNTIME_START_TIMEOUT_MS || 12000)
+
+// Warn if the managed runtime port is already in use when Studio starts,
+// which indicates a stale nerve-runtime process from a previous session.
+// The bridge will reconnect to it, but it may be running old code.
+if (!isRemoteMode) {
+  const { createConnection } = await import('node:net')
+  await new Promise((resolve) => {
+    const probe = createConnection({ port: MANAGED_RUNTIME_PORT, host: '127.0.0.1' })
+    probe.on('connect', () => {
+      probe.destroy()
+      console.warn(
+        `[nerve-studio] WARNING: something is already listening on the managed runtime port ${MANAGED_RUNTIME_PORT}.` +
+        ` A stale nerve-runtime process may be running from a previous session.` +
+        ` Kill it manually (e.g. Stop-Process -Name node) or it will be reused instead of a fresh process being started.`
+      )
+      resolve()
+    })
+    probe.on('error', () => {
+      probe.destroy()
+      resolve()
+    })
+  })
+}
 
 const eventBus = createEventBus()
 const TIMER_PULSE_REPLAY_WINDOW_MS = 30_000
@@ -277,19 +306,90 @@ const managedWsRemoteBridge = !isRemoteMode
     eventBus,
   })
   : null
+let attachedWsRemoteBridge = null
+let attachedWsRemoteBridgeUrl = ''
 let managedRuntimeProcess = null
+
+function resolveAttachWsUrl(url) {
+  return String(url?.searchParams?.get('attachWsUrl') ?? ATTACH_RUNTIME_WS_URL_DEFAULT).trim()
+}
+
+function validateAttachWsUrlOrThrow(wsUrlRaw) {
+  const wsUrl = String(wsUrlRaw ?? '').trim()
+  if (!wsUrl) {
+    const err = new Error('attach mode requires attachWsUrl query parameter or NERVE_STUDIO_ATTACH_WS env')
+    err.code = 'validation_error'
+    throw err
+  }
+
+  let parsed
+  try {
+    parsed = new URL(wsUrl)
+  } catch {
+    const err = new Error(`attach ws url is invalid: ${wsUrl}`)
+    err.code = 'validation_error'
+    throw err
+  }
+
+  if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') {
+    const err = new Error(`attach ws url must use ws:// or wss://: ${wsUrl}`)
+    err.code = 'validation_error'
+    throw err
+  }
+
+  return parsed.toString()
+}
+
+function disconnectAttachedWsRemoteBridge() {
+  if (attachedWsRemoteBridge) {
+    try {
+      attachedWsRemoteBridge.disconnect()
+    } catch {
+      // best effort
+    }
+  }
+  attachedWsRemoteBridge = null
+  attachedWsRemoteBridgeUrl = ''
+}
+
+function ensureAttachedWsRemoteBridge(url) {
+  const validatedUrl = validateAttachWsUrlOrThrow(url)
+  if (attachedWsRemoteBridge && attachedWsRemoteBridgeUrl === validatedUrl) {
+    return attachedWsRemoteBridge
+  }
+
+  disconnectAttachedWsRemoteBridge()
+  attachedWsRemoteBridge = createWsRemoteBridge({
+    wsUrl: validatedUrl,
+    eventBus,
+  })
+  attachedWsRemoteBridgeUrl = validatedUrl
+  return attachedWsRemoteBridge
+}
 
 function resolveRuntimeTarget(url) {
   if (isRemoteObserveOnlyMode) return 'remote-observe'
   if (isRemoteControlMode) return 'remote-control'
-  return String(url?.searchParams?.get('runtimeTarget') ?? '').trim().toLowerCase() === 'external'
-    ? 'external'
-    : 'embedded'
+  const requestedTarget = String(url?.searchParams?.get('runtimeTarget') ?? '').trim().toLowerCase()
+  if (requestedTarget === 'external') return 'external'
+  if (requestedTarget === 'attach') return 'attach'
+  return 'embedded'
 }
 
-function getRuntimeControlBridge(runtimeTarget) {
+function getRuntimeControlBridge(runtimeTarget, url = null, options = {}) {
+  const required = options.required === true
   if (runtimeTarget === 'remote-control') return wsRemoteBridge
   if (runtimeTarget === 'external') return managedWsRemoteBridge
+  if (runtimeTarget === 'attach') {
+    const attachWsUrl = resolveAttachWsUrl(url)
+    if (!attachWsUrl) {
+      if (!required) return null
+      const err = new Error('attach mode requires attachWsUrl query parameter or NERVE_STUDIO_ATTACH_WS env')
+      err.code = 'validation_error'
+      throw err
+    }
+    return ensureAttachedWsRemoteBridge(attachWsUrl)
+  }
   return null
 }
 
@@ -337,9 +437,15 @@ async function ensureManagedRuntimeProcess(workspaceDirRaw) {
       '--no-autostart',
     ]
 
+    const childEnv = {
+      ...process.env,
+      OLLAMA_DEBUG_LOG: String(process.env.OLLAMA_DEBUG_LOG ?? '1'),
+      OLLAMA_DEBUG_SUMMARY: String(process.env.OLLAMA_DEBUG_SUMMARY ?? '1'),
+    }
+
     const child = spawn(process.execPath, childArgs, {
       cwd: REPO_ROOT,
-      env: process.env,
+      env: childEnv,
       stdio: 'inherit',
       windowsHide: false,
     })
@@ -373,7 +479,7 @@ if (isRemoteObserveOnlyMode) {
   })
 }
 
-function buildRemoteModeMetadata(runtimeTarget = 'embedded') {
+function buildRemoteModeMetadata(runtimeTarget = 'embedded', url = null) {
   if (runtimeTarget === 'embedded' && !isRemoteMode) {
     return {
       remoteMode: false,
@@ -408,6 +514,24 @@ function buildRemoteModeMetadata(runtimeTarget = 'embedded') {
     }
   }
 
+  if (runtimeTarget === 'attach') {
+    let remoteConnection = null
+    try {
+      remoteConnection = getRuntimeControlBridge(runtimeTarget, url)?.getStatus?.() ?? null
+    } catch {
+      remoteConnection = null
+    }
+
+    return {
+      remoteMode: true,
+      remoteControl: true,
+      remoteTransport: 'ws',
+      remoteConnection,
+      remoteRuntimeWorkspaceDir: String(remoteConnection?.workspaceDir ?? ''),
+      remoteRuntimeEntrypointPath: String(remoteConnection?.entrypointPath ?? ''),
+    }
+  }
+
   if (runtimeTarget === 'remote-observe') {
     return {
       remoteMode: true,
@@ -425,6 +549,150 @@ function buildRemoteModeMetadata(runtimeTarget = 'embedded') {
     remoteRuntimeWorkspaceDir: '',
     remoteRuntimeEntrypointPath: '',
   }
+}
+
+function buildResolvedCallSummary({
+  targetKind = 'agent',
+  target = '',
+  prompt = '',
+  instructions = '',
+  validate = 'coerce',
+  retryOnViolation = 0,
+  returnsContract = null,
+  decideContract = null,
+  requestMetadata = null,
+} = {}) {
+  function sanitizeRequestMessages(rawMessages) {
+    if (!Array.isArray(rawMessages)) return []
+    return rawMessages
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') return null
+        const role = String(entry.role ?? '').trim()
+        const content = String(entry.content ?? '')
+        if (!role) return null
+        const images = Array.isArray(entry.images)
+          ? entry.images.map((value) => String(value ?? '').trim()).filter(Boolean)
+          : []
+        return {
+          role,
+          content,
+          ...(images.length > 0 ? { imageCount: images.length } : {}),
+        }
+      })
+      .filter(Boolean)
+  }
+
+  function buildFinalRequestSummary(request = {}, wirePayload = {}, resolvedModel = '') {
+    const finalMessages = sanitizeRequestMessages(request.messages ?? wirePayload.messages)
+    const toolNames = Array.isArray(request.toolNames)
+      ? request.toolNames.map((value) => String(value ?? '').trim()).filter(Boolean)
+      : []
+    const transport = wirePayload.transport && typeof wirePayload.transport === 'object'
+      ? {
+          provider: String(wirePayload.transport.provider ?? '').trim() || undefined,
+          baseUrl: String(wirePayload.transport.baseUrl ?? '').trim() || undefined,
+          host: String(wirePayload.transport.host ?? '').trim() || undefined,
+          port: Number.isInteger(Number(wirePayload.transport.port)) ? Number(wirePayload.transport.port) : undefined,
+        }
+      : null
+    const compactTransport = transport
+      ? Object.fromEntries(Object.entries(transport).filter(([, value]) => value !== undefined && value !== ''))
+      : null
+
+    return {
+      model: String(wirePayload.model ?? resolvedModel ?? '').trim(),
+      messageCount: finalMessages.length,
+      messages: finalMessages,
+      ...(toolNames.length > 0 ? { toolNames } : {}),
+      ...(compactTransport && Object.keys(compactTransport).length > 0 ? { transport: compactTransport } : {}),
+    }
+  }
+
+  function detectRetryGuidanceInjected(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) return false
+    const lastUserMessage = [...messages].reverse().find((entry) => String(entry?.role ?? '').trim() === 'user')
+    const content = String(lastUserMessage?.content ?? '')
+    return /the previous response/i.test(content)
+  }
+
+  const request = requestMetadata && typeof requestMetadata === 'object' ? requestMetadata : {}
+  const wirePayload = request.wirePayload && typeof request.wirePayload === 'object'
+    ? request.wirePayload
+    : {}
+  const wireTransport = wirePayload.transport && typeof wirePayload.transport === 'object'
+    ? wirePayload.transport
+    : {}
+
+  const resolvedModel = String(request.resolvedModel ?? request.model ?? wirePayload.model ?? '').trim()
+  const resolvedModelAlias = String(request.resolvedModelAlias ?? '').trim()
+  const transportName = String(request.transportName ?? '').trim()
+  const transportProvider = String(request.transportProvider ?? wireTransport.provider ?? '').trim()
+  const toolNames = Array.isArray(request.toolNames)
+    ? request.toolNames.map((value) => String(value ?? '').trim()).filter(Boolean)
+    : []
+  const messageCountRaw = Number(request.messageCount)
+  const messageCount = Number.isFinite(messageCountRaw)
+    ? Math.max(0, Math.round(messageCountRaw))
+    : undefined
+  const finalMessages = sanitizeRequestMessages(request.messages ?? wirePayload.messages)
+  const attemptRaw = Number(request.attempt)
+  const attempt = Number.isFinite(attemptRaw) ? Math.max(1, Math.round(attemptRaw)) : 1
+  const retryLimitRaw = Number(request.retryLimit)
+  const retryLimit = Number.isFinite(retryLimitRaw)
+    ? Math.max(0, Math.round(retryLimitRaw))
+    : Math.max(0, Math.min(8, Number(retryOnViolation) || 0))
+
+  return {
+    type: targetKind === 'model' ? 'model_call' : 'agent_call',
+    targetKind,
+    target: String(request.target ?? target ?? '').trim(),
+    resolvedModel,
+    ...(resolvedModelAlias && resolvedModelAlias !== resolvedModel ? { resolvedModelAlias } : {}),
+    ...(transportName ? { transport: transportName } : {}),
+    ...(transportProvider ? { transportProvider } : {}),
+    instructions: String(request.instructions ?? instructions ?? '').trim(),
+    prompt: String(request.prompt ?? prompt ?? ''),
+    ...(typeof messageCount === 'number' ? { messageCount } : {}),
+    attempt,
+    retryLimit,
+    retryGuidanceInjected: detectRetryGuidanceInjected(finalMessages),
+    finalMessages,
+    finalRequest: buildFinalRequestSummary(request, wirePayload, resolvedModel),
+    validate: String(request.validate ?? validate ?? 'coerce').trim() || 'coerce',
+    retry_on_contract_violation: Number.isInteger(Number(request.retry_on_contract_violation))
+      ? Math.max(0, Math.min(8, Number(request.retry_on_contract_violation)))
+      : Math.max(0, Math.min(8, Number(retryOnViolation) || 0)),
+    ...(returnsContract != null ? { returns: returnsContract } : {}),
+    ...(Array.isArray(decideContract) && decideContract.length > 0 ? { decide: decideContract } : {}),
+    ...(toolNames.length > 0 ? { toolNames } : {}),
+  }
+}
+
+function normalizeCallInspectorCallResult(callResult) {
+  if (callResult && typeof callResult === 'object' && !Array.isArray(callResult)
+    && Object.prototype.hasOwnProperty.call(callResult, 'value')) {
+    return callResult
+  }
+  return {
+    value: callResult,
+    outputText: typeof callResult === 'string' ? callResult : '',
+    metadata: null,
+  }
+}
+
+function toCallInspectorTryFailureEnvelope(err) {
+  const code = String(err?.code ?? '').trim().toLowerCase()
+  const outputRaw = Object.prototype.hasOwnProperty.call(err ?? {}, 'output')
+    ? err?.output
+    : (Object.prototype.hasOwnProperty.call(err ?? {}, 'actual') ? err?.actual : undefined)
+  const error = {
+    type: code || 'operation_failure',
+    message: String(err?.message ?? 'Operation failed.'),
+  }
+  if (outputRaw !== undefined) {
+    error.output = outputRaw
+  }
+  return { ok: false, error }
 }
 
 function mapRemoteCommandErrorStatus(errorCode) {
@@ -586,10 +854,9 @@ function resolveWorkspaceDirectory(inputPath) {
   if (!candidate) {
     return { absolutePath: REPO_ROOT, relativePath: '.' }
   }
-  if (isAbsolute(candidate)) {
-    throw new Error('Only workspace-relative paths are allowed')
-  }
-  const absolutePath = resolve(REPO_ROOT, candidate)
+  const absolutePath = isAbsolute(candidate)
+    ? resolve(candidate)
+    : resolve(REPO_ROOT, candidate)
   const rel = relative(REPO_ROOT, absolutePath)
   if (rel.startsWith('..') || isAbsolute(rel)) {
     throw new Error('Path is outside workspace')
@@ -749,101 +1016,10 @@ function resolvePathFromBaseDirectory(baseDirectoryAbsolutePath, inputPath, kind
   }
 }
 
-async function callOllamaAgent({ model, messages }) {
-  const baseUrl = String(process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/+$/, '')
-  const requestPayload = {
-    model,
-    messages,
-    stream: false,
-  }
-
-  appendOllamaDebugRecord({
-    source: 'preview-server',
-    phase: 'request',
-    url: `${baseUrl}/api/chat`,
-    payload: requestPayload,
-  })
-
-  let response
-  try {
-    response = await fetch(`${baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestPayload),
-    })
-  } catch (err) {
-    appendOllamaDebugRecord({
-      source: 'preview-server',
-      phase: 'fetch_error',
-      url: `${baseUrl}/api/chat`,
-      error: String(err?.message ?? err),
-    })
-    throw err
-  }
-
-  if (!response.ok) {
-    const bodyText = await response.text().catch(() => '')
-    appendOllamaDebugRecord({
-      source: 'preview-server',
-      phase: 'response',
-      ok: false,
-      status: response.status,
-      statusText: response.statusText,
-      bodyText,
-    })
-    throw new Error(`Ollama chat failed (${response.status}): ${bodyText || response.statusText}`)
-  }
-
-  const payload = await response.json()
-  appendOllamaDebugRecord({
-    source: 'preview-server',
-    phase: 'response',
-    ok: true,
-    status: response.status,
-    payload,
-  })
-
-  const promptTokens = Number.isFinite(Number(payload?.prompt_eval_count))
-    ? Number(payload.prompt_eval_count)
-    : null
-  const completionTokens = Number.isFinite(Number(payload?.eval_count))
-    ? Number(payload.eval_count)
-    : null
-  const totalTokens = (
-    Number.isFinite(promptTokens) && Number.isFinite(completionTokens)
-      ? promptTokens + completionTokens
-      : null
-  )
-
-  return {
-    text: String(payload?.message?.content ?? payload?.response ?? '').trim(),
-    metadata: {
-      provider: 'ollama',
-      model: String(model ?? payload?.model ?? '').trim(),
-      usage: {
-        promptTokens,
-        completionTokens,
-        totalTokens,
-      },
-      timings: {
-        totalDurationNs: Number.isFinite(Number(payload?.total_duration)) ? Number(payload.total_duration) : null,
-        loadDurationNs: Number.isFinite(Number(payload?.load_duration)) ? Number(payload.load_duration) : null,
-        promptEvalDurationNs: Number.isFinite(Number(payload?.prompt_eval_duration)) ? Number(payload.prompt_eval_duration) : null,
-        evalDurationNs: Number.isFinite(Number(payload?.eval_duration)) ? Number(payload.eval_duration) : null,
-      },
-      rawProvider: {
-        createdAt: String(payload?.created_at ?? ''),
-        doneReason: String(payload?.done_reason ?? ''),
-        prompt_eval_count: Number.isFinite(Number(payload?.prompt_eval_count)) ? Number(payload.prompt_eval_count) : null,
-        eval_count: Number.isFinite(Number(payload?.eval_count)) ? Number(payload.eval_count) : null,
-        prompt_eval_duration: Number.isFinite(Number(payload?.prompt_eval_duration)) ? Number(payload.prompt_eval_duration) : null,
-        eval_duration: Number.isFinite(Number(payload?.eval_duration)) ? Number(payload.eval_duration) : null,
-        total_duration: Number.isFinite(Number(payload?.total_duration)) ? Number(payload.total_duration) : null,
-        load_duration: Number.isFinite(Number(payload?.load_duration)) ? Number(payload.load_duration) : null,
-      },
-    },
-  }
-}
+const ollamaTransport = createOllamaTransport({
+  baseUrl: String(process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434'),
+  onDebugRecord: (record) => appendOllamaDebugRecord({ source: 'preview-server', ...record }),
+})
 
 function previewDebugText(value, maxLength = 240) {
   const text = String(value ?? '')
@@ -987,7 +1163,7 @@ const runtimeController = createNextVRuntimeController({
   toolRuntime: dynamicToolRuntime,
   ingressRuntime: dynamicIngressRuntime,
   effectRuntime: dynamicEffectRuntime,
-  callAgent: callOllamaAgent,
+  callAgent: ollamaTransport,
   defaultModel: process.env.OLLAMA_MODEL ?? '',
 })
 
@@ -1211,12 +1387,31 @@ async function handleApi(req, res, url) {
       })
       const declaredExternals = getConfiguredExternalsCore(workspaceConfig)
       const declaredEffects = Object.keys(getDeclaredEffectChannelsCore(workspaceConfig))
+      const configuredAgentProfiles = workspaceConfig?.agents?.profiles && typeof workspaceConfig.agents.profiles === 'object'
+        ? workspaceConfig.agents.profiles
+        : {}
+      const configuredModelConfigs = workspaceConfig?.models?.map && typeof workspaceConfig.models.map === 'object'
+        ? workspaceConfig.models.map
+        : {}
+      const transportsMap = workspaceConfig?.transports?.map && typeof workspaceConfig.transports.map === 'object'
+        ? workspaceConfig.transports.map
+        : {}
+      const configuredTransportProviders = Object.fromEntries(
+        Object.entries(transportsMap).map(([name, transport]) => [name, String(transport?.provider ?? '').trim()])
+      )
+      const configuredAgents = Object.keys(configuredAgentProfiles).sort((left, right) => left.localeCompare(right))
+      const configuredModels = Object.keys(configuredModelConfigs).sort((left, right) => left.localeCompare(right))
       return sendJson(res, 200, {
         ok: true,
         entrypointPath: String(workspaceConfig.nextv.config?.entrypointPath ?? '').trim(),
         baselineStatePath: String(workspaceConfig.nextv.config?.baselineStatePath ?? '').trim(),
         declaredExternals,
         declaredEffects,
+        configuredAgents,
+        configuredModels,
+        configuredAgentProfiles,
+        configuredModelConfigs,
+        configuredTransportProviders,
         timers: Array.isArray(workspaceConfig.nextv.timers)
           ? workspaceConfig.nextv.timers.map((timer) => ({
               event: timer.event,
@@ -1324,7 +1519,7 @@ async function handleApi(req, res, url) {
 
     try {
       await ensureManagedRuntimeProcess(body?.workspaceDir)
-      const runtimeBridge = getRuntimeControlBridge(runtimeTarget)
+      const runtimeBridge = getRuntimeControlBridge(runtimeTarget, url, { required: true })
       const status = runtimeBridge.getStatus()
       return sendJson(res, 200, {
         ok: true,
@@ -1362,10 +1557,11 @@ async function handleApi(req, res, url) {
       // Just send the start command; don't spawn process here
     }
 
-    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external') {
-      const runtimeBridge = getRuntimeControlBridge(runtimeTarget)
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
+      let runtimeBridge
       let response
       try {
+        runtimeBridge = getRuntimeControlBridge(runtimeTarget, url, { required: true })
         if (!runtimeBridge?.sendCommand) {
           return sendRemoteConnectionUnavailable(res, 'remote runtime bridge is not configured', runtimeTarget)
         }
@@ -1375,6 +1571,9 @@ async function handleApi(req, res, url) {
         }
         response = await runtimeBridge.sendCommand({ type: 'start', payload: body })
       } catch (err) {
+        if (String(err?.code ?? '') === 'validation_error') {
+          return sendJson(res, 400, { ok: false, error: String(err?.message ?? err), ...buildRemoteModeMetadata(runtimeTarget) })
+        }
         return sendRemoteConnectionUnavailable(res, String(err?.message ?? err), runtimeTarget)
       }
 
@@ -1407,10 +1606,11 @@ async function handleApi(req, res, url) {
     if (runtimeTarget === 'remote-observe') {
       return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
     }
-    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external') {
-      const runtimeBridge = getRuntimeControlBridge(runtimeTarget)
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
+      let runtimeBridge
       let response
       try {
+        runtimeBridge = getRuntimeControlBridge(runtimeTarget, url, { required: true })
         if (!runtimeBridge?.sendCommand) {
           return sendRemoteConnectionUnavailable(res, 'remote runtime bridge is not configured', runtimeTarget)
         }
@@ -1420,6 +1620,9 @@ async function handleApi(req, res, url) {
         }
         response = await runtimeBridge.sendCommand({ type: 'stop', payload: {} })
       } catch (err) {
+        if (String(err?.code ?? '') === 'validation_error') {
+          return sendJson(res, 400, { ok: false, error: String(err?.message ?? err), ...buildRemoteModeMetadata(runtimeTarget) })
+        }
         return sendRemoteConnectionUnavailable(res, String(err?.message ?? err), runtimeTarget)
       }
 
@@ -1446,12 +1649,95 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true, snapshot })
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/nextv/reload-config') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (runtimeTarget === 'remote-observe') {
+      return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
+    }
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
+      return sendJson(res, 405, { error: 'config reload is currently supported only in embedded runtime mode' })
+    }
+
+    if (!runtimeController.isActive()) {
+      return sendJson(res, 404, { error: 'nextV runtime not active' })
+    }
+
+    try {
+      const payload = runtimeController.reloadConfig()
+      return sendJson(res, 200, { ok: true, ...payload })
+    } catch (err) {
+      return sendJson(res, 400, { error: String(err?.message ?? err) })
+    }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/nextv/definition-status') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (runtimeTarget === 'remote-observe') {
+      return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
+    }
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
+      return sendJson(res, 405, { error: 'definition status is currently supported only in embedded runtime mode' })
+    }
+
+    if (!runtimeController.isActive()) {
+      return sendJson(res, 404, { error: 'nextV runtime not active' })
+    }
+
+    try {
+      return sendJson(res, 200, { ok: true, ...runtimeController.getDefinitionStatus() })
+    } catch (err) {
+      return sendJson(res, 400, { error: String(err?.message ?? err) })
+    }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/nextv/submit-candidate') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (runtimeTarget === 'remote-observe') {
+      return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
+    }
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
+      return sendJson(res, 405, { error: 'candidate submission is currently supported only in embedded runtime mode' })
+    }
+
+    if (!runtimeController.isActive()) {
+      return sendJson(res, 404, { error: 'nextV runtime not active' })
+    }
+
+    try {
+      const payload = runtimeController.submitCandidate()
+      return sendJson(res, 200, { ok: true, candidate: payload })
+    } catch (err) {
+      return sendJson(res, 400, { error: String(err?.message ?? err) })
+    }
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/nextv/promote-candidate') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (runtimeTarget === 'remote-observe') {
+      return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
+    }
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
+      return sendJson(res, 405, { error: 'candidate promotion is currently supported only in embedded runtime mode' })
+    }
+
+    if (!runtimeController.isActive()) {
+      return sendJson(res, 404, { error: 'nextV runtime not active' })
+    }
+
+    try {
+      const payload = runtimeController.promoteCandidate()
+      return sendJson(res, 200, { ok: true, ...payload })
+    } catch (err) {
+      return sendJson(res, 400, { error: String(err?.message ?? err) })
+    }
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/nextv/event') {
     const runtimeTarget = resolveRuntimeTarget(url)
     if (runtimeTarget === 'remote-observe') {
       return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
     }
-    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external') {
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
       let body
       try {
         body = await readRequestBody(req)
@@ -1459,9 +1745,10 @@ async function handleApi(req, res, url) {
         return sendJson(res, 400, { error: err.message })
       }
 
-      const runtimeBridge = getRuntimeControlBridge(runtimeTarget)
+      let runtimeBridge
       let response
       try {
+        runtimeBridge = getRuntimeControlBridge(runtimeTarget, url, { required: true })
         if (!runtimeBridge?.sendCommand) {
           return sendRemoteConnectionUnavailable(res, 'remote runtime bridge is not configured', runtimeTarget)
         }
@@ -1471,6 +1758,9 @@ async function handleApi(req, res, url) {
         }
         response = await runtimeBridge.sendCommand({ type: 'enqueue_event', payload: body })
       } catch (err) {
+        if (String(err?.code ?? '') === 'validation_error') {
+          return sendJson(res, 400, { ok: false, error: String(err?.message ?? err), ...buildRemoteModeMetadata(runtimeTarget) })
+        }
         return sendRemoteConnectionUnavailable(res, String(err?.message ?? err), runtimeTarget)
       }
 
@@ -1508,7 +1798,7 @@ async function handleApi(req, res, url) {
     if (runtimeTarget === 'remote-observe') {
       return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
     }
-    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external') {
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
       let body
       try {
         body = await readRequestBody(req)
@@ -1516,9 +1806,10 @@ async function handleApi(req, res, url) {
         return sendJson(res, 400, { error: err.message })
       }
 
-      const runtimeBridge = getRuntimeControlBridge(runtimeTarget)
+      let runtimeBridge
       let response
       try {
+        runtimeBridge = getRuntimeControlBridge(runtimeTarget, url, { required: true })
         if (!runtimeBridge?.sendCommand) {
           return sendRemoteConnectionUnavailable(res, 'remote runtime bridge is not configured', runtimeTarget)
         }
@@ -1528,6 +1819,9 @@ async function handleApi(req, res, url) {
         }
         response = await runtimeBridge.sendCommand({ type: 'dispatch_ingress', payload: body })
       } catch (err) {
+        if (String(err?.code ?? '') === 'validation_error') {
+          return sendJson(res, 400, { ok: false, error: String(err?.message ?? err), ...buildRemoteModeMetadata(runtimeTarget) })
+        }
         return sendRemoteConnectionUnavailable(res, String(err?.message ?? err), runtimeTarget)
       }
 
@@ -1560,6 +1854,279 @@ async function handleApi(req, res, url) {
     }
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/nextv/call-inspector/execute') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (runtimeTarget === 'remote-observe') {
+      return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
+    }
+
+    let body
+    try {
+      body = await readRequestBody(req)
+    } catch (err) {
+      return sendJson(res, 400, { error: err.message })
+    }
+
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
+      let runtimeBridge
+      let response
+      try {
+        runtimeBridge = getRuntimeControlBridge(runtimeTarget, url, { required: true })
+        if (!runtimeBridge?.sendCommand) {
+          return sendRemoteConnectionUnavailable(res, 'remote runtime bridge is not configured', runtimeTarget)
+        }
+        const status = runtimeBridge.getStatus()
+        if (!status.connected) {
+          return sendRemoteConnectionUnavailable(res, 'remote runtime websocket is not connected', runtimeTarget)
+        }
+        response = await runtimeBridge.sendCommand({
+          type: 'call_inspector_execute',
+          payload: body,
+        })
+      } catch (err) {
+        if (String(err?.code ?? '') === 'validation_error') {
+          return sendJson(res, 400, { ok: false, error: String(err?.message ?? err), ...buildRemoteModeMetadata(runtimeTarget) })
+        }
+        return sendRemoteConnectionUnavailable(res, String(err?.message ?? err), runtimeTarget)
+      }
+
+      const errorResponse = sendRemoteCommandResponse(res, response, 'failed to execute call inspector request', runtimeTarget)
+      if (errorResponse) return errorResponse
+
+      return sendJson(res, 200, {
+        ok: true,
+        ...(response?.data ?? {}),
+        ...buildRemoteModeMetadata(runtimeTarget, url),
+      })
+    }
+
+    const rawWorkspaceDir = String(body?.workspaceDir ?? '').trim()
+    const targetKindRaw = String(body?.targetKind ?? 'agent').trim().toLowerCase()
+    const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+    const modeRaw = String(body?.mode ?? 'call').trim().toLowerCase()
+    const mode = modeRaw === 'try' ? 'try' : 'call'
+    const agentName = String(body?.agent ?? '').trim()
+    const modelName = String(body?.model ?? '').trim()
+    const prompt = String(body?.prompt ?? '')
+    const instructions = String(body?.instructions ?? '')
+    const validateModeRaw = String(body?.validate ?? '').trim().toLowerCase()
+    const validateMode = ['strict', 'coerce', 'none'].includes(validateModeRaw) ? validateModeRaw : 'coerce'
+    const retryOnViolationRaw = Number(body?.retry_on_contract_violation)
+    const retryOnViolation = Number.isInteger(retryOnViolationRaw)
+      ? Math.max(0, Math.min(8, retryOnViolationRaw))
+      : 0
+
+    const normalizedMessages = Array.isArray(body?.messages)
+      ? body.messages
+        .map((entry) => {
+          if (!entry || typeof entry !== 'object') return null
+          const role = String(entry.role ?? '').trim()
+          const content = String(entry.content ?? '').trim()
+          if (!role || !content) return null
+          const normalized = { role, content }
+          if (Array.isArray(entry.images) && entry.images.length > 0) {
+            normalized.images = entry.images.map((value) => String(value ?? '').trim()).filter(Boolean)
+          }
+          return normalized
+        })
+        .filter(Boolean)
+      : []
+
+    let returnsContract = null
+    if (body && Object.prototype.hasOwnProperty.call(body, 'returns')) {
+      const rawReturns = body.returns
+      if (typeof rawReturns === 'string') {
+        const trimmed = rawReturns.trim()
+        if (trimmed) {
+          try {
+            returnsContract = JSON.parse(trimmed)
+          } catch {
+            return sendJson(res, 400, { error: 'returns must be valid JSON when provided as text' })
+          }
+        }
+      } else if (rawReturns != null) {
+        returnsContract = rawReturns
+      }
+    }
+
+    let decideContract = null
+    if (body && Object.prototype.hasOwnProperty.call(body, 'decide')) {
+      const rawDecide = body.decide
+      if (Array.isArray(rawDecide)) {
+        decideContract = rawDecide.map((value) => String(value ?? '').trim()).filter(Boolean)
+      } else if (typeof rawDecide === 'string') {
+        decideContract = rawDecide
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean)
+      }
+      if (Array.isArray(decideContract) && decideContract.length === 0) {
+        decideContract = null
+      }
+    }
+
+    if (targetKind === 'agent' && !agentName) {
+      return sendJson(res, 400, { error: 'agent target is required when targetKind is "agent"' })
+    }
+    if (targetKind === 'model' && !modelName) {
+      return sendJson(res, 400, { error: 'model target is required when targetKind is "model"' })
+    }
+    if (!prompt.trim() && normalizedMessages.length === 0) {
+      return sendJson(res, 400, { error: 'prompt or messages is required' })
+    }
+    if (returnsContract != null && decideContract != null) {
+      return sendJson(res, 400, { error: 'returns and decide cannot both be set for the same call' })
+    }
+
+    const startedAt = Date.now()
+
+    try {
+      const workspaceDir = resolveWorkspaceDirectory(rawWorkspaceDir)
+      const workspaceConfig = loadWorkspaceNextVConfigCore({
+        workspaceDir,
+        toWorkspaceDisplayPath,
+        resolvePathFromBaseDirectory,
+        readJsonObjectFile,
+      })
+
+      const hostAdapter = createHostAdapter({
+        workspaceDir,
+        workspaceConfig,
+        getWorkspaceConfig: () => workspaceConfig,
+        callAgent: ollamaTransport,
+        defaultModel: process.env.OLLAMA_MODEL ?? '',
+        captureAgentRequestPayload: true,
+        slowAgentWarningMs: 15000,
+        resolvePathFromBaseDirectory,
+        existsSync,
+        runNextVScriptFromFile,
+        validateOutputContract,
+        appendAgentFormatInstructions,
+        normalizeAgentFormattedOutput,
+        validateAgentReturnContract,
+        buildAgentReturnContractGuidance,
+        buildAgentRetryPrompt,
+        buildDecideGuidance,
+        buildDecideRetryPrompt,
+        validateDecideOutput,
+        toolRuntime: dynamicToolRuntime,
+      })
+
+      let callResult = null
+      let tryEnvelope = null
+      let tryError = null
+      try {
+        callResult = await hostAdapter.callAgent({
+          agent: targetKind === 'agent' ? agentName : '',
+          model: targetKind === 'model' ? modelName : '',
+          prompt,
+          instructions,
+          messages: normalizedMessages,
+          returns: returnsContract,
+          decide: decideContract,
+          validate: validateMode,
+          retry_on_contract_violation: retryOnViolation,
+          on_contract_violation: mode === 'try'
+            ? null
+            : {
+              source: 'call-inspector',
+              mode: 'report',
+            },
+          state: {},
+          locals: {},
+          event: {
+            type: 'call_inspector.execute',
+            source: 'call-inspector',
+            value: prompt,
+            payload: {},
+          },
+        })
+      } catch (err) {
+        if (mode !== 'try') throw err
+        tryError = err
+        tryEnvelope = toCallInspectorTryFailureEnvelope(err)
+      }
+
+      const normalizedCallResult = normalizeCallInspectorCallResult(callResult)
+      if (mode === 'try' && tryEnvelope == null) {
+        tryEnvelope = {
+          ok: true,
+          value: normalizedCallResult?.value ?? null,
+        }
+      }
+
+      const elapsedMs = Math.max(0, Date.now() - startedAt)
+      const isViolation = mode === 'call' && callResult && callResult.__nextv_contract_violation__ === true
+      const requestMetadata = normalizedCallResult?.metadata?.request ?? tryError?.requestMetadata ?? null
+      const outputTextRaw = String(normalizedCallResult?.outputText ?? '').trim()
+      const violationActualRaw = String(callResult?.violation?.actual ?? '').trim()
+      const tryOutputRaw = String(tryEnvelope?.error?.output ?? '').trim()
+      const outputText = outputTextRaw || violationActualRaw || tryOutputRaw
+      const hadTryContractViolation = mode === 'try'
+        && tryEnvelope?.ok === false
+        && String(tryEnvelope?.error?.type ?? '').trim().toLowerCase() === 'agent_return_contract_violation'
+
+      return sendJson(res, 200, {
+        ok: true,
+        call: {
+          mode,
+          targetKind,
+          target: targetKind === 'agent' ? agentName : modelName,
+          validate: validateMode,
+          retry_on_contract_violation: retryOnViolation,
+          hasReturns: returnsContract != null,
+          hasDecide: Array.isArray(decideContract) && decideContract.length > 0,
+        },
+        resolvedCall: buildResolvedCallSummary({
+          targetKind,
+          target: targetKind === 'agent' ? agentName : modelName,
+          prompt,
+          instructions,
+          validate: validateMode,
+          retryOnViolation,
+          returnsContract,
+          decideContract,
+          requestMetadata,
+        }),
+        result: {
+          actual: outputText,
+          output: outputText,
+          parsed: mode === 'try'
+            ? tryEnvelope
+            : (isViolation ? null : (normalizedCallResult?.value ?? null)),
+          value: mode === 'try'
+            ? tryEnvelope
+            : (isViolation ? null : (normalizedCallResult?.value ?? null)),
+          metadata: normalizedCallResult?.metadata ?? null,
+          violation: mode === 'try'
+            ? (hadTryContractViolation
+              ? {
+                type: String(tryEnvelope?.error?.type ?? ''),
+                message: String(tryEnvelope?.error?.message ?? ''),
+                actual: String(tryEnvelope?.error?.output ?? ''),
+              }
+              : null)
+            : (isViolation ? (callResult?.violation ?? null) : null),
+          hadContractViolation: mode === 'try' ? hadTryContractViolation : isViolation,
+        },
+        elapsedMs,
+        ...buildRemoteModeMetadata(runtimeTarget, url),
+      })
+    } catch (err) {
+      const errorCode = String(err?.code ?? '').trim()
+      const statusCode = errorCode === 'AGENT_RETURN_CONTRACT_VIOLATION' ? 422 : 400
+      return sendJson(res, statusCode, {
+        ok: false,
+        error: String(err?.message ?? err),
+        code: errorCode || 'runtime_error',
+        line: Number.isFinite(Number(err?.line)) ? Number(err.line) : null,
+        sourcePath: String(err?.sourcePath ?? ''),
+        statement: String(err?.statement ?? ''),
+        ...buildRemoteModeMetadata(runtimeTarget, url),
+      })
+    }
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/nextv/snapshot') {
     const runtimeTarget = resolveRuntimeTarget(url)
     if (runtimeTarget === 'remote-observe') {
@@ -1567,14 +2134,27 @@ async function handleApi(req, res, url) {
         ok: true,
         running: false,
         snapshot: null,
-        ...buildRemoteModeMetadata(runtimeTarget),
+        ...buildRemoteModeMetadata(runtimeTarget, url),
       })
     }
 
-    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external') {
-      const runtimeBridge = getRuntimeControlBridge(runtimeTarget)
+    if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
+      let runtimeBridge
+      try {
+        runtimeBridge = getRuntimeControlBridge(runtimeTarget, url)
+      } catch (err) {
+        if (String(err?.code ?? '') === 'validation_error') {
+          return sendJson(res, 400, { ok: false, error: String(err?.message ?? err), ...buildRemoteModeMetadata(runtimeTarget, url) })
+        }
+        return sendRemoteConnectionUnavailable(res, String(err?.message ?? err), runtimeTarget)
+      }
       if (!runtimeBridge) {
-        return sendRemoteConnectionUnavailable(res, 'remote runtime bridge is not configured', runtimeTarget)
+        return sendJson(res, 200, {
+          ok: true,
+          running: false,
+          snapshot: null,
+          ...buildRemoteModeMetadata(runtimeTarget, url),
+        })
       }
 
       try {
@@ -1583,7 +2163,7 @@ async function handleApi(req, res, url) {
           ok: true,
           running: snapshot.running === true,
           snapshot: snapshot.snapshot,
-          ...buildRemoteModeMetadata(runtimeTarget),
+          ...buildRemoteModeMetadata(runtimeTarget, url),
         })
       } catch (err) {
         const cachedSnapshot = runtimeBridge.getCachedSnapshot()
@@ -1594,10 +2174,16 @@ async function handleApi(req, res, url) {
             snapshot: cachedSnapshot,
             staleSnapshot: true,
             warning: String(err?.message ?? err),
-            ...buildRemoteModeMetadata(runtimeTarget),
+            ...buildRemoteModeMetadata(runtimeTarget, url),
           })
         }
-        return sendRemoteConnectionUnavailable(res, String(err?.message ?? err), runtimeTarget)
+        // Not connected yet (e.g. no runtime started) — not an error, just idle
+        return sendJson(res, 200, {
+          ok: true,
+          running: false,
+          snapshot: null,
+          ...buildRemoteModeMetadata(runtimeTarget, url),
+        })
       }
     }
 
@@ -1606,13 +2192,18 @@ async function handleApi(req, res, url) {
       ok: true,
       running: snapshot?.running === true,
       snapshot,
-      ...buildRemoteModeMetadata(runtimeTarget),
+      ...buildRemoteModeMetadata(runtimeTarget, url),
     })
   }
 
   if (req.method === 'GET' && url.pathname === '/api/nextv/stream') {
     const runtimeTarget = resolveRuntimeTarget(url)
-    const runtimeBridge = getRuntimeControlBridge(runtimeTarget)
+    let runtimeBridge = null
+    try {
+      runtimeBridge = getRuntimeControlBridge(runtimeTarget, url)
+    } catch {
+      runtimeBridge = null
+    }
     if (!ENABLED_SURFACES.has('sse')) {
       return sendJson(res, 404, {
         error: 'SSE surface is disabled for this host.',
@@ -1710,10 +2301,6 @@ async function handleRequest(req, res) {
     return sendJson(res, 200, { ok: true, mode: 'preview' })
   }
 
-  if (url.pathname === '/htmx.js') {
-    return sendText(res, 200, '// htmx is intentionally stubbed in preview mode', 'text/javascript; charset=utf-8')
-  }
-
   if (url.pathname.startsWith('/api/')) {
     try {
       return await handleApi(req, res, url)
@@ -1730,7 +2317,10 @@ async function handleRequest(req, res) {
 
   const content = readFileSync(fullPath)
   const mime = getMimeTypeForPath(fullPath)
-  res.writeHead(200, { 'Content-Type': mime })
+  res.writeHead(200, {
+    'Content-Type': mime,
+    'Cache-Control': 'no-store',
+  })
   res.end(content)
 }
 
@@ -1744,11 +2334,13 @@ server.listen(PORT, () => {
 
 process.on('exit', () => {
   stopManagedRuntimeProcess()
+  disconnectAttachedWsRemoteBridge()
 })
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     stopManagedRuntimeProcess()
+    disconnectAttachedWsRemoteBridge()
     process.exit(0)
   })
 }

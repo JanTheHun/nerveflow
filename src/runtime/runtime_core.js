@@ -7,9 +7,12 @@ import {
   appendAgentFormatInstructions,
   buildAgentReturnContractGuidance,
   buildAgentRetryPrompt,
+  buildDecideGuidance,
+  buildDecideRetryPrompt,
   normalizeAgentFormattedOutput,
   runNextVScriptFromFile,
   validateAgentReturnContract,
+  validateDecideOutput,
   validateOutputContract,
 } from '../index.js'
 
@@ -19,6 +22,8 @@ import {
   createEventBus,
   createHostAdapter,
   createNextVRuntimeController,
+  getConfiguredAgentProfiles,
+  getConfiguredModelsMap,
   getConfiguredModules,
   getDeclaredEffectChannels,
   getDeclaredExternals,
@@ -31,7 +36,9 @@ import {
   resolveOptionalStatePath,
   resolveStateDiscoveryBaseDir,
   startTimerHandles,
+  validateConfigReferences,
   validateDeclaredEffectBindings,
+  validateNoForbiddenAgentFields,
   validateRequiredCapabilityBindings,
 } from '../host_core/index.js'
 
@@ -133,6 +140,7 @@ export function createRuntimeCore({
   ingressRuntime = null,
   effectRuntime = null,
   defaultModel = '',
+  parallelMaxConcurrency = null,
   resolvers,
 } = {}) {
   if (!resolvers || typeof resolvers !== 'object') {
@@ -164,6 +172,8 @@ export function createRuntimeCore({
     normalizeEffectsPolicy,
     validateDeclaredEffectBindings,
     validateRequiredCapabilityBindings,
+    validateConfigReferences,
+    validateNoForbiddenAgentFields,
     areJsonStatesEqual,
     hasMeaningfulNextVExecutionEvents,
     normalizeInputEvent,
@@ -176,11 +186,15 @@ export function createRuntimeCore({
     validateAgentReturnContract,
     buildAgentReturnContractGuidance,
     buildAgentRetryPrompt,
+    buildDecideGuidance,
+    buildDecideRetryPrompt,
+    validateDecideOutput,
     toolRuntime,
     ingressRuntime,
     effectRuntime,
     callAgent,
     defaultModel,
+    parallelMaxConcurrency,
   })
 
   function getLifecycleState() {
@@ -231,6 +245,364 @@ export function createRuntimeCore({
     return await runtimeController.dispatchIngress(payload)
   }
 
+  function submitCandidate() {
+    return runtimeController.submitCandidate()
+  }
+
+  function promoteCandidate() {
+    return runtimeController.promoteCandidate()
+  }
+
+  function getDefinitionStatus() {
+    return runtimeController.getDefinitionStatus()
+  }
+
+  function sanitizeRequestMessages(rawMessages) {
+    if (!Array.isArray(rawMessages)) return []
+    return rawMessages
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') return null
+        const role = String(entry.role ?? '').trim()
+        const content = String(entry.content ?? '')
+        if (!role) return null
+        const images = Array.isArray(entry.images)
+          ? entry.images.map((value) => String(value ?? '').trim()).filter(Boolean)
+          : []
+        return {
+          role,
+          content,
+          ...(images.length > 0 ? { imageCount: images.length } : {}),
+        }
+      })
+      .filter(Boolean)
+  }
+
+  function buildFinalRequestSummary(request = {}, wirePayload = {}, resolvedModel = '') {
+    const finalMessages = sanitizeRequestMessages(request.messages ?? wirePayload.messages)
+    const toolNames = Array.isArray(request.toolNames)
+      ? request.toolNames.map((value) => String(value ?? '').trim()).filter(Boolean)
+      : []
+    const transport = wirePayload.transport && typeof wirePayload.transport === 'object'
+      ? {
+          provider: String(wirePayload.transport.provider ?? '').trim() || undefined,
+          baseUrl: String(wirePayload.transport.baseUrl ?? '').trim() || undefined,
+          host: String(wirePayload.transport.host ?? '').trim() || undefined,
+          port: Number.isInteger(Number(wirePayload.transport.port)) ? Number(wirePayload.transport.port) : undefined,
+        }
+      : null
+
+    const compactTransport = transport
+      ? Object.fromEntries(Object.entries(transport).filter(([, value]) => value !== undefined && value !== ''))
+      : null
+
+    return {
+      model: String(wirePayload.model ?? resolvedModel ?? '').trim(),
+      messageCount: finalMessages.length,
+      messages: finalMessages,
+      ...(toolNames.length > 0 ? { toolNames } : {}),
+      ...(compactTransport && Object.keys(compactTransport).length > 0 ? { transport: compactTransport } : {}),
+    }
+  }
+
+  function detectRetryGuidanceInjected(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) return false
+    const lastUserMessage = [...messages].reverse().find((entry) => String(entry?.role ?? '').trim() === 'user')
+    const content = String(lastUserMessage?.content ?? '')
+    return /the previous response/i.test(content)
+  }
+
+  function buildResolvedCallSummary({
+    targetKind = 'agent',
+    target = '',
+    prompt = '',
+    instructions = '',
+    validate = 'coerce',
+    retryOnViolation = 0,
+    returnsContract = null,
+    decideContract = null,
+    requestMetadata = null,
+  } = {}) {
+    const request = requestMetadata && typeof requestMetadata === 'object' ? requestMetadata : {}
+    const wirePayload = request.wirePayload && typeof request.wirePayload === 'object'
+      ? request.wirePayload
+      : {}
+    const wireTransport = wirePayload.transport && typeof wirePayload.transport === 'object'
+      ? wirePayload.transport
+      : {}
+    const resolvedModel = String(request.resolvedModel ?? request.model ?? wirePayload.model ?? '').trim()
+    const resolvedModelAlias = String(request.resolvedModelAlias ?? '').trim()
+    const transportName = String(request.transportName ?? '').trim()
+    const transportProvider = String(request.transportProvider ?? wireTransport.provider ?? '').trim()
+    const toolNames = Array.isArray(request.toolNames)
+      ? request.toolNames.map((value) => String(value ?? '').trim()).filter(Boolean)
+      : []
+    const messageCountRaw = Number(request.messageCount)
+    const messageCount = Number.isFinite(messageCountRaw)
+      ? Math.max(0, Math.round(messageCountRaw))
+      : undefined
+    const finalMessages = sanitizeRequestMessages(request.messages ?? wirePayload.messages)
+    const attemptRaw = Number(request.attempt)
+    const attempt = Number.isFinite(attemptRaw) ? Math.max(1, Math.round(attemptRaw)) : 1
+    const retryLimitRaw = Number(request.retryLimit)
+    const retryLimit = Number.isFinite(retryLimitRaw)
+      ? Math.max(0, Math.round(retryLimitRaw))
+      : Math.max(0, Math.min(8, Number(retryOnViolation) || 0))
+
+    return {
+      type: targetKind === 'model' ? 'model_call' : 'agent_call',
+      targetKind,
+      target: String(request.target ?? target ?? '').trim(),
+      resolvedModel,
+      ...(resolvedModelAlias && resolvedModelAlias !== resolvedModel ? { resolvedModelAlias } : {}),
+      ...(transportName ? { transport: transportName } : {}),
+      ...(transportProvider ? { transportProvider } : {}),
+      instructions: String(request.instructions ?? instructions ?? '').trim(),
+      prompt: String(request.prompt ?? prompt ?? ''),
+      ...(typeof messageCount === 'number' ? { messageCount } : {}),
+      attempt,
+      retryLimit,
+      retryGuidanceInjected: detectRetryGuidanceInjected(finalMessages),
+      finalMessages,
+      finalRequest: buildFinalRequestSummary(request, wirePayload, resolvedModel),
+      validate: String(request.validate ?? validate ?? 'coerce').trim() || 'coerce',
+      retry_on_contract_violation: Number.isInteger(Number(request.retry_on_contract_violation))
+        ? Math.max(0, Math.min(8, Number(request.retry_on_contract_violation)))
+        : Math.max(0, Math.min(8, Number(retryOnViolation) || 0)),
+      ...(returnsContract != null ? { returns: returnsContract } : {}),
+      ...(Array.isArray(decideContract) && decideContract.length > 0 ? { decide: decideContract } : {}),
+      ...(toolNames.length > 0 ? { toolNames } : {}),
+    }
+  }
+
+  function normalizeCallInspectorCallResult(callResult) {
+    if (callResult && typeof callResult === 'object' && !Array.isArray(callResult)
+      && Object.prototype.hasOwnProperty.call(callResult, 'value')) {
+      return callResult
+    }
+    return {
+      value: callResult,
+      outputText: typeof callResult === 'string' ? callResult : '',
+      metadata: null,
+    }
+  }
+
+  function toCallInspectorTryFailureEnvelope(err) {
+    const code = String(err?.code ?? '').trim().toLowerCase()
+    const outputRaw = Object.prototype.hasOwnProperty.call(err ?? {}, 'output')
+      ? err?.output
+      : (Object.prototype.hasOwnProperty.call(err ?? {}, 'actual') ? err?.actual : undefined)
+    const error = {
+      type: code || 'operation_failure',
+      message: String(err?.message ?? 'Operation failed.'),
+    }
+    if (outputRaw !== undefined) {
+      error.output = outputRaw
+    }
+    return { ok: false, error }
+  }
+
+  async function callInspectorExecute(payload = {}) {
+    const targetKindRaw = String(payload?.targetKind ?? 'agent').trim().toLowerCase()
+    const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+    const modeRaw = String(payload?.mode ?? 'call').trim().toLowerCase()
+    const mode = modeRaw === 'try' ? 'try' : 'call'
+    const agentName = String(payload?.agent ?? '').trim()
+    const modelName = String(payload?.model ?? '').trim()
+    const prompt = String(payload?.prompt ?? '')
+    const instructions = String(payload?.instructions ?? '')
+    const validateModeRaw = String(payload?.validate ?? '').trim().toLowerCase()
+    const validateMode = ['strict', 'coerce', 'none'].includes(validateModeRaw) ? validateModeRaw : 'coerce'
+    const retryOnViolationRaw = Number(payload?.retry_on_contract_violation)
+    const retryOnViolation = Number.isInteger(retryOnViolationRaw)
+      ? Math.max(0, Math.min(8, retryOnViolationRaw))
+      : 0
+
+    let returnsContract = null
+    if (payload && Object.prototype.hasOwnProperty.call(payload, 'returns')) {
+      const rawReturns = payload.returns
+      if (typeof rawReturns === 'string') {
+        const trimmed = rawReturns.trim()
+        if (trimmed) {
+          try {
+            returnsContract = JSON.parse(trimmed)
+          } catch {
+            throw new Error('returns must be valid JSON when provided as text')
+          }
+        }
+      } else if (rawReturns != null) {
+        returnsContract = rawReturns
+      }
+    }
+
+    let decideContract = null
+    if (payload && Object.prototype.hasOwnProperty.call(payload, 'decide')) {
+      const rawDecide = payload.decide
+      if (Array.isArray(rawDecide)) {
+        decideContract = rawDecide.map((value) => String(value ?? '').trim()).filter(Boolean)
+      } else if (typeof rawDecide === 'string') {
+        decideContract = rawDecide
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean)
+      }
+      if (Array.isArray(decideContract) && decideContract.length === 0) {
+        decideContract = null
+      }
+    }
+
+    const normalizedMessages = Array.isArray(payload?.messages)
+      ? payload.messages
+        .map((entry) => {
+          if (!entry || typeof entry !== 'object') return null
+          const role = String(entry.role ?? '').trim()
+          const content = String(entry.content ?? '').trim()
+          if (!role || !content) return null
+          const normalized = { role, content }
+          if (Array.isArray(entry.images) && entry.images.length > 0) {
+            normalized.images = entry.images.map((value) => String(value ?? '').trim()).filter(Boolean)
+          }
+          return normalized
+        })
+        .filter(Boolean)
+      : []
+
+    if (targetKind === 'agent' && !agentName) {
+      throw new Error('agent target is required when targetKind is "agent"')
+    }
+    if (targetKind === 'model' && !modelName) {
+      throw new Error('model target is required when targetKind is "model"')
+    }
+    if (!prompt.trim() && normalizedMessages.length === 0) {
+      throw new Error('prompt or messages is required')
+    }
+    if (returnsContract != null && decideContract != null) {
+      throw new Error('returns and decide cannot both be set for the same call')
+    }
+
+    const runtimeStatus = getStatus()
+    const rawWorkspaceDir = String(payload?.workspaceDir ?? runtimeStatus?.workspaceDir ?? '').trim()
+    const workspaceDir = resolvers.resolveWorkspaceDirectory(rawWorkspaceDir)
+    const workspaceConfig = resolvers.loadWorkspaceConfig(workspaceDir)
+
+    const hostAdapter = createHostAdapter({
+      workspaceDir,
+      workspaceConfig,
+      getWorkspaceConfig: () => workspaceConfig,
+      callAgent,
+      defaultModel,
+      captureAgentRequestPayload: true,
+      resolvePathFromBaseDirectory: resolvers.resolvePathFromBaseDirectory,
+      existsSync: resolvers.existsSync,
+      runNextVScriptFromFile,
+      validateOutputContract,
+      appendAgentFormatInstructions,
+      normalizeAgentFormattedOutput,
+      validateAgentReturnContract,
+      buildAgentReturnContractGuidance,
+      buildAgentRetryPrompt,
+      buildDecideGuidance,
+      buildDecideRetryPrompt,
+      validateDecideOutput,
+      toolRuntime,
+    })
+
+    const startedAt = Date.now()
+    let callResult = null
+    let tryEnvelope = null
+    let tryError = null
+    try {
+      callResult = await hostAdapter.callAgent({
+        agent: targetKind === 'agent' ? agentName : '',
+        model: targetKind === 'model' ? modelName : '',
+        prompt,
+        instructions,
+        messages: normalizedMessages,
+        returns: returnsContract,
+        decide: decideContract,
+        validate: validateMode,
+        retry_on_contract_violation: retryOnViolation,
+        on_contract_violation: mode === 'try'
+          ? null
+          : {
+            source: 'call-inspector',
+            mode: 'report',
+          },
+        state: {},
+        locals: {},
+        event: {
+          type: 'call_inspector.execute',
+          source: 'call-inspector',
+          value: prompt,
+          payload: {},
+        },
+      })
+    } catch (err) {
+      if (mode !== 'try') throw err
+      tryError = err
+      tryEnvelope = toCallInspectorTryFailureEnvelope(err)
+    }
+
+    const normalizedCallResult = normalizeCallInspectorCallResult(callResult)
+    if (mode === 'try' && tryEnvelope == null) {
+      tryEnvelope = {
+        ok: true,
+        value: normalizedCallResult?.value ?? null,
+      }
+    }
+
+    const isViolation = mode === 'call' && callResult && callResult.__nextv_contract_violation__ === true
+    const requestMetadata = normalizedCallResult?.metadata?.request ?? tryError?.requestMetadata ?? null
+    const outputTextRaw = String(normalizedCallResult?.outputText ?? '').trim()
+    const violationActualRaw = String(callResult?.violation?.actual ?? '').trim()
+    const tryOutputRaw = String(tryEnvelope?.error?.output ?? '').trim()
+    const outputText = outputTextRaw || violationActualRaw || tryOutputRaw
+    const hadTryContractViolation = mode === 'try'
+      && tryEnvelope?.ok === false
+      && String(tryEnvelope?.error?.type ?? '').trim().toLowerCase() === 'agent_return_contract_violation'
+    return {
+      call: {
+        mode,
+        targetKind,
+        target: targetKind === 'agent' ? agentName : modelName,
+        validate: validateMode,
+        retry_on_contract_violation: retryOnViolation,
+      },
+      resolvedCall: buildResolvedCallSummary({
+        targetKind,
+        target: targetKind === 'agent' ? agentName : modelName,
+        prompt,
+        instructions,
+        validate: validateMode,
+        retryOnViolation,
+        returnsContract,
+        decideContract,
+        requestMetadata,
+      }),
+      result: {
+        actual: outputText,
+        output: outputText,
+        parsed: mode === 'try'
+          ? tryEnvelope
+          : (isViolation ? null : (normalizedCallResult?.value ?? null)),
+        value: mode === 'try'
+          ? tryEnvelope
+          : (isViolation ? null : (normalizedCallResult?.value ?? null)),
+        metadata: normalizedCallResult?.metadata ?? null,
+        violation: mode === 'try'
+          ? (hadTryContractViolation
+            ? {
+              type: String(tryEnvelope?.error?.type ?? ''),
+              message: String(tryEnvelope?.error?.message ?? ''),
+              actual: String(tryEnvelope?.error?.output ?? ''),
+            }
+            : null)
+          : (isViolation ? (callResult?.violation ?? null) : null),
+        hadContractViolation: mode === 'try' ? hadTryContractViolation : isViolation,
+      },
+      elapsedMs: Math.max(0, Date.now() - startedAt),
+    }
+  }
+
   function getSnapshot() {
     return runtimeController.getSnapshot()
   }
@@ -270,6 +642,10 @@ export function createRuntimeCore({
     stop,
     enqueue,
     dispatchIngress,
+    submitCandidate,
+    promoteCandidate,
+    getDefinitionStatus,
+    callInspectorExecute,
     getSnapshot,
     attachSurface,
     shutdown,

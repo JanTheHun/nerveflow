@@ -1009,6 +1009,122 @@ test('cut() composes with sort() for ranked threshold selection', async () => {
   ])
 })
 
+test('cut() composes with sort() for ranked threshold selection', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"similarity\\":0.59},{\\"similarity\\":0.92},{\\"similarity\\":0.81},{\\"similarity\\":0.6}]")',
+    'sorted = sort(items, "similarity", desc=true)',
+    'relevant = cut(sorted, "similarity", ">=", 0.6)',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.relevant, [
+    { similarity: 0.92 },
+    { similarity: 0.81 },
+    { similarity: 0.6 },
+  ])
+})
+
+test('pick() returns array element at valid index', async () => {
+  const result = await runNextVScript('x = pick(from_json("[10,20,30]"), 1)')
+  assert.equal(result.locals.x, 20)
+})
+
+test('pick() returns first element at index 0', async () => {
+  const result = await runNextVScript('x = pick(from_json("[10,20,30]"), 0)')
+  assert.equal(result.locals.x, 10)
+})
+
+test('pick() returns null for out-of-bounds index in safe mode', async () => {
+  const result = await runNextVScript('x = pick(from_json("[10,20,30]"), 10)')
+  assert.equal(result.locals.x, null)
+})
+
+test('pick() throws PICK_OUT_OF_BOUNDS for out-of-bounds index in strict mode', async () => {
+  await assert.rejects(
+    () => runNextVScript('x = pick(from_json("[10,20,30]"), 10, strict=true)'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'PICK_OUT_OF_BOUNDS')
+      return true
+    },
+  )
+})
+
+test('pick() throws INVALID_COLLECTION_ARGUMENT for negative index', async () => {
+  await assert.rejects(
+    () => runNextVScript('x = pick(from_json("[10,20,30]"), -1)'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')
+      return true
+    },
+  )
+})
+
+test('pick() throws INVALID_COLLECTION_ARGUMENT for float index', async () => {
+  await assert.rejects(
+    () => runNextVScript('x = pick(from_json("[10,20,30]"), 1.5)'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')
+      return true
+    },
+  )
+})
+
+test('pick() returns object value at valid string key', async () => {
+  const result = await runNextVScript('x = pick(from_json("{\\"title\\":\\"Jazz\\"}"), "title")')
+  assert.equal(result.locals.x, 'Jazz')
+})
+
+test('pick() returns null for missing object key in safe mode', async () => {
+  const result = await runNextVScript('x = pick(from_json("{\\"title\\":\\"Jazz\\"}"), "artist")')
+  assert.equal(result.locals.x, null)
+})
+
+test('pick() throws PICK_MISSING_KEY for missing object key in strict mode', async () => {
+  await assert.rejects(
+    () => runNextVScript('x = pick(from_json("{\\"title\\":\\"Jazz\\"}"), "artist", strict=true)'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'PICK_MISSING_KEY')
+      return true
+    },
+  )
+})
+
+test('pick() throws INVALID_COLLECTION_ARGUMENT for empty string key', async () => {
+  await assert.rejects(
+    () => runNextVScript('x = pick(from_json("{\\"title\\":\\"Jazz\\"}"), "")'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')
+      return true
+    },
+  )
+})
+
+test('pick() throws INVALID_COLLECTION_ARGUMENT for non-collection first arg in safe mode', async () => {
+  await assert.rejects(
+    () => runNextVScript('x = pick("not-a-list", 0)'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')
+      return true
+    },
+  )
+})
+
+test('pick() throws INVALID_COLLECTION_ARGUMENT for non-collection first arg in strict mode', async () => {
+  await assert.rejects(
+    () => runNextVScript('x = pick("not-a-list", 0, strict=true)'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')
+      return true
+    },
+  )
+})
+
 test('collection helpers reject invalid arguments', async () => {
   await assert.rejects(
     () => runNextVScript('x = take("oops", 1)'),
@@ -1236,6 +1352,147 @@ test('tool() surfaces hostAdapter policy errors', async () => {
   )
 })
 
+test('try tool() returns success envelope', async () => {
+  const result = await runNextVScript('response = try tool("get_time")', {
+    callTool: async () => '2026-04-14T00:00:00.000Z',
+  })
+
+  assert.deepEqual(result.locals.response, {
+    ok: true,
+    value: '2026-04-14T00:00:00.000Z',
+  })
+})
+
+test('try tool() converts operational failure to envelope', async () => {
+  const result = await runNextVScript('response = try tool("search", { q: "ping" })', {
+    callTool: async () => {
+      throw new Error('timeout from provider')
+    },
+  })
+
+  assert.equal(result.locals.response.ok, false)
+  assert.equal(result.locals.response.error.type, 'function_call_error')
+  assert.match(result.locals.response.error.message, /tool\(\) failed/i)
+})
+
+test('try agent() returns success envelope for uncontracted call', async () => {
+  const result = await runNextVScript('response = try agent("router", "hello")', {
+    callAgent: async () => 'ok',
+  })
+
+  assert.deepEqual(result.locals.response, {
+    ok: true,
+    value: 'ok',
+  })
+})
+
+test('try model() with returns is allowed and returns success envelope', async () => {
+  const result = await runNextVScript('response = try model("m", "q", returns={ text: "" })', {
+    callAgent: async () => ({ text: 'ok' }),
+  })
+
+  assert.deepEqual(result.locals.response, {
+    ok: true,
+    value: { text: 'ok' },
+  })
+})
+
+test('try agent() with decide converts mismatch to failure envelope', async () => {
+  const result = await runNextVScript('response = try agent("router", "q", decide=["yes", "no"])', {
+    callAgent: async () => 'maybe',
+  })
+
+  assert.equal(result.locals.response.ok, false)
+  assert.equal(result.locals.response.error.type, 'agent_return_contract_violation')
+  assert.match(result.locals.response.error.message, /decide contract violation/i)
+})
+
+test('try failure envelope includes original output when provided on contract error', async () => {
+  const result = await runNextVScript('response = try agent("router", "q", decide=["yes", "no"])', {
+    callAgent: async () => {
+      const err = new Error('decide contract violation: output "garbage" does not match any allowed value.')
+      err.code = 'AGENT_RETURN_CONTRACT_VIOLATION'
+      err.output = 'garbage'
+      throw err
+    },
+  })
+
+  assert.equal(result.locals.response.ok, false)
+  assert.equal(result.locals.response.error.type, 'agent_return_contract_violation')
+  assert.equal(result.locals.response.error.output, 'garbage')
+})
+
+test('try agent() with returns and retry converts retry-exhausted contract failure to envelope', async () => {
+  const calls = []
+  const result = await runNextVScript('response = try agent("router", "q", returns={ intent: ["play", "unclear"] }, retry_on_contract_violation=2)', {
+    callAgent: async (args) => {
+      calls.push(args)
+      const err = new Error('retry exhausted: contract mismatch')
+      err.code = 'AGENT_RETURN_CONTRACT_VIOLATION'
+      throw err
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].retry_on_contract_violation, 2)
+  assert.equal(result.locals.response.ok, false)
+  assert.equal(result.locals.response.error.type, 'agent_return_contract_violation')
+  assert.match(result.locals.response.error.message, /retry exhausted/i)
+})
+
+test('try model() with returns and retry converts retry-exhausted contract failure to envelope', async () => {
+  const calls = []
+  const result = await runNextVScript('response = try model("mini", "q", returns={ intent: ["play", "unclear"] }, retry_on_contract_violation=1)', {
+    callAgent: async (args) => {
+      calls.push(args)
+      const err = new Error('retry exhausted: contract mismatch')
+      err.code = 'AGENT_RETURN_CONTRACT_VIOLATION'
+      throw err
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].retry_on_contract_violation, 1)
+  assert.equal(result.locals.response.ok, false)
+  assert.equal(result.locals.response.error.type, 'agent_return_contract_violation')
+  assert.match(result.locals.response.error.message, /retry exhausted/i)
+})
+
+test('try agent() with on_contract_violation is rejected as INVALID_CALL_CONFIG', async () => {
+  await assert.rejects(
+    () => runNextVScript('result = try agent("router", "q", on_contract_violation=emit("bad", violation))', {
+      callAgent: async () => 'yes',
+    }),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_CALL_CONFIG')
+      return true
+    },
+  )
+})
+
+test('try does not suppress invalid workflow semantics', async () => {
+  await assert.rejects(
+    () => runNextVScript('result = try not_a_real_function()'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_TRY_TARGET')
+      return true
+    },
+  )
+})
+
+test('try requires a supported direct call target', async () => {
+  await assert.rejects(
+    () => runNextVScript('result = try (1 + 2)'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_TRY_TARGET')
+      return true
+    },
+  )
+})
+
 test('agent() delegates to runtime agent hook', async () => {
   const calls = []
   const result = await runNextVScript('summary = agent("research", "summarize this")', {
@@ -1266,6 +1523,54 @@ test('agent() can use hostAdapter callAgent fallback', async () => {
 
   assert.deepEqual(calls, ['research'])
   assert.equal(result.locals.summary, 'adapter summary')
+})
+
+test('model() delegates to runtime agent hook with explicit model name', async () => {
+  const calls = []
+  const result = await runNextVScript('summary = model("phi3:mini-128k", "summarize this")', {
+    callAgent: async ({ model, prompt, instructions, format }) => {
+      calls.push({ model, prompt, instructions, format })
+      return 'short summary'
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].model, 'phi3:mini-128k')
+  assert.equal(calls[0].prompt, 'summarize this')
+  assert.equal(calls[0].instructions, '')
+  assert.equal(calls[0].format, '')
+  assert.equal(result.locals.summary, 'short summary')
+})
+
+test('model() supports returns contract and on_contract_violation fallback routing', async () => {
+  const result = await runNextVScript([
+    'on external "test"',
+    '  value = model("phi3:mini-128k", "ping", returns={ text:["pong"] }, retry_on_contract_violation=1, on_contract_violation=emit("wrong_output"))',
+    '  if value',
+    '    output text value.text',
+    '  end',
+    'end',
+    '',
+    'on "wrong_output"',
+    '  output text "...should have been pong"',
+    'end',
+  ].join('\n'), {
+    event: { type: 'test', value: '' },
+    callAgent: async ({ on_contract_violation }) => ({
+      __nextv_contract_violation__: true,
+      expression: on_contract_violation,
+      violation: {
+        type: 'schema',
+        field: 'text',
+        expected: '"pong"',
+        actual: '"not-pong"',
+      },
+    }),
+  })
+
+  const outputs = result.events.filter((event) => event.type === 'output' && event.format === 'text')
+  assert.equal(outputs.length, 1)
+  assert.equal(outputs[0].content, '...should have been pong')
 })
 
 test('agent() supports named format json and structured dotted access', async () => {
@@ -1526,6 +1831,83 @@ test('agent() rejects unsupported named arguments such as validation', async () 
   )
 })
 
+test('agent() accepts tools policy and forwards it to host adapter', async () => {
+  const calls = []
+  await runNextVScript('result = agent("classifier", "route this", tools={ mode: "governed", maxRounds: 8, allow: ["search", "fetch"] })', {
+    callAgent: async ({ tools }) => {
+      calls.push({ tools })
+      return 'ok'
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].tools, {
+    mode: 'governed',
+    maxRounds: 8,
+    allow: ['search', 'fetch'],
+    timeoutMs: 0,
+    denyOnUnknownTool: true,
+  })
+})
+
+test('agent() tools mode defaults to disabled when omitted', async () => {
+  const calls = []
+  await runNextVScript('result = agent("classifier", "route this")', {
+    callAgent: async ({ tools }) => {
+      calls.push({ tools })
+      return 'ok'
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].tools, {
+    mode: 'disabled',
+    maxRounds: 0,
+    allow: [],
+    timeoutMs: 0,
+    denyOnUnknownTool: true,
+  })
+})
+
+test('agent() rejects invalid tools mode', async () => {
+  await assert.rejects(
+    () => runNextVScript('result = agent("classifier", "route this", tools={ mode: "delegated" })', {
+      callAgent: async () => 'ok',
+    }),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_AGENT_TOOLS')
+      return true
+    },
+  )
+})
+
+test('agent() rejects invalid tools timeoutMs', async () => {
+  await assert.rejects(
+    () => runNextVScript('result = agent("classifier", "route this", tools={ mode: "governed", allow: ["search"], timeoutMs: -1 })', {
+      callAgent: async () => 'ok',
+    }),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_AGENT_TOOLS')
+      return true
+    },
+  )
+})
+
+test('agent() rejects invalid tools denyOnUnknownTool type', async () => {
+  await assert.rejects(
+    () => runNextVScript('result = agent("classifier", "route this", tools={ mode: "governed", allow: ["search"], denyOnUnknownTool: "no" })', {
+      callAgent: async () => 'ok',
+    }),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_AGENT_TOOLS')
+      return true
+    },
+  )
+})
+
 test('agent() rejects non-object non-array returns contract', async () => {
   await assert.rejects(
     () => runNextVScript('result = agent("classifier", "route this", returns=42)', {
@@ -1769,6 +2151,70 @@ test('agent() on_contract_violation can emit violation payload without eager eva
   assert.equal(result.state.violation_source_type, 'user_input')
 })
 
+test('agent() calls are dispatched with agent name to callAgent hook', async () => {
+  const calls = []
+  
+  const result = await runNextVScript('response = agent("qa_bot", "What tests should we run?")', {
+    callAgent: async (opts) => {
+      calls.push(opts)
+      return 'Profile instructions applied'
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].agent, 'qa_bot')
+  assert.equal(result.locals.response, 'Profile instructions applied')
+})
+
+test('model() calls are dispatched with model name to callAgent hook', async () => {
+  const calls = []
+  
+  const result = await runNextVScript('response = model("gpt-4", "test")', {
+    callAgent: async (opts) => {
+      calls.push(opts)
+      return 'Model called'
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].model, 'gpt-4')
+  assert.equal(result.locals.response, 'Model called')
+})
+
+test('agent_call event includes structured call args', async () => {
+  const result = await runNextVScript('response = agent("qa_bot", "What tests should we run?", "Be concise", format="text", retry_on_contract_violation=2)', {
+    callAgent: async () => 'ok',
+  })
+
+  const agentCall = result.events.find((event) => event.type === 'agent_call')
+  assert.ok(agentCall)
+  assert.equal(agentCall.agent, 'qa_bot')
+  assert.equal(agentCall.args.prompt, 'What tests should we run?')
+  assert.equal(agentCall.args.instructions, 'Be concise')
+  assert.equal(agentCall.args.format, 'text')
+  assert.equal(agentCall.args.retry_on_contract_violation, 2)
+})
+
+test('agent() and model() both work as expected', async () => {
+  const calls = []
+  
+  const result = await runNextVScript([
+    'agent_result = agent("research", "summarize")',
+    'model_result = model("llama2", "continue")',
+  ].join('\n'), {
+    callAgent: async (opts) => {
+      calls.push(opts)
+      return opts.agent ? 'agent-response' : 'model-response'
+    },
+  })
+
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].agent, 'research')
+  assert.equal(calls[1].model, 'llama2')
+  assert.equal(result.locals.agent_result, 'agent-response')
+  assert.equal(result.locals.model_result, 'model-response')
+})
+
 test('if supports equality comparison with json intent field', async () => {
   const result = await runNextVScript([
     'raw = "{\\"intent\\":\\"chat\\"}"',
@@ -1919,6 +2365,22 @@ test('missing dotted path outside condition still raises runtime error', async (
     (err) => {
       assert.equal(err instanceof NextVError, true)
       assert.equal(err.code, 'UNDEFINED_VARIABLE')
+      return true
+    },
+  )
+})
+
+test('non-object property access error includes attempted path and value context', async () => {
+  await assert.rejects(
+    () => runNextVScript([
+      'response = "oops"',
+      'x = response.metadata',
+    ].join('\n')),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'UNDEFINED_VARIABLE')
+      assert.match(err.message, /while resolving "response\.metadata"/)
+      assert.match(err.message, /Resolved "response" to string: "oops"/)
       return true
     },
   )
@@ -2431,5 +2893,477 @@ test('validateOutputContract rejects error status without error field', () => {
     assert.match(err.message, /error/)
     return true
   })
+})
+
+// --- parallel([...]) ---
+
+test('parallel([]) returns empty array', async () => {
+  const result = await runNextVScript('results = parallel([])')
+  assert.deepEqual(result.locals.results, [])
+})
+
+test('parallel([agent(...)]) returns single-element array', async () => {
+  const result = await runNextVScript('results = parallel([agent("a", "go")])', {
+    callAgent: async () => 'answer-a',
+  })
+  assert.deepEqual(result.locals.results, ['answer-a'])
+})
+
+test('parallel([agent, agent]) returns results in input order', async () => {
+  const order = []
+  const result = await runNextVScript([
+    'results = parallel([',
+    '  agent("first", "go"),',
+    '  agent("second", "go"),',
+    '  agent("third", "go")',
+    '])',
+  ].join('\n'), {
+    callAgent: async ({ agent }) => {
+      order.push(agent)
+      return `result-${agent}`
+    },
+  })
+  assert.deepEqual(result.locals.results, ['result-first', 'result-second', 'result-third'])
+})
+
+test('parallel all children observe the same pre-parallel event snapshot', async () => {
+  const seenValues = []
+  const result = await runNextVScript([
+    'results = parallel([',
+    '  agent("a", event.value),',
+    '  agent("b", event.value)',
+    '])',
+  ].join('\n'), {
+    event: { type: 'test', value: 'snapshot-value' },
+    callAgent: async ({ prompt }) => {
+      seenValues.push(prompt)
+      return prompt
+    },
+  })
+  assert.deepEqual(seenValues, ['snapshot-value', 'snapshot-value'])
+  assert.deepEqual(result.locals.results, ['snapshot-value', 'snapshot-value'])
+})
+
+test('parallel fails when one child fails (single failure)', async () => {
+  await assert.rejects(
+    () => runNextVScript([
+      'results = parallel([',
+      '  agent("a", "go"),',
+      '  agent("b", "go")',
+      '])',
+    ].join('\n'), {
+      callAgent: async ({ agent }) => {
+        if (agent === 'b') throw new Error('b-failed')
+        return `ok-${agent}`
+      },
+    }),
+    (err) => {
+      assert.match(err.message, /b-failed/)
+      return true
+    },
+  )
+})
+
+test('parallel surfaces lowest-index failure when multiple children fail', async () => {
+  await assert.rejects(
+    () => runNextVScript([
+      'results = parallel([',
+      '  agent("a", "go"),',
+      '  agent("b", "go"),',
+      '  agent("c", "go")',
+      '])',
+    ].join('\n'), {
+      callAgent: async ({ agent }) => {
+        if (agent === 'b') throw new Error('b-failed')
+        if (agent === 'c') throw new Error('c-failed')
+        return `ok-${agent}`
+      },
+    }),
+    (err) => {
+      assert.match(err.message, /b-failed/)
+      return true
+    },
+  )
+})
+
+test('parallel executes sibling calls concurrently and still reports lowest-index failure', async () => {
+  const calledAgents = []
+
+  await assert.rejects(
+    () => runNextVScript([
+      'results = parallel([',
+      '  agent("b", "go"),',
+      '  agent("c", "go")',
+      '])',
+    ].join('\n'), {
+      callAgent: async ({ agent }) => {
+        calledAgents.push(agent)
+        if (agent === 'b') {
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 25))
+          throw new Error('b-failed')
+        }
+        if (agent === 'c') {
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 1))
+          throw new Error('c-failed')
+        }
+        return `ok-${agent}`
+      },
+    }),
+    (err) => {
+      assert.match(err.message, /b-failed/)
+      return true
+    },
+  )
+
+  assert.deepEqual(calledAgents, ['b', 'c'])
+})
+
+test('parallel works with model() calls', async () => {
+  const result = await runNextVScript([
+    'results = parallel([',
+    '  model("gpt4", "prompt-1"),',
+    '  model("gpt4", "prompt-2")',
+    '])',
+  ].join('\n'), {
+    callAgent: async ({ model, prompt }) => `${model}:${prompt}`,
+  })
+  assert.deepEqual(result.locals.results, ['gpt4:prompt-1', 'gpt4:prompt-2'])
+})
+
+test('parallel works with mixed agent and model calls', async () => {
+  const result = await runNextVScript([
+    'results = parallel([',
+    '  agent("router", "q"),',
+    '  model("llama3", "q")',
+    '])',
+  ].join('\n'), {
+    callAgent: async ({ agent, model }) => `${agent ?? model}`,
+  })
+  assert.deepEqual(result.locals.results, ['router', 'llama3'])
+})
+
+test('parallel result array is usable after evaluation (length)', async () => {
+  const result = await runNextVScript([
+    'results = parallel([',
+    '  agent("a", "go"),',
+    '  agent("b", "go")',
+    '])',
+    'n = length(results)',
+  ].join('\n'), {
+    callAgent: async ({ agent }) => `result-${agent}`,
+  })
+  assert.equal(result.locals.n, 2)
+  assert.deepEqual(result.locals.results, ['result-a', 'result-b'])
+})
+
+test('parallel rejects element that is not agent() or model()', async () => {
+  await assert.rejects(
+    () => runNextVScript('results = parallel([tool("my_tool")])'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'PARALLEL_INVALID_ELEMENT')
+      assert.match(err.message, /index 0/)
+      return true
+    },
+  )
+})
+
+test('parallel rejects variable reference element', async () => {
+  await assert.rejects(
+    () => runNextVScript([
+      'x = "hello"',
+      'results = parallel([x])',
+    ].join('\n')),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'PARALLEL_INVALID_ELEMENT')
+      return true
+    },
+  )
+})
+
+test('parallel rejects element with on_contract_violation', async () => {
+  await assert.rejects(
+    () => runNextVScript([
+      'results = parallel([',
+      '  agent("a", "go", on_contract_violation=emit("err", violation))',
+      '])',
+    ].join('\n')),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'PARALLEL_ON_CONTRACT_VIOLATION_FORBIDDEN')
+      assert.match(err.message, /index 0/)
+      return true
+    },
+  )
+})
+
+test('parallel rejects non-array argument syntax', async () => {
+  await assert.rejects(
+    () => runNextVScript('results = parallel(agent("a", "go"))'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'PARALLEL_INVALID_SYNTAX')
+      return true
+    },
+  )
+})
+
+test('parallel standalone without assignment is rejected', async () => {
+  await assert.rejects(
+    () => runNextVScript('parallel([agent("a", "go")])'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'PARALLEL_STANDALONE_FORBIDDEN')
+      assert.match(err.message, /must be assigned/)
+      return true
+    },
+  )
+})
+
+test('parallel passes returns contract to child agents', async () => {
+  const calls = []
+  const result = await runNextVScript([
+    'results = parallel([',
+    '  agent("a", "q", returns={ type:"", score:0 }),',
+    '  agent("b", "q", returns={ type:"", score:0 })',
+    '])',
+  ].join('\n'), {
+    callAgent: async ({ agent, returns }) => {
+      calls.push({ agent, returns })
+      // custom callAgent hook returns final value (bypasses session-level JSON parsing)
+      return { type: 'ok', score: 1 }
+    },
+  })
+  assert.equal(calls.length, 2)
+  assert.ok(calls[0].returns)
+  assert.ok(calls[1].returns)
+  assert.deepEqual(result.locals.results[0], { type: 'ok', score: 1 })
+  assert.deepEqual(result.locals.results[1], { type: 'ok', score: 1 })
+})
+
+// --- Late contract binding (validate="none" + try_bind) ---
+
+test('agent() accepts validate="none" and returns parsed JSON', async () => {
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { classifier: { model: 'test-model' } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => '{"intent":"search"}',
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions,
+    normalizeAgentFormattedOutput,
+    validateAgentReturnContract,
+    buildAgentReturnContractGuidance,
+  })
+  const result = await runNextVScript(
+    'result = agent("classifier", "route this", returns={ intent: "" }, validate="none")',
+    { hostAdapter: adapter },
+  )
+  assert.deepEqual(result.locals.result, { intent: 'search' })
+})
+
+test('agent() with validate="none" returns raw string when JSON parse fails', async () => {
+  const result = await runNextVScript(
+    'result = agent("classifier", "route this", returns={ intent: "" }, validate="none")',
+    {
+      callAgent: async () => 'not valid json',
+    },
+  )
+  assert.equal(result.locals.result, 'not valid json')
+})
+
+test('agent() rejects validate="none" combined with retry_on_contract_violation', async () => {
+  await assert.rejects(
+    () => runNextVScript(
+      'result = agent("classifier", "route this", returns={ intent: "" }, validate="none", retry_on_contract_violation=1)',
+      { callAgent: async () => '{"intent":"search"}' },
+    ),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_CALL_CONFIG')
+      assert.match(err.message, /validate="none"/)
+      return true
+    },
+  )
+})
+
+test('agent() rejects validate="none" combined with on_contract_violation', async () => {
+  await assert.rejects(
+    () => runNextVScript(
+      'result = agent("classifier", "route this", returns={ intent: "" }, validate="none", on_contract_violation=emit("v", violation))',
+      { callAgent: async () => '{"intent":"search"}' },
+    ),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_CALL_CONFIG')
+      return true
+    },
+  )
+})
+
+test('model() accepts validate="none" and returns parsed JSON', async () => {
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: {} },
+      operators: { map: {} },
+    },
+    callAgent: async () => '{"intent":"classify"}',
+    defaultModel: 'gpt-4',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions,
+    normalizeAgentFormattedOutput,
+    validateAgentReturnContract,
+    buildAgentReturnContractGuidance,
+  })
+  const result = await runNextVScript(
+    'result = model("gpt-4", "route this", returns={ intent: "" }, validate="none")',
+    { hostAdapter: adapter },
+  )
+  assert.deepEqual(result.locals.result, { intent: 'classify' })
+})
+
+test('try_bind() returns ok=true with validated value on success', async () => {
+  const result = await runNextVScript([
+    'bound = try_bind({ intent: "search", confidence: 0.9 }, { intent: "", confidence: 0 })',
+  ].join('\n'), {})
+  assert.equal(result.locals.bound.ok, true)
+  assert.deepEqual(result.locals.bound.value, { intent: 'search', confidence: 0.9 })
+})
+
+test('try_bind() returns ok=false with json_parse_error on invalid JSON string', async () => {
+  const result = await runNextVScript([
+    'raw = "not json at all"',
+    'bound = try_bind(raw, { intent: "" })',
+  ].join('\n'), {})
+  assert.equal(result.locals.bound.ok, false)
+  assert.equal(result.locals.bound.error.type, 'json_parse_error')
+  assert.equal(result.locals.bound.error.output, 'not json at all')
+})
+
+test('try_bind() returns ok=false with contract_violation on schema mismatch', async () => {
+  const result = await runNextVScript([
+    'bound = try_bind({ intent: "search" }, { intent: "", confidence: 0 })',
+  ].join('\n'), {})
+  assert.equal(result.locals.bound.ok, false)
+  assert.equal(result.locals.bound.error.type, 'contract_violation')
+  assert.equal(result.locals.bound.error.field, 'confidence')
+})
+
+test('try_bind() preserves original string input as error.output on contract mismatch', async () => {
+  const result = await runNextVScript([
+    'raw = "{\"intent\":\"search\"}"',
+    'bound = try_bind(raw, { intent: "", confidence: 0 })',
+  ].join('\n'), {})
+  assert.equal(result.locals.bound.ok, false)
+  assert.equal(result.locals.bound.error.type, 'contract_violation')
+  assert.equal(result.locals.bound.error.output, '{"intent":"search"}')
+  assert.equal(result.locals.bound.error.field, 'confidence')
+})
+
+test('try_bind() throws INVALID_CALL_CONFIG when contract is not an object', async () => {
+  await assert.rejects(
+    () => runNextVScript('bound = try_bind("data", "not-a-contract")', {}),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_CALL_CONFIG')
+      assert.match(err.message, /try_bind/)
+      return true
+    },
+  )
+})
+
+// ── decide contract ─────────────────────────────────────────────────────────
+
+test('agent() with decide returns matched declared literal', async () => {
+  const result = await runNextVScript(
+    'result = agent("router", "classify this", decide=["approve", "reject"])',
+    {
+      callAgent: async () => '  Approve!  ',
+    },
+  )
+  assert.equal(result.locals.result, 'approve')
+})
+
+test('agent() with decide rejects when combined with returns', async () => {
+  await assert.rejects(
+    () => runNextVScript(
+      'result = agent("router", "classify", decide=["yes", "no"], returns={ intent: "" })',
+      { callAgent: async () => 'yes' },
+    ),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_CALL_CONFIG')
+      assert.match(err.message, /decide.*returns|returns.*decide/i)
+      return true
+    },
+  )
+})
+
+test('agent() with decide rejects when combined with validate', async () => {
+  await assert.rejects(
+    () => runNextVScript(
+      'result = agent("router", "classify", decide=["yes", "no"], validate="none")',
+      { callAgent: async () => 'yes' },
+    ),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_CALL_CONFIG')
+      assert.match(err.message, /decide.*validate|validate.*decide/i)
+      return true
+    },
+  )
+})
+
+test('agent() with decide throws AGENT_RETURN_CONTRACT_VIOLATION on mismatch after retries exhausted', async () => {
+  await assert.rejects(
+    () => runNextVScript(
+      'result = agent("router", "classify", decide=["yes", "no"])',
+      { callAgent: async () => 'maybe' },
+    ),
+    (err) => {
+      assert.equal(err.code, 'AGENT_RETURN_CONTRACT_VIOLATION')
+      return true
+    },
+  )
+})
+
+test('agent() decide mismatch preserves source metadata for included files', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'nextv-decide-source-map-'))
+  const entryPath = join(tmpDir, 'entry.nrv')
+  const includePath = join(tmpDir, 'intent.nrv')
+
+  writeFileSync(entryPath, 'include "intent.nrv"\n', 'utf8')
+  writeFileSync(includePath, 'result = agent("router", event.value, decide=["play", "unclear"])\n', 'utf8')
+
+  try {
+    await assert.rejects(
+      () => runNextVScriptFromFile(entryPath, {
+        event: { type: 'user_input', value: 'play garbage' },
+        callAgent: async () => 'Unclear (ambiguous command)',
+      }),
+      (err) => {
+        assert.equal(err.code, 'AGENT_RETURN_CONTRACT_VIOLATION')
+        assert.equal(err.sourceLine, 1)
+        assert.equal(err.line, 1)
+        assert.match(String(err.sourcePath ?? ''), /intent\.nrv$/)
+        return true
+      },
+    )
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true })
+  }
 })
 

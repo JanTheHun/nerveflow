@@ -21,6 +21,7 @@ test('nextVGraphMapping normalizes provenance labels', () => {
 
   assert.equal(api.getControlProvenanceClass('bounded'), 'bounded')
   assert.equal(api.getControlProvenanceClass('unbounded'), 'unbounded')
+  assert.equal(api.getControlProvenanceClass('operational'), 'operational')
   assert.equal(api.getControlProvenanceClass('mixed'), 'mixed')
   assert.equal(api.getControlProvenanceClass('unknown'), 'unknown')
   assert.equal(api.getControlProvenanceClass('  BOUNDED  '), 'bounded')
@@ -50,8 +51,9 @@ test('nextVGraphMapping builds control graph artifacts and ignores malformed edg
       to: 'branch:route:10:if_false',
       type: 'control',
       branch: 'if_false',
-      provenance: 'unbounded',
+      provenance: 'operational',
       boundedControl: false,
+      operationalControl: true,
       line: 10,
       statement: 'if decision.intent == "chat"',
     },
@@ -100,7 +102,7 @@ test('nextVGraphMapping builds control graph artifacts and ignores malformed edg
 
   const falseNode = nodeById.get('branch:route:10:if_false')
   assert.ok(falseNode)
-  assert.equal(falseNode.provenance, 'unbounded')
+  assert.equal(falseNode.provenance, 'operational')
 
   for (const edge of result.controlGraphEdges) {
     assert.equal(edge.type, 'control')
@@ -108,6 +110,10 @@ test('nextVGraphMapping builds control graph artifacts and ignores malformed edg
     assert.equal(typeof edge.to, 'string')
     assert.ok(edge.from.length > 0)
     assert.ok(edge.to.length > 0)
-    assert.ok(['bounded', 'unbounded', 'mixed', 'unknown'].includes(edge.provenance))
+    assert.ok(['bounded', 'unbounded', 'operational', 'mixed', 'unknown'].includes(edge.provenance))
   }
+
+  const operationalEdge = result.controlGraphEdges.find((edge) => edge.to === 'branch:route:10:if_false')
+  assert.ok(operationalEdge)
+  assert.equal(operationalEdge.operationalControl, true)
 })

@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>nerve-studio</title>
   <link rel="stylesheet" href="styles.css?v=20260429d">
-  <script src="/htmx.js"></script>
 </head>
 <body class="mode-nextv">
 
@@ -13,20 +12,22 @@
     <span class="brand">nerve-studio</span>
     <span id="remote-mode-badge" class="remote-mode-badge" hidden>remote MQTT runtime</span>
     <div class="header-controls">
-      <div id="chat-header-controls" class="chat-header-controls">
-        <span class="sep">|</span>
-        <label>model
-          <input id="model-input" type="text" autocomplete="off" spellcheck="false" />
-        </label>
-        <button id="model-set-btn" onclick="setModel()">set</button>
-        <span class="sep">|</span>
-        <button
-          id="clear-chat-btn"
-          hx-post="/api/chat/clear"
-          hx-trigger="click"
-          hx-swap="none"
-          hx-on::after-request="onChatCleared(event)"
-        >clear chat</button>
+      <div class="nextv-attach-header-bar">
+        <input
+          id="nextv-attach-ws-url"
+          class="nextv-attach-url-input"
+          type="text"
+          placeholder="ws://127.0.0.1:4190/api/runtime/ws"
+          autocomplete="off"
+          spellcheck="false"
+          hidden
+          oninput="setNextVAttachWsUrl(this.value)"
+        />
+        <div id="nextv-attach-controls" class="nextv-attach-controls" hidden>
+          <button id="nextv-attach-btn" type="button" onclick="attachNextVRuntime()">attach</button>
+          <button id="nextv-detach-btn" type="button" onclick="detachNextVRuntime()" disabled>detach</button>
+          <span id="nextv-attach-status" class="nextv-attach-status" data-state="detached">detached</span>
+        </div>
       </div>
       <details id="settings-menu" class="settings-menu">
         <summary id="settings-btn" class="settings-btn" title="settings" aria-label="settings">⚙</summary>
@@ -36,7 +37,22 @@
           <select id="nextv-runtime-target" class="settings-item" onchange="setNextVRuntimeTarget(this.value)">
             <option value="embedded">embedded runtime</option>
             <option value="external">external runtime process</option>
+            <option value="attach">attach WS runtime</option>
           </select>
+          <label class="settings-item" for="nextv-editor-tab-size">editor tab size</label>
+          <select id="nextv-editor-tab-size" class="settings-item" onchange="setNextVEditorTabSize(this.value)">
+            <option value="2">2 spaces</option>
+            <option value="4">4 spaces</option>
+            <option value="8">8 spaces</option>
+          </select>
+          <label class="settings-item check-label settings-item-checkbox" role="menuitemcheckbox" aria-label="enable surface switchers in editor panes">
+            <input id="nextv-editor-surface-beta-toggle" type="checkbox" onchange="setNextVEditorSurfaceBetaEnabled(this.checked)">
+            enable surface switchers
+          </label>
+          <label class="settings-item check-label settings-item-checkbox" role="menuitemcheckbox" aria-label="show surface telemetry row">
+            <input id="nextv-editor-surface-telemetry-toggle" type="checkbox" onchange="setNextVEditorSurfaceTelemetryVisible(this.checked)">
+            show surface telemetry
+          </label>
           <label class="settings-item check-label settings-item-checkbox" role="menuitemcheckbox" aria-label="show ingress connectors">
             <input id="nextv-show-ingress-toggle" type="checkbox" onchange="toggleNextVIngressControlsSetting()" checked>
             show ingress connectors
@@ -67,13 +83,25 @@
         </div>
         <div class="footer-row nextv-config-row">
           <input id="nextv-workspace-dir" type="text" placeholder="workspace folder (optional)" autocomplete="off" spellcheck="false" />
-          <button type="button" onclick="openNextVWorkspace()">open</button>
+          <button type="button" id="nextv-open-workspace-btn" onclick="openNextVWorkspace()">open</button>
           <span class="row-label">entrypoint</span>
           <input id="nextv-entrypoint" type="text" placeholder="path/to/main.nrv (or .wfs)" autocomplete="off" spellcheck="false" />
+          <label id="nextv-attach-start-override-label" class="check-label nextv-attach-start-override" hidden>
+            <input id="nextv-attach-start-override" type="checkbox" onchange="setNextVAttachStartOverrideEnabled(this.checked)">
+            override attached path
+          </label>
           <button type="button" id="nextv-run-btn" onclick="runNextVRuntime()" hidden>run</button>
           <button type="button" id="nextv-start-btn" onclick="startNextVRuntime()">start</button>
           <button type="button" id="nextv-stop-btn" onclick="stopNextVRuntime()" disabled>stop</button>
+          <button type="button" id="nextv-reload-config-btn" onclick="reloadNextVRuntimeConfig()" disabled>reload config</button>
+          <button type="button" id="nextv-validate-btn" onclick="submitNextVCandidate()" disabled>validate</button>
+          <button type="button" id="nextv-promote-btn" onclick="promoteNextVCandidate()" disabled>promote</button>
           <button id="nextv-refresh-snapshot-btn" type="button" onclick="refreshNextVSnapshot()">snapshot</button>
+        </div>
+        <div id="nextv-candidate-status-row" class="footer-row nextv-candidate-row" hidden>
+          <span class="row-label">candidate</span>
+          <span id="nextv-candidate-status-badge"></span>
+          <span id="nextv-candidate-issue-count"></span>
         </div>
         <div id="nextv-ingress-controls-row" class="footer-row nextv-ingress-controls-row">
           <span class="row-label">ingress</span>
@@ -88,6 +116,7 @@
           <div id="nextv-primary-tabs" class="panel-tabs" role="tablist" aria-label="nextv primary views">
             <button id="nextv-view-editor" type="button" class="panel-tab" role="tab" aria-selected="true" onclick="setNextVPrimaryView('editor')">editor</button>
             <button id="nextv-view-graph" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="setNextVPrimaryView('graph')">graph</button>
+            <button id="nextv-view-call-inspector" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="toggleNextVCallInspectorPanel()">call inspector</button>
           </div>
           <div class="nextv-view-actions">
             <button id="toggle-user-io-btn" type="button" class="panel-action" onclick="toggleUserIOPanel()" aria-pressed="false">input</button>
@@ -200,6 +229,7 @@
                   ></textarea>
                 </div>
               </div>
+              <div id="editor-grid-center-handle" class="editor-grid-center-handle" aria-hidden="true" title="drag to resize 2x2 panes"></div>
             </div>
           </div>
         </div>
@@ -290,7 +320,6 @@
             </div>
             <div id="user-input-section" class="panel-section user-input-section">
               <div class="panel-header">
-                <span>input</span>
               </div>
               <div id="nextv-input-tabs" class="panel-tabs" role="tablist" aria-label="nextv input channels"></div>
               <div id="nextv-input-external-pane" class="nextv-input-pane" role="tabpanel">
@@ -324,7 +353,6 @@
             <div id="user-panel-splitter" class="panel-vsplitter" role="separator" aria-label="Split user input and output panes"></div>
             <div id="user-output-section" class="panel-section">
               <div class="panel-header">
-                <span>user output</span>
                 <div id="user-output-channel-filters" class="user-output-channel-filters" role="group" aria-label="user output channels">
                 </div>
                 <button type="button" class="panel-action" onclick="clearUserOutputPanel()">clear</button>
@@ -333,6 +361,73 @@
             </div>
           </section>
         </div>
+        <section id="nextv-call-inspector-panel" class="nextv-call-inspector-panel" aria-label="floating call inspector panel" tabindex="-1" hidden>
+          <div class="nextv-call-inspector-header">
+            <span id="nextv-call-inspector-title" class="nextv-call-inspector-title">call inspector</span>
+            <div class="nextv-call-inspector-actions">
+              <button type="button" class="panel-icon-btn" onclick="toggleNextVCallInspectorPanel()" title="close panel" aria-label="close panel">✕</button>
+            </div>
+          </div>
+          <div class="nextv-call-inspector-content panel-controls">
+            <div class="nextv-call-inspector-left">
+              <div class="footer-row" style="gap:8px;flex-wrap:wrap;flex-shrink:0">
+                <select id="nextv-call-target-kind" title="call target kind">
+                  <option value="agent" selected>agent</option>
+                  <option value="model">model</option>
+                </select>
+                <select id="nextv-call-target-agent" title="agent target">
+                  <option value="">loading agents...</option>
+                </select>
+                <select id="nextv-call-target" title="model target" hidden>
+                  <option value="">loading models...</option>
+                </select>
+                <select id="nextv-call-mode" title="call mode">
+                  <option value="call" selected>call</option>
+                  <option value="try">try</option>
+                </select>
+                <select id="nextv-call-validate" title="validation mode">
+                  <option value="coerce" selected>coerce</option>
+                  <option value="strict">strict</option>
+                  <option value="none">none</option>
+                </select>
+                <input id="nextv-call-retry" type="number" min="0" max="8" step="1" value="0" title="retry count" style="width:86px" />
+                <button type="button" onclick="executeNextVCallInspector()">run call</button>
+                <button type="button" onclick="insertNextVCallInspectorSnippet()">insert code</button>
+              </div>
+              <textarea id="nextv-call-instructions" rows="2" placeholder="system instructions (optional)" autocomplete="off" spellcheck="false"></textarea>
+              <textarea id="nextv-call-prompt" rows="3" placeholder="prompt" autocomplete="off" spellcheck="false"></textarea>
+              <textarea id="nextv-call-returns" rows="3" placeholder="returns contract JSON (optional)"></textarea>
+              <input id="nextv-call-decide" type="text" placeholder="decide options (comma-separated, optional)" autocomplete="off" spellcheck="false" />
+              <div class="nextv-call-target-config">
+                <div id="nextv-call-target-config-label" class="nextv-call-target-config-label">project config</div>
+                <pre id="nextv-call-target-config" class="panel-scroll nextv-call-target-config-output"></pre>
+              </div>
+              <pre id="nextv-call-generated-code" class="panel-scroll nextv-call-generated-code-output"></pre>
+            </div>
+            <div class="nextv-call-inspector-right">
+              <div class="nextv-call-target-config">
+                <div id="nextv-call-resolved-label" class="nextv-call-target-config-label">resolved call</div>
+                <pre id="nextv-call-resolved" class="panel-scroll nextv-call-target-config-output nextv-call-resolved-output"></pre>
+              </div>
+              <div class="nextv-call-output-section">
+                <div id="nextv-call-result-tabs" class="panel-tabs" role="tablist" aria-label="call inspector result tabs">
+                  <button id="nextv-call-result-tab-raw" type="button" class="panel-tab" role="tab" aria-selected="true">raw</button>
+                  <button id="nextv-call-result-tab-actual" type="button" class="panel-tab" role="tab" aria-selected="false">output</button>
+                  <button id="nextv-call-result-tab-parsed" type="button" class="panel-tab" role="tab" aria-selected="false">parsed</button>
+                  <button id="nextv-call-result-tab-validation" type="button" class="panel-tab" role="tab" aria-selected="false">validation</button>
+                  <button id="nextv-call-result-tab-try" type="button" class="panel-tab" role="tab" aria-selected="false">try</button>
+                  <button id="nextv-call-result-tab-metadata" type="button" class="panel-tab" role="tab" aria-selected="false">metadata</button>
+                </div>
+                <pre id="nextv-call-result-raw" class="panel-scroll nextv-call-result-output" role="tabpanel"></pre>
+                <pre id="nextv-call-result-actual" class="panel-scroll nextv-call-result-output" role="tabpanel" hidden></pre>
+                <pre id="nextv-call-result-parsed" class="panel-scroll nextv-call-result-output" role="tabpanel" hidden></pre>
+                <pre id="nextv-call-result-validation" class="panel-scroll nextv-call-result-output" role="tabpanel" hidden></pre>
+                <pre id="nextv-call-result-try" class="panel-scroll nextv-call-result-output" role="tabpanel" hidden></pre>
+                <pre id="nextv-call-result-metadata" class="panel-scroll nextv-call-result-output" role="tabpanel" hidden></pre>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
       <div id="script-vsplit-1" class="panel-vsplitter" role="separator" aria-label="Resize script and logs panes"></div>
       <div id="logs-section" class="panel-section">
@@ -347,9 +442,12 @@
             <button id="nextv-tab-events" type="button" class="panel-tab" role="tab" aria-selected="true" onclick="setNextVDevTab('events')">events</button>
             <button id="nextv-tab-trace" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="setNextVDevTab('trace')">trace</button>
             <button id="nextv-tab-console" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="setNextVDevTab('console')">console</button>
+            <button id="nextv-events-live-btn" type="button" class="panel-action" onclick="setNextVEventsLiveMode(true)" title="resume live stream">Live</button>
+            <span id="nextv-events-buffer-count" class="panel-badge" hidden></span>
           </div>
           <span id="output-header-badge" class="panel-badge badge-output">text</span>
-          <button type="button" class="panel-action" onclick="clearOutputPanel()">clear</button>
+          <button type="button" class="panel-action" onclick="clearOutputPanel()" style="margin-left:auto">clear</button>
+          <button type="button" class="panel-icon-btn" onclick="toggleNextVDevConsole()" title="close panel" aria-label="close panel">✕</button>
         </div>
         <div id="nextv-events-output" class="panel-scroll" role="tabpanel" aria-labelledby="nextv-tab-events"></div>
         <div id="trace-shell" class="trace-shell panel-scroll" role="tabpanel" aria-labelledby="nextv-tab-trace">
@@ -360,43 +458,11 @@
         <div id="nextv-console-output" class="panel-scroll" role="tabpanel" aria-labelledby="nextv-tab-console"></div>
       </div>
     </section>
-    <div id="panel-splitter" aria-label="Resize panels" role="separator"></div>
-    <section id="conversation-panel" aria-label="Conversation panel">
-      <div class="panel-header">conversation</div>
-      <div id="transcript"></div>
-      <div class="conversation-controls panel-controls">
-        <form id="chat-form" onsubmit="handleSubmit(event)">
-          <textarea
-            id="prompt-input"
-            placeholder="Enter prompt… (Shift+Enter for newline)"
-            rows="3"
-            autofocus
-            autocomplete="off"
-            spellcheck="false"
-          ></textarea>
-          <button type="submit" id="send-btn">send</button>
-        </form>
-
-        <div class="footer-row images-row">
-          <span class="row-label">images</span>
-          <label class="file-label">
-            attach
-            <input type="file" id="img-upload" accept="image/png,image/jpeg,image/webp,image/gif" onchange="uploadImage(this)" hidden>
-          </label>
-          <button
-            hx-post="/api/images/clear"
-            hx-trigger="click"
-            hx-swap="none"
-            hx-on::after-request="onImagesCleared(event)"
-          >clear</button>
-          <span id="image-count" class="dim">0 attached</span>
-        </div>
-      </div>
-    </section>
   </main>
 
   <script src="dagre.min.js"></script>
   <script src="nextv_graph_mapping.js?v=20260429a"></script>
-  <script src="app.js?v=20260429d"></script>
+  <script src="nextv_graph_timer_api.js?v=20260503a"></script>
+  <script type="module" src="src-app/14_init.js?v=20260504a"></script>
 </body>
 </html>

@@ -6,6 +6,30 @@ function defaultErrorFactory(partial) {
   return err
 }
 
+function hasStaticValidateNoneArg(args) {
+  for (const arg of args ?? []) {
+    if (arg?.kind !== 'named') continue
+    if (String(arg.name ?? '').trim() !== 'validate') continue
+    if (arg.expr?.type === 'string' && String(arg.expr?.value ?? '').trim().toLowerCase() === 'none') return true
+  }
+  return false
+}
+
+function getStaticDecideOptions(args) {
+  for (const arg of args ?? []) {
+    if (arg?.kind !== 'named') continue
+    if (String(arg.name ?? '').trim() !== 'decide') continue
+    if (arg.expr?.type !== 'array') return null
+    const options = []
+    for (const element of arg.expr.elements ?? []) {
+      if (element?.type !== 'string') return null
+      options.push(element.value)
+    }
+    return options.length >= 2 ? options : null
+  }
+  return null
+}
+
 function makeCallInstruction(callExpr, line, statement, dst) {
   const base = {
     args: callExpr.args,
@@ -18,7 +42,12 @@ function makeCallInstruction(callExpr, line, statement, dst) {
     return { op: 'tool_call', ...base }
   }
   if (callExpr.name === 'agent') {
-    return { op: 'agent_call', ...base }
+    const unbound = hasStaticValidateNoneArg(callExpr.args)
+    const decideOptions = getStaticDecideOptions(callExpr.args)
+    if (decideOptions != null) {
+      return { op: 'agent_call', contract_kind: 'decide', decide_options: decideOptions, normalization: 'decide_v1', ...base }
+    }
+    return unbound ? { op: 'agent_call', unbound: true, ...base } : { op: 'agent_call', ...base }
   }
   if (callExpr.name === 'script') {
     return { op: 'script_call', ...base }
@@ -122,6 +151,18 @@ function walkExpr(expr, visitor) {
     for (const entry of expr.entries ?? []) {
       walkExpr(entry?.valueExpr, visitor)
     }
+    return
+  }
+
+  if (expr.type === 'parallel') {
+    for (const element of expr.elements ?? []) {
+      walkExpr(element, visitor)
+    }
+    return
+  }
+
+  if (expr.type === 'try_expr') {
+    walkExpr(expr.expr, visitor)
     return
   }
 

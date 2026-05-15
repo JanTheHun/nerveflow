@@ -31,14 +31,21 @@ export {
 } from './runtime_lifecycle.js'
 
 export {
+  getConfiguredAgentProfiles,
+  getConfiguredModelsMap,
   getConfiguredModules,
+  getConfiguredRuntimePreload,
+  getConfiguredTransportsMap,
   getDeclaredEffectChannels,
   getDeclaredExternals,
   getRequiredCapabilities,
   loadWorkspaceNextVConfig,
+  validateConfigReferences,
+  validateNoForbiddenAgentFields,
 } from './workspace_config.js'
 
 export {
+  buildInactiveCandidateStatus,
   buildInactiveSnapshot,
   createNextVRuntimeController,
 } from './runtime_controller.js'

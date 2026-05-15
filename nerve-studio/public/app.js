@@ -9,6 +9,7 @@ let isFileTreeResizing = false
 let isStateDiffResizing = false
 let isUserIOResizing = false
 let activeVerticalResize = null
+let activeEditorGridResize = false
 let activeScriptAbortController = null
 let activeScriptRunId = ''
 let nextVRuntimeRunning = false
@@ -58,12 +59,18 @@ const storageKeys = {
   nextVUserOutputChannels: 'local-agent.nextv.userOutputChannels',
   nextVIngressControlsVisible: 'local-agent.nextv.ingressControlsVisible',
   nextVRuntimeTarget: 'local-agent.nextv.runtimeTarget',
+  nextVAttachWsUrl: 'local-agent.nextv.attachWsUrl',
+  nextVAttachStartOverride: 'local-agent.nextv.attachStartOverride',
   nextVGraphDirection: 'local-agent.nextv.graphDirection',
   nextVControlOverlay: 'local-agent.nextv.controlOverlay',
   nextVShowControlBranches: 'local-agent.nextv.showControlBranches',
+  nextVEditorGridSplit: 'local-agent.nextv.editorGridSplit',
+  nextVEditorLayout: 'local-agent.nextv.editorLayout',
 }
 
 const MIN_LEFT_PANEL_SECTION_HEIGHT = 90
+const DEFAULT_EDITOR_GRID_SPLIT_PERCENT = 50
+const MIN_EDITOR_GRID_SPLIT_PERCENT = 20
 
 function createEditorPaneState(id) {
   return {
@@ -92,6 +99,11 @@ const editorLayoutState = {
   activePaneId: 'A',
   paneOrder: ['A', 'B'],
   allPanes: ['A', 'B', 'C', 'D'],
+}
+
+const editorGridSplitState = {
+  xPercent: DEFAULT_EDITOR_GRID_SPLIT_PERCENT,
+  yPercent: DEFAULT_EDITOR_GRID_SPLIT_PERCENT,
 }
 
 const scriptEditorState = createEditorPaneState('A')
@@ -149,7 +161,10 @@ const nextVGraphState = {
   nodeElements: new Map(),
   edgeElements: new Map(),
   stepLabelElements: new Map(),
+  handlerLabelLineElements: new Map(),
+  agentTimerLabelElements: new Map(),
   runtimeStepByNode: new Map(),
+  runtimeAgentCallTimersByNode: new Map(),
   runtimeVisitedEdges: new Set(),
   runtimeActiveNodes: new Set(),
   runtimeActiveEdges: new Set(),
@@ -161,6 +176,7 @@ const nextVGraphState = {
   visualPulseTimersByNode: new Map(),
   runtimeLastDispatchedNode: '',
   runtimeSequence: 0,
+  runtimeAgentTickerId: null,
   selectedNodeId: '',
   autoFollowEnabled: false,
   layoutDirection: 'TB',
@@ -199,6 +215,13 @@ const nextVIngressControlsState = {
 
 const nextVRuntimeTargetState = {
   target: 'embedded',
+  attachWsUrl: '',
+}
+
+const nextVAttachSessionState = {
+  attached: false,
+  connecting: false,
+  lastError: '',
 }
 
 const nextVGraphMappingApi = globalThis?.nextVGraphMapping || null
@@ -216,11 +239,6 @@ const userOutputFilterState = {
 }
 
 // --- DOM helpers ---
-const transcript = document.getElementById('transcript')
-const promptInput = document.getElementById('prompt-input')
-const sendBtn = document.getElementById('send-btn')
-const imageCount = document.getElementById('image-count')
-const modelInput = document.getElementById('model-input')
 const scriptPathInput = document.getElementById('script-path')
 const scriptInputs = document.getElementById('script-inputs')
 const scriptLineGutter = document.getElementById('script-line-gutter')
@@ -268,6 +286,7 @@ const paneTitleC = document.getElementById('pane-c-title')
 const paneTitleD = document.getElementById('pane-d-title')
 const editorLayoutSplitBtn = document.getElementById('editor-layout-split-btn')
 const editorLayoutGridBtn = document.getElementById('editor-layout-grid-btn')
+const editorGridCenterHandle = document.getElementById('editor-grid-center-handle')
 const editorPaneDescriptors = new Map([
   ['A', {
     pane: editorPaneA,
@@ -335,7 +354,10 @@ const scriptOpenFileLabel = document.getElementById('script-open-file-label')
 const openFileTabs = document.getElementById('open-file-tabs')
 const toggleNextVFilesBtn = document.getElementById('toggle-nextv-files-btn')
 const nextVWorkspaceDirInput = document.getElementById('nextv-workspace-dir')
+const nextVOpenWorkspaceBtn = document.getElementById('nextv-open-workspace-btn')
 const nextVEntrypointInput = document.getElementById('nextv-entrypoint')
+const nextVAttachStartOverrideLabel = document.getElementById('nextv-attach-start-override-label')
+const nextVAttachStartOverrideInput = document.getElementById('nextv-attach-start-override')
 const nextVAutoSaveInput = document.getElementById('nextv-autosave')
 const nextVEventValueInput = document.getElementById('nextv-event-value')
 const nextVEventTypeInput = document.getElementById('nextv-event-type')
@@ -354,6 +376,12 @@ const nextVStartBtn = document.getElementById('nextv-start-btn')
 const nextVRunBtn = document.getElementById('nextv-run-btn')
 const nextVStopBtn = document.getElementById('nextv-stop-btn')
 const nextVRuntimeTargetInput = document.getElementById('nextv-runtime-target')
+const nextVAttachWsUrlInput = document.getElementById('nextv-attach-ws-url')
+const nextVAttachWsUrlLabel = document.getElementById('nextv-attach-ws-url-label')
+const nextVAttachControls = document.getElementById('nextv-attach-controls')
+const nextVAttachBtn = document.getElementById('nextv-attach-btn')
+const nextVDetachBtn = document.getElementById('nextv-detach-btn')
+const nextVAttachStatus = document.getElementById('nextv-attach-status')
 const remoteModeBadge = document.getElementById('remote-mode-badge')
 const userOutput = document.getElementById('user-output')
 const userOutputChannelFilters = document.getElementById('user-output-channel-filters')
@@ -392,13 +420,56 @@ const filetreeDeleteTimer = document.getElementById('filetree-delete-timer')
 const splitter = document.getElementById('panel-splitter')
 const workspace = document.getElementById('workspace')
 
-function updateScriptRunControls() {
+
+// --- Imports (auto-generated by gen-es-modules.js) ---
+import {
+  DEFAULT_USER_OUTPUT_CHANNELS,
+  _setVisualOutputWindow,
+  _setNextVExecutionGroups,
+  _setNextVEventsLiveMode,
+  _setNextVEventsPausedBuffer,
+  activeScriptAbortController,
+  cancelScriptBtn,
+  nextVEventSource,
+  nextVRuntimeRunning,
+  nextVExecutionGroups,
+  nextVEventsLiveMode,
+  nextVEventsPausedBuffer,
+  nextVEventsOutput,
+  storageKeys,
+  userInputText,
+  userOutput,
+  userOutputChannelFilters,
+  userOutputChannelState,
+  userOutputFilterState,
+  visualOutputWindow
+} from './state.js'
+import {
+  buildNextVApiPath
+} from './03_ui_controls.js'
+import {
+  appendNextVLogRow,
+  appendNextVErrorLog
+} from './07_graph_render.js'
+import {
+  renderNextVSnapshot
+} from './11_state_panels.js'
+import {
+  toPrettyJson,
+  summarizeToolCallArgs
+} from './10_file_tree.js'
+import {
+  setStatus,
+  appendErrorRow
+} from './13_layout.js'
+
+export function updateScriptRunControls() {
   if (cancelScriptBtn) {
     cancelScriptBtn.disabled = activeScriptAbortController === null
   }
 }
 
-function normalizeDeclaredEffectChannels(rawChannels) {
+export function normalizeDeclaredEffectChannels(rawChannels) {
   if (Array.isArray(rawChannels)) {
     return [...new Set(rawChannels.map((channel) => String(channel ?? '').trim().toLowerCase()).filter(Boolean))]
   }
@@ -408,26 +479,26 @@ function normalizeDeclaredEffectChannels(rawChannels) {
   return [...new Set(Object.keys(rawChannels).map((channel) => String(channel ?? '').trim().toLowerCase()).filter(Boolean))]
 }
 
-function getAvailableUserOutputChannels() {
+export function getAvailableUserOutputChannels() {
   return [...new Set([...DEFAULT_USER_OUTPUT_CHANNELS, ...userOutputChannelState.declaredEffects])]
 }
 
-function normalizeUserOutputChannels(raw, allowedChannels = getAvailableUserOutputChannels()) {
+export function normalizeUserOutputChannels(raw, allowedChannels = getAvailableUserOutputChannels()) {
   if (!Array.isArray(raw)) return []
   const allowed = new Set(allowedChannels.map((channel) => String(channel ?? '').trim().toLowerCase()).filter(Boolean))
   return [...new Set(raw.map((channel) => String(channel ?? '').trim().toLowerCase()).filter((channel) => allowed.has(channel)))]
 }
 
-function normalizeUserOutputChannel(channel, fallback = 'text') {
+export function normalizeUserOutputChannel(channel, fallback = 'text') {
   const normalized = String(channel ?? '').trim().toLowerCase()
   return normalized || fallback
 }
 
-function isBuiltinUserOutputChannel(channel) {
+export function isBuiltinUserOutputChannel(channel) {
   return DEFAULT_USER_OUTPUT_CHANNELS.includes(normalizeUserOutputChannel(channel, ''))
 }
 
-function getUserOutputChannelClassName(channel) {
+export function getUserOutputChannelClassName(channel) {
   const normalized = normalizeUserOutputChannel(channel)
   if (isBuiltinUserOutputChannel(normalized)) {
     return ` user-output-channel-${normalized}`
@@ -435,7 +506,7 @@ function getUserOutputChannelClassName(channel) {
   return ' user-output-channel-declared'
 }
 
-function setDeclaredEffectChannels(channels, options = {}) {
+export function setDeclaredEffectChannels(channels, options = {}) {
   const { preserveSelection = true, persist = true } = options
   const nextDeclared = normalizeDeclaredEffectChannels(channels)
   const previousAvailable = new Set(getAvailableUserOutputChannels())
@@ -467,11 +538,11 @@ function setDeclaredEffectChannels(channels, options = {}) {
   applyUserOutputChannelVisibility()
 }
 
-function persistUserOutputChannels() {
+export function persistUserOutputChannels() {
   localStorage.setItem(storageKeys.nextVUserOutputChannels, [...userOutputFilterState.channels].join(','))
 }
 
-function renderUserOutputChannelFilters() {
+export function renderUserOutputChannelFilters() {
   if (!userOutputChannelFilters) return
   const channels = getAvailableUserOutputChannels()
   userOutputChannelFilters.innerHTML = ''
@@ -509,7 +580,7 @@ function renderUserOutputChannelFilters() {
   }
 }
 
-function toggleUserOutputChannel(channel) {
+export function toggleUserOutputChannel(channel) {
   const normalized = normalizeUserOutputChannel(channel, '')
   if (!normalized) return
   if (userOutputFilterState.channels.has(normalized)) {
@@ -522,12 +593,12 @@ function toggleUserOutputChannel(channel) {
   applyUserOutputChannelVisibility()
 }
 
-function isUserOutputChannelEnabled(format) {
+export function isUserOutputChannelEnabled(format) {
   const channel = normalizeUserOutputChannel(format)
   return userOutputFilterState.channels.has(channel)
 }
 
-function applyUserOutputChannelVisibility() {
+export function applyUserOutputChannelVisibility() {
   if (!userOutput) return
   const rows = userOutput.querySelectorAll('.user-output-message')
   for (const row of rows) {
@@ -538,7 +609,7 @@ function applyUserOutputChannelVisibility() {
   }
 }
 
-function appendUserOutputMessage(text, channel = 'text') {
+export function appendUserOutputMessage(text, channel = 'text') {
   if (!userOutput) return
   const content = String(text ?? '').trim()
   if (!content) return
@@ -556,7 +627,7 @@ function appendUserOutputMessage(text, channel = 'text') {
   userOutput.scrollTop = userOutput.scrollHeight
 }
 
-function appendUserOutputVoice(event, channel = 'voice') {
+export function appendUserOutputVoice(event, channel = 'voice') {
   if (!userOutput) return
 
   const empty = userOutput.querySelector('.user-output-empty')
@@ -600,7 +671,7 @@ function appendUserOutputVoice(event, channel = 'voice') {
   userOutput.scrollTop = userOutput.scrollHeight
 }
 
-function openVisualOutputWindow(visual, source = 'visual output') {
+export function openVisualOutputWindow(visual, source = 'visual output') {
   const url = String(visual?.url ?? '').trim()
   if (!url) return
 
@@ -614,7 +685,7 @@ function openVisualOutputWindow(visual, source = 'visual output') {
       setStatus(`${source} updated`)
       return
     } catch {
-      visualOutputWindow = null
+      _setVisualOutputWindow(null)
     }
   }
 
@@ -624,11 +695,11 @@ function openVisualOutputWindow(visual, source = 'visual output') {
     return
   }
 
-  visualOutputWindow = opened
+  _setVisualOutputWindow(opened)
   setStatus(`${source} opened`)
 }
 
-function parseMaybeJson(value) {
+export function parseMaybeJson(value) {
   if (value == null) return null
   if (typeof value === 'object') return value
 
@@ -641,7 +712,7 @@ function parseMaybeJson(value) {
   }
 }
 
-function maybeRenderToolVisual(name, result) {
+export function maybeRenderToolVisual(name, result) {
   if (String(name ?? '') !== 'render_view') return
 
   const parsed = parseMaybeJson(result)
@@ -656,7 +727,7 @@ function maybeRenderToolVisual(name, result) {
   }, 'tool visual')
 }
 
-function clearUserOutputPanel() {
+export function clearUserOutputPanel() {
   if (!userOutput) return
   userOutput.innerHTML = ''
   const empty = document.createElement('div')
@@ -667,7 +738,7 @@ function clearUserOutputPanel() {
   setStatus('user output cleared')
 }
 
-async function sendNextVUserText() {
+export async function sendNextVUserText() {
   const value = String(userInputText?.value ?? '')
   if (!value.trim()) {
     setStatus('user text required', 'responding')
@@ -693,7 +764,9 @@ async function sendNextVUserText() {
     }
 
     if (!nextVEventSource) {
-      appendNextVLogRow(`[nextv:event] queued type=${eventType} source=UI`, 'step')
+      const valueSnippet = value ? (value.length > 80 ? value.slice(0, 80) + '\u2026' : value) : ''
+      const valueSuffix = valueSnippet ? ` value=${valueSnippet}` : ''
+      appendNextVLogRow(`[nextv:event] queued type=${eventType} source=UI${valueSuffix}`, 'step')
       renderNextVSnapshot(data.snapshot)
     }
 
@@ -708,19 +781,481 @@ async function sendNextVUserText() {
   }
 }
 
-function isScriptMode() {
-  return document.body.classList.contains('mode-script')
+// --- Execution Groups (newest-first log view) ---
+
+export function buildExecutionGroup(payload, groupId) {
+  const event = payload?.event ?? {}
+  const result = payload?.result ?? {}
+  const events = Array.isArray(payload?.events) ? payload.events : []
+
+  // Determine outcome
+  let outcome = 'completed'
+  if (result.stopped) {
+    outcome = 'stopped'
+  } else {
+    // Check for contract violations or warnings in events
+    for (const evt of events) {
+      if (evt.type === 'warning' && evt.code?.startsWith('contract')) {
+        outcome = 'contract-violated'
+        break
+      }
+      if (evt.type === 'warning') {
+        outcome = 'warning'
+      }
+    }
+  }
+
+  // Extract timestamps from events
+  let startTs = null
+  let endTs = null
+  if (events.length > 0) {
+    startTs = events[0].timestamp || null
+    endTs = events[events.length - 1].timestamp || startTs
+  }
+
+  return {
+    id: groupId,
+    ingressType: String(event.type ?? ''),
+    source: String(event.source ?? ''),
+    result,
+    events,
+    startTs,
+    endTs,
+    outcome,
+    expanded: false,
+  }
 }
 
-function isNextVMode() {
+export function renderExecutionGroups() {
+  if (!nextVEventsOutput) return
+
+  nextVEventsOutput.innerHTML = ''
+
+  if (nextVExecutionGroups.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'nextv-events-empty'
+    empty.textContent = 'No executions yet.'
+    nextVEventsOutput.appendChild(empty)
+    return
+  }
+
+  for (const group of nextVExecutionGroups) {
+    const groupEl = document.createElement('div')
+    groupEl.className = 'exec-group'
+    groupEl.setAttribute('data-group-id', group.id)
+
+    // Calculate duration
+    const duration = group.startTs && group.endTs
+      ? ((new Date(group.endTs) - new Date(group.startTs)) / 1000).toFixed(3)
+      : '0.000'
+
+    // Build summary line
+    const summaryEl = document.createElement('div')
+    summaryEl.className = 'exec-group-summary'
+    summaryEl.innerHTML = `
+      <span class="exec-toggle">${group.expanded ? '▼' : '▶'}</span>
+      <span class="exec-id">#${group.id}</span>
+      <span class="exec-type">type=${group.ingressType}</span>
+      <span class="exec-outcome exec-outcome-${group.outcome}">${group.outcome}</span>
+      <span class="exec-duration">${duration}s</span>
+      <span class="exec-count">${group.events.length} events</span>
+    `
+    summaryEl.onclick = () => {
+      group.expanded = !group.expanded
+      renderExecutionGroups()
+    }
+    groupEl.appendChild(summaryEl)
+
+    // Build body (collapsed by default)
+    if (group.expanded) {
+      const bodyEl = document.createElement('div')
+      bodyEl.className = 'exec-group-body'
+
+      for (const event of group.events) {
+        const eventEl = document.createElement('div')
+        eventEl.className = `exec-event exec-event-${event.type}`
+
+        const debugPayload = getExecutionEventDebugPayload(event)
+        const timestampEl = document.createElement('span')
+        timestampEl.className = 'exec-event-ts'
+        timestampEl.textContent = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '—'
+        eventEl.appendChild(timestampEl)
+
+        const typeEl = document.createElement('span')
+        typeEl.className = 'exec-event-type'
+        typeEl.textContent = String(event.type ?? '')
+        eventEl.appendChild(typeEl)
+
+        const contentEl = document.createElement('span')
+        contentEl.className = 'exec-event-content'
+        contentEl.appendChild(buildExecutionEventContentFragment(event))
+        eventEl.appendChild(contentEl)
+
+        if (debugPayload !== null) {
+          const toggleBtn = document.createElement('button')
+          toggleBtn.type = 'button'
+          toggleBtn.className = 'exec-event-debug-toggle'
+          toggleBtn.setAttribute('aria-label', 'show payload')
+          toggleBtn.title = 'show payload'
+          toggleBtn.textContent = '\u25B6'
+          eventEl.appendChild(toggleBtn)
+        }
+
+        if (debugPayload !== null) {
+          const toggleBtn = eventEl.querySelector('.exec-event-debug-toggle')
+          const debugEl = document.createElement('pre')
+          debugEl.className = 'exec-event-debug'
+          debugEl.hidden = true
+          debugEl.textContent = toPrettyJson(debugPayload)
+          eventEl.appendChild(debugEl)
+
+          if (toggleBtn) {
+            toggleBtn.addEventListener('click', (e) => {
+              e.stopPropagation()
+              const expanded = !debugEl.hidden
+              debugEl.hidden = expanded
+              toggleBtn.textContent = expanded ? '\u25B6' : '\u25BC'
+              toggleBtn.title = expanded ? 'show payload' : 'hide payload'
+              toggleBtn.setAttribute('aria-label', expanded ? 'show payload' : 'hide payload')
+            })
+          }
+        }
+
+        bodyEl.appendChild(eventEl)
+      }
+
+      groupEl.appendChild(bodyEl)
+    }
+
+    nextVEventsOutput.appendChild(groupEl)
+  }
+}
+
+function parseExecutionToolArgs(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value
+  if (typeof value !== 'string') return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function getExecutionEventTokenTarget(event) {
+  const type = String(event?.type ?? '').trim().toLowerCase()
+  if (type === 'agent_call') {
+    const agent = String(event?.agent ?? '').trim()
+    if (agent) return { kind: 'agent', value: agent }
+    return null
+  }
+
+  if (type !== 'tool_call') return null
+  const tool = String(event?.tool ?? '').trim().toLowerCase()
+  if (tool !== 'agent' && tool !== 'model') return null
+
+  const args = parseExecutionToolArgs(event?.args)
+  const candidateKeys = tool === 'agent'
+    ? ['agent', 'name', 'target', 'id']
+    : ['model', 'name', 'target', 'id']
+
+  for (const key of candidateKeys) {
+    const value = String(args?.[key] ?? '').trim()
+    if (value) {
+      return { kind: tool, value }
+    }
+  }
+
+  return null
+}
+
+function removeFirstCaseInsensitive(haystack, needle) {
+  const source = String(haystack ?? '')
+  const target = String(needle ?? '')
+  if (!source || !target) return source
+
+  const index = source.toLowerCase().indexOf(target.toLowerCase())
+  if (index < 0) return source
+  return `${source.slice(0, index)}${source.slice(index + target.length)}`
+}
+
+function buildExecutionEventContentFragment(event) {
+  const fragment = document.createDocumentFragment()
+  const tokenTarget = getExecutionEventTokenTarget(event)
+  if (!tokenTarget) {
+    fragment.appendChild(document.createTextNode(formatExecutionEventContent(event)))
+    return fragment
+  }
+
+  if (String(event?.type ?? '').trim() === 'agent_call') {
+    fragment.appendChild(document.createTextNode('agent call: '))
+  } else {
+    const tool = String(event?.tool ?? tokenTarget.kind).trim().toLowerCase() || tokenTarget.kind
+    fragment.appendChild(document.createTextNode(`call: ${tool} `))
+  }
+
+  const tokenEl = document.createElement('span')
+  tokenEl.className = 'exec-event-token'
+  tokenEl.dataset.nerveTokenKind = tokenTarget.kind
+  tokenEl.dataset.nerveTokenValue = tokenTarget.value
+  tokenEl.textContent = tokenTarget.value
+  tokenEl.title = `open call inspector for ${tokenTarget.kind} ${tokenTarget.value}`
+  fragment.appendChild(tokenEl)
+
+  if (String(event?.type ?? '').trim() === 'tool_call') {
+    const argsSummary = String(summarizeToolCallArgs(event?.args) ?? '').trim()
+    if (argsSummary) {
+      const suffix = removeFirstCaseInsensitive(argsSummary, tokenTarget.value).trim()
+      if (suffix) {
+        fragment.appendChild(document.createTextNode(` ${suffix}`))
+      }
+    }
+  }
+
+  return fragment
+}
+
+function escapeExecutionEventText(text) {
+  return String(text ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+}
+
+function getExecutionEventDebugPayload(event) {
+  if (!event || typeof event !== 'object') return null
+
+  if (event.type === 'tool_call') {
+    return {
+      tool: String(event.tool ?? ''),
+      args: event.args ?? null,
+      toolMetadata: event.toolMetadata ?? null,
+    }
+  }
+
+  if (event.type === 'agent_call') {
+    return {
+      agent: String(event.agent ?? ''),
+      args: event.args ?? null,
+      line: Number.isFinite(Number(event.line)) ? Number(event.line) : null,
+      sourcePath: String(event.sourcePath ?? ''),
+      sourceLine: Number.isFinite(Number(event.sourceLine)) ? Number(event.sourceLine) : null,
+    }
+  }
+
+  if (event.type === 'agent_result') {
+    const metadata = (event.metadata && typeof event.metadata === 'object') ? event.metadata : null
+    if (!metadata) return null
+    return {
+      agent: String(event.agent ?? ''),
+      metadata,
+    }
+  }
+
+  return null
+}
+
+function formatExecutionEventContent(event) {
+  const type = event.type
+  if (type === 'output') {
+    const format = event.format || 'text'
+    const content = event.content || ''
+    const snippet = content.length > 60 ? content.slice(0, 60) + '…' : content
+    return `${format}: ${snippet}`
+  }
+  if (type === 'tool_call') {
+    const tool = event.tool || 'unknown'
+    if (tool === 'agent' || tool === 'model') {
+      return `call: ${tool} ${summarizeToolCallArgs(event.args)}`
+    }
+    return `call: ${tool}`
+  }
+  if (type === 'agent_call') {
+    const agent = String(event.agent ?? 'unknown')
+    return `agent call: ${agent}`
+  }
+  if (type === 'agent_result') {
+    const agent = String(event.agent ?? 'unknown')
+    const elapsedMs = Number(event?.metadata?.elapsedMs)
+    if (Number.isFinite(elapsedMs)) {
+      return `agent result: ${agent} (${Math.max(0, Math.round(elapsedMs))}ms)`
+    }
+    return `agent result: ${agent}`
+  }
+  if (type === 'tool_result') {
+    const tool = event.tool || 'unknown'
+    return `result: ${tool}`
+  }
+  if (type === 'state_update') {
+    return 'state updated'
+  }
+  if (type === 'warning') {
+    return event.message || event.code || 'warning'
+  }
+  return ''
+}
+
+export function setNextVEventsLiveMode(live) {
+  _setNextVEventsLiveMode(live)
+
+  const btn = document.getElementById('nextv-events-live-btn')
+  const badge = document.getElementById('nextv-events-buffer-count')
+
+  if (!btn) return
+
+  if (live) {
+    // Resume: flush buffer and snap back to top
+    const buffered = nextVEventsPausedBuffer.slice()
+    _setNextVEventsPausedBuffer([])
+
+    if (buffered.length > 0) {
+      const newGroups = [...buffered.reverse(), ...nextVExecutionGroups]
+      const capped = newGroups.slice(0, 50)
+      _setNextVExecutionGroups(capped)
+    }
+
+    btn.textContent = 'Live'
+    btn.classList.remove('paused')
+    if (badge) {
+      badge.textContent = ''
+      badge.hidden = true
+    }
+    renderExecutionGroups()
+    // Snap to top
+    if (nextVEventsOutput) {
+      nextVEventsOutput.scrollTop = 0
+    }
+  } else {
+    // Pause: no action needed, state will be updated by handler
+    btn.textContent = 'Paused'
+    btn.classList.add('paused')
+  }
+}
+
+
+// --- Imports (auto-generated by gen-es-modules.js) ---
+import {
+  _setActiveScriptRunId,
+  _setRemoteRuntimeEntrypointPath,
+  _setRemoteRuntimeWorkspaceDir,
+  activeScriptRunId,
+  fileManagerShell,
+  workspace,
+  inputPanelState,
+  isBusy,
+  isRemoteControlMode,
+  isRemoteMode,
+  isRemoteRuntimeConnected,
+  logsHeaderBadge,
+  logsHeaderTitle,
+  nextVConsoleOutput,
+  nextVEntrypointInput,
+  nextVEventSourceInput,
+  nextVEventTypeInput,
+  nextVEventsOutput,
+  nextVGraphMappingApi,
+  nextVGraphOutput,
+  nextVGraphShell,
+  nextVGraphState,
+  nextVImagesRow,
+  nextVIngressControlsRow,
+  nextVIngressControlsState,
+  nextVInputChannelState,
+  nextVInputExternalPane,
+  nextVInputImageState,
+  nextVInputTabs,
+  nextVManagedProcessRunning,
+  nextVPanelState,
+  nextVReloadConfigBtn,
+  nextVValidateBtn,
+  nextVPromoteBtn,
+  nextVRunBtn,
+  nextVRuntimeRunning,
+  nextVCandidatePromotable,
+  nextVAttachSessionState,
+  nextVAttachControls,
+  nextVAttachBtn,
+  nextVDetachBtn,
+  nextVAttachStatus,
+  nextVAttachWsUrlInput,
+  nextVAttachWsUrlLabel,
+  nextVAttachStartOverrideInput,
+  nextVAttachStartOverrideLabel,
+  nextVOpenWorkspaceBtn,
+  nextVWorkspaceDirInput,
+  nextVRuntimeTargetInput,
+  nextVRuntimeTargetState,
+  nextVShowIngressToggle,
+  nextVStartBtn,
+  nextVStateDiffFeed,
+  nextVStateDiffTabDiff,
+  nextVStateDiffTabState,
+  nextVStateSnapshotPane,
+  nextVStopBtn,
+  nextVTabConsole,
+  nextVViewCallInspector,
+  nextVCallInspectorPanel,
+  nextVTabEvents,
+  nextVTabTrace,
+  nextVUserIOSplitter,
+  nextVViewEditor,
+  nextVViewGraph,
+  nextVViewState,
+  outputHeaderBadge,
+  outputHeaderTitle,
+  remoteModeBadge,
+  remoteRuntimeEntrypointPath,
+  remoteRuntimeWorkspaceDir,
+  remoteTransport,
+  scriptEditorPanel,
+  scriptHeaderBadge,
+  scriptHeaderTitle,
+  scriptOutput,
+  scriptSection,
+  settingsMenu,
+  storageKeys,
+  toggleNextVDevConsoleBtn,
+  toggleNextVFilesBtn,
+  toggleNextVImagesBtn,
+  toggleUserIOBtn,
+  tracePanelState,
+  traceShell,
+  userIOPanelState
+} from './state.js'
+import {
+  captureNextVGraphViewportState,
+  getControlProvenanceClass
+} from './05_graph_viewport.js'
+import {
+  refreshNextVGraph
+} from './07_graph_render.js'
+import {
+  normalizeRelativePath
+} from './08_path_utils.js'
+import {
+  pathBasename,
+  applyNextVStateSearchFilter
+} from './10_file_tree.js'
+import {
+  syncNextVRuntimeState,
+  runNextVRuntime,
+  killNextVRuntime,
+  applyLeftPanelHeights,
+  applyStoredLeftPanelHeights
+} from './12_stream.js'
+import {
+  ensureNextVEntrypointVisible
+} from './13_layout.js'
+
+export function isNextVMode() {
   return document.body.classList.contains('mode-nextv')
 }
 
-function setActiveScriptRunId(runId) {
-  activeScriptRunId = String(runId ?? '').trim()
+export function setActiveScriptRunId(runId) {
+  _setActiveScriptRunId(String(runId ?? '').trim())
 }
 
-function setNextVFileDrawerOpen(isOpen, options = {}) {
+export function setNextVFileDrawerOpen(isOpen, options = {}) {
   const { persist = true } = options
   const open = isOpen !== false
   document.body.classList.toggle('nextv-tree-collapsed', !open)
@@ -737,12 +1272,12 @@ function setNextVFileDrawerOpen(isOpen, options = {}) {
   }
 }
 
-function toggleNextVFileDrawer() {
+export function toggleNextVFileDrawer() {
   const collapsed = document.body.classList.contains('nextv-tree-collapsed')
   setNextVFileDrawerOpen(collapsed)
 }
 
-function setModePanelLabels(mode) {
+export function setModePanelLabels(mode) {
   const labelsByMode = {
     script: {
       scriptTitle: 'script',
@@ -757,7 +1292,7 @@ function setModePanelLabels(mode) {
       scriptBadge: 'active',
       logsTitle: 'event stream',
       logsBadge: 'events',
-      outputTitle: 'dev console',
+      outputTitle: '',
       outputBadge: '',
     },
     chat: {
@@ -775,14 +1310,17 @@ function setModePanelLabels(mode) {
   if (scriptHeaderBadge) scriptHeaderBadge.textContent = labels.scriptBadge
   if (logsHeaderTitle) logsHeaderTitle.textContent = labels.logsTitle
   if (logsHeaderBadge) logsHeaderBadge.textContent = labels.logsBadge
-  if (outputHeaderTitle) outputHeaderTitle.textContent = labels.outputTitle
+  if (outputHeaderTitle) {
+    outputHeaderTitle.textContent = labels.outputTitle
+    outputHeaderTitle.style.display = labels.outputTitle ? 'inline' : 'none'
+  }
   if (outputHeaderBadge) {
     outputHeaderBadge.textContent = labels.outputBadge
     outputHeaderBadge.style.display = labels.outputBadge ? 'inline-block' : 'none'
   }
 }
 
-function setNextVPrimaryView(view, options = {}) {
+export function setNextVPrimaryView(view, options = {}) {
   const { persist = true } = options
   const nextView = view === 'graph' ? 'graph' : 'editor'
   const previousView = nextVViewState.currentView
@@ -795,6 +1333,8 @@ function setNextVPrimaryView(view, options = {}) {
   }
 
   nextVViewState.currentView = nextView
+  document.body.classList.toggle('nextv-primary-editor', nextView === 'editor')
+  document.body.classList.toggle('nextv-primary-graph', nextView === 'graph')
 
   if (nextVViewEditor) {
     nextVViewEditor.classList.toggle('active', nextView === 'editor')
@@ -827,11 +1367,11 @@ function setNextVPrimaryView(view, options = {}) {
   }
 }
 
-function normalizeNextVGraphDirection(value) {
+export function normalizeNextVGraphDirection(value) {
   return String(value ?? '').trim().toUpperCase() === 'LR' ? 'LR' : 'TB'
 }
 
-function setNextVGraphDirection(direction, options = {}) {
+export function setNextVGraphDirection(direction, options = {}) {
   const { persist = true, refresh = true } = options
   const nextDirection = normalizeNextVGraphDirection(direction)
   nextVGraphState.layoutDirection = nextDirection
@@ -845,7 +1385,7 @@ function setNextVGraphDirection(direction, options = {}) {
   }
 }
 
-function setNextVControlOverlayEnabled(enabled, options = {}) {
+export function setNextVControlOverlayEnabled(enabled, options = {}) {
   const { persist = true, refresh = true } = options
   const nextEnabled = enabled !== false
   nextVGraphState.controlOverlayEnabled = nextEnabled
@@ -863,11 +1403,11 @@ function setNextVControlOverlayEnabled(enabled, options = {}) {
   }
 }
 
-function isNextVControlOverlayEnabled() {
+export function isNextVControlOverlayEnabled() {
   return nextVGraphState.controlOverlayEnabled !== false
 }
 
-function setNextVControlBranchesVisible(enabled, options = {}) {
+export function setNextVControlBranchesVisible(enabled, options = {}) {
   const { persist = true, refresh = true } = options
   const nextEnabled = enabled === true
   nextVGraphState.showControlBranches = nextEnabled
@@ -885,11 +1425,11 @@ function setNextVControlBranchesVisible(enabled, options = {}) {
   }
 }
 
-function isNextVControlBranchesVisible() {
+export function isNextVControlBranchesVisible() {
   return nextVGraphState.showControlBranches === true
 }
 
-function getControlOverlayClassName(provenance) {
+export function getControlOverlayClassName(provenance) {
   if (typeof nextVGraphMappingApi?.getControlOverlayClassName === 'function') {
     return nextVGraphMappingApi.getControlOverlayClassName(provenance, isNextVControlOverlayEnabled())
   }
@@ -897,7 +1437,7 @@ function getControlOverlayClassName(provenance) {
   return `control-${getControlProvenanceClass(provenance)}`
 }
 
-function setNextVStateDiffTab(tab) {
+export function setNextVStateDiffTab(tab) {
   const nextTab = tab === 'state' ? 'state' : 'diff'
   if (nextVStateDiffTabDiff) {
     nextVStateDiffTabDiff.classList.toggle('active', nextTab === 'diff')
@@ -914,7 +1454,7 @@ function setNextVStateDiffTab(tab) {
   applyNextVStateSearchFilter()
 }
 
-function setNextVDevTab(tab, options = {}) {
+export function setNextVDevTab(tab, options = {}) {
   const { persist = true } = options
   const requestedTab = ['events', 'trace', 'console'].includes(tab) ? tab : 'events'
 
@@ -959,7 +1499,7 @@ function setNextVDevTab(tab, options = {}) {
   }
 }
 
-function setNextVDevConsoleOpen(open, options = {}) {
+export function setNextVDevConsoleOpen(open, options = {}) {
   const { persist = true } = options
   const nextOpen = open !== false
   nextVPanelState.devConsoleOpen = nextOpen
@@ -988,28 +1528,212 @@ function setNextVDevConsoleOpen(open, options = {}) {
   }
 }
 
-function toggleNextVDevConsole() {
+export function toggleNextVDevConsole() {
   setNextVDevConsoleOpen(!nextVPanelState.devConsoleOpen)
 }
 
-function clampNextVUserIOWidth(value) {
+function getNextVCallInspectorPanelShell() {
+  if (workspace) return workspace
+  if (fileManagerShell) return fileManagerShell
+  return null
+}
+
+function getNextVCallInspectorPanelDefaultLayout() {
+  return { left: 12, top: 12, width: 760, height: 860 }
+}
+
+let nextVCallInspectorPanelLayoutState = null
+
+function readStoredNextVCallInspectorPanelLayout() {
+  const raw = String(localStorage.getItem(storageKeys.nextVCallInspectorPanelLayout) ?? '').trim()
+  if (!raw) return null
+
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
+function clampNextVCallInspectorPanelLayout(rect) {
+  const shell = getNextVCallInspectorPanelShell()
+  if (!shell) return null
+  const shellWidth = Math.max(320, shell.clientWidth || 0)
+  const shellHeight = Math.max(280, shell.clientHeight || 0)
+
+  const width = Math.max(520, Math.min(Number(rect?.width ?? 760), shellWidth - 8))
+  const height = Math.max(560, Math.min(Number(rect?.height ?? 860), shellHeight - 8))
+
+  // Keep part of the panel visible while allowing larger panels to move freely.
+  const minVisibleX = 120
+  const minVisibleY = 52
+  const minLeft = Math.min(0, shellWidth - width)
+  const maxLeft = Math.max(0, shellWidth - minVisibleX)
+  const minTop = Math.min(0, shellHeight - height)
+  const maxTop = Math.max(0, shellHeight - minVisibleY)
+  const left = Math.max(minLeft, Math.min(Number(rect?.left ?? 12), maxLeft))
+  const top = Math.max(minTop, Math.min(Number(rect?.top ?? 12), maxTop))
+
+  return { left, top, width, height }
+}
+
+function applyNextVCallInspectorPanelLayout(rect) {
+  if (!nextVCallInspectorPanel) return
+  const clamped = clampNextVCallInspectorPanelLayout(rect)
+  if (!clamped) return
+  nextVCallInspectorPanelLayoutState = { ...clamped }
+
+  nextVCallInspectorPanel.style.left = `${clamped.left}px`
+  nextVCallInspectorPanel.style.top = `${clamped.top}px`
+  nextVCallInspectorPanel.style.width = `${clamped.width}px`
+  nextVCallInspectorPanel.style.height = `${clamped.height}px`
+  nextVCallInspectorPanel.style.right = 'auto'
+}
+
+function persistNextVCallInspectorPanelLayout() {
+  const fallbackLayout = nextVCallInspectorPanelLayoutState || getNextVCallInspectorPanelDefaultLayout()
+  let layout = fallbackLayout
+
+  if (nextVCallInspectorPanel && !nextVCallInspectorPanel.hidden) {
+    const shell = getNextVCallInspectorPanelShell()
+    if (shell) {
+      const shellRect = shell.getBoundingClientRect()
+      const panelRect = nextVCallInspectorPanel.getBoundingClientRect()
+      layout = clampNextVCallInspectorPanelLayout({
+        left: panelRect.left - shellRect.left,
+        top: panelRect.top - shellRect.top,
+        width: panelRect.width,
+        height: panelRect.height,
+      }) || fallbackLayout
+    }
+  }
+
+  if (!layout) return
+  nextVCallInspectorPanelLayoutState = { ...layout }
+  localStorage.setItem(storageKeys.nextVCallInspectorPanelLayout, JSON.stringify(layout))
+}
+
+function restoreNextVCallInspectorPanelLayout() {
+  const storedLayout = readStoredNextVCallInspectorPanelLayout()
+  if (!storedLayout) {
+    applyNextVCallInspectorPanelLayout(getNextVCallInspectorPanelDefaultLayout())
+    return
+  }
+
+  applyNextVCallInspectorPanelLayout(storedLayout)
+}
+
+export function initNextVCallInspectorPanelChrome() {
+  if (!nextVCallInspectorPanel || nextVCallInspectorPanel.dataset.panelChromeBound === '1') return
+  nextVCallInspectorPanel.dataset.panelChromeBound = '1'
+
+  restoreNextVCallInspectorPanelLayout()
+
+  const header = nextVCallInspectorPanel.querySelector('.nextv-call-inspector-header')
+  if (header) {
+    header.style.cursor = 'grab'
+    header.addEventListener('mousedown', (event) => {
+      if (event.target.closest('button')) return
+      const shell = getNextVCallInspectorPanelShell()
+      if (!shell) return
+
+      const panelRect = nextVCallInspectorPanel.getBoundingClientRect()
+      const startOffsetX = event.clientX - panelRect.left
+      const startOffsetY = event.clientY - panelRect.top
+      nextVCallInspectorPanel.classList.add('is-dragging')
+      event.preventDefault()
+
+      const onMove = (moveEvent) => {
+        const shellRect = shell.getBoundingClientRect()
+        const nextLeft = moveEvent.clientX - shellRect.left - startOffsetX
+        const nextTop = moveEvent.clientY - shellRect.top - startOffsetY
+        applyNextVCallInspectorPanelLayout({
+          left: nextLeft,
+          top: nextTop,
+          width: nextVCallInspectorPanel.offsetWidth,
+          height: nextVCallInspectorPanel.offsetHeight,
+        })
+      }
+
+      const onUp = () => {
+        nextVCallInspectorPanel.classList.remove('is-dragging')
+        persistNextVCallInspectorPanelLayout()
+        document.removeEventListener('mousemove', onMove)
+        document.removeEventListener('mouseup', onUp)
+      }
+
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onUp)
+    })
+  }
+
+  if (typeof ResizeObserver === 'function') {
+    const observer = new ResizeObserver(() => {
+      if (nextVCallInspectorPanel.hidden) return
+      persistNextVCallInspectorPanelLayout()
+    })
+    observer.observe(nextVCallInspectorPanel)
+  }
+
+  window.addEventListener('resize', () => {
+    const storedLayout = readStoredNextVCallInspectorPanelLayout()
+    if (!storedLayout) return
+    applyNextVCallInspectorPanelLayout(storedLayout)
+  })
+
+  window.addEventListener('beforeunload', () => {
+    persistNextVCallInspectorPanelLayout()
+  })
+
+  window.requestAnimationFrame(() => {
+    restoreNextVCallInspectorPanelLayout()
+  })
+}
+
+export function toggleNextVCallInspectorPanel() {
+  if (!nextVCallInspectorPanel) return
+  initNextVCallInspectorPanelChrome()
+  const isOpen = !nextVCallInspectorPanel.hidden
+  if (isOpen) {
+    persistNextVCallInspectorPanelLayout()
+  }
+  nextVCallInspectorPanel.hidden = isOpen
+  nextVCallInspectorPanel.classList.toggle('is-active', !isOpen)
+  if (!isOpen) {
+    window.requestAnimationFrame(() => {
+      restoreNextVCallInspectorPanelLayout()
+    })
+  }
+  
+  if (nextVViewCallInspector) {
+    nextVViewCallInspector.classList.toggle('active', !isOpen)
+    nextVViewCallInspector.setAttribute('aria-selected', !isOpen ? 'true' : 'false')
+  }
+  
+  if (!isOpen) {
+    // Panel is now open, set focus
+    nextVCallInspectorPanel.focus()
+  }
+}
+
+export function clampNextVUserIOWidth(value) {
   const numeric = Number(value)
   const maxWidth = Math.max(340, Math.min(860, Math.round(window.innerWidth * 0.72)))
   if (!Number.isFinite(numeric)) return 320
   return Math.max(240, Math.min(maxWidth, Math.round(numeric)))
 }
 
-function persistNextVUserIOWidth(width) {
+export function persistNextVUserIOWidth(width) {
   localStorage.setItem(storageKeys.nextVUserIOWidth, String(clampNextVUserIOWidth(width)))
 }
 
-function getStoredNextVUserIOWidth() {
+export function getStoredNextVUserIOWidth() {
   const stored = Number(localStorage.getItem(storageKeys.nextVUserIOWidth))
   if (!Number.isFinite(stored)) return 320
   return clampNextVUserIOWidth(stored)
 }
 
-function setUserIOPanelOpen(open, options = {}) {
+export function setUserIOPanelOpen(open, options = {}) {
   const { persist = true } = options
   userIOPanelState.open = open !== false
   document.body.classList.toggle('user-io-open', userIOPanelState.open)
@@ -1032,11 +1756,11 @@ function setUserIOPanelOpen(open, options = {}) {
   }
 }
 
-function toggleUserIOPanel() {
+export function toggleUserIOPanel() {
   setUserIOPanelOpen(!userIOPanelState.open)
 }
 
-function setNextVImagesOpen(open, options = {}) {
+export function setNextVImagesOpen(open, options = {}) {
   const { persist = true } = options
   nextVInputImageState.open = open === true
 
@@ -1058,11 +1782,11 @@ function setNextVImagesOpen(open, options = {}) {
   }
 }
 
-function toggleNextVImagesOpen() {
+export function toggleNextVImagesOpen() {
   setNextVImagesOpen(!nextVInputImageState.open)
 }
 
-function setNextVIngressControlsVisible(visible, options = {}) {
+export function setNextVIngressControlsVisible(visible, options = {}) {
   const { persist = true } = options
   nextVIngressControlsState.visible = visible === true
 
@@ -1080,26 +1804,168 @@ function setNextVIngressControlsVisible(visible, options = {}) {
   }
 }
 
-function toggleNextVIngressControlsSetting() {
+export function toggleNextVIngressControlsSetting() {
   const visible = nextVShowIngressToggle?.checked !== false
   setNextVIngressControlsVisible(visible)
 }
 
-function normalizeNextVRuntimeTarget(value) {
-  return String(value ?? '').trim().toLowerCase() === 'external' ? 'external' : 'embedded'
+export function normalizeNextVRuntimeTarget(value) {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (normalized === 'external') return 'external'
+  if (normalized === 'attach') return 'attach'
+  return 'embedded'
 }
 
-function getNextVRuntimeTarget() {
+export function normalizeNextVAttachWsUrl(value) {
+  return String(value ?? '').trim()
+}
+
+export function getNextVAttachWsUrl() {
+  return normalizeNextVAttachWsUrl(nextVRuntimeTargetState.attachWsUrl)
+}
+
+export function isNextVAttachStartOverrideEnabled() {
+  return nextVAttachStartOverrideInput?.checked === true
+}
+
+function syncNextVAttachStartOverrideUi(showAttachControls) {
+  if (nextVAttachStartOverrideLabel) {
+    nextVAttachStartOverrideLabel.hidden = !showAttachControls
+  }
+}
+
+function syncNextVAttachRuntimeOwnershipUi() {
+  const isAttachMode = getNextVRuntimeTarget() === 'attach'
+  const lockToAttachedRuntime = isAttachMode && !isNextVAttachStartOverrideEnabled()
+  const lockHint = lockToAttachedRuntime
+    ? 'Controlled by attached runtime. Enable override to edit locally.'
+    : ''
+
+  if (nextVWorkspaceDirInput) {
+    nextVWorkspaceDirInput.readOnly = lockToAttachedRuntime
+    nextVWorkspaceDirInput.classList.toggle('attach-runtime-owned', lockToAttachedRuntime)
+    nextVWorkspaceDirInput.title = lockHint
+  }
+
+  if (nextVEntrypointInput) {
+    nextVEntrypointInput.readOnly = lockToAttachedRuntime
+    nextVEntrypointInput.classList.toggle('attach-runtime-owned', lockToAttachedRuntime)
+    nextVEntrypointInput.title = lockHint
+  }
+
+  if (nextVOpenWorkspaceBtn) {
+    nextVOpenWorkspaceBtn.disabled = lockToAttachedRuntime
+    nextVOpenWorkspaceBtn.title = lockHint
+  }
+}
+
+export function setNextVAttachStartOverrideEnabled(value, options = {}) {
+  const { persist = true } = options
+  const enabled = value === true
+  if (nextVAttachStartOverrideInput) {
+    nextVAttachStartOverrideInput.checked = enabled
+  }
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVAttachStartOverride, enabled ? '1' : '0')
+  }
+  syncNextVAttachRuntimeOwnershipUi()
+  setNextVRunControls()
+}
+
+export function syncNextVAttachWsUrlControls() {
+  const showAttachControls = getNextVRuntimeTarget() === 'attach'
+  if (nextVAttachWsUrlLabel) {
+    nextVAttachWsUrlLabel.hidden = !showAttachControls
+  }
+  if (nextVAttachWsUrlInput) {
+    nextVAttachWsUrlInput.hidden = !showAttachControls
+    nextVAttachWsUrlInput.disabled = !showAttachControls
+    nextVAttachWsUrlInput.value = getNextVAttachWsUrl()
+  }
+  if (nextVAttachControls) {
+    nextVAttachControls.hidden = !showAttachControls
+  }
+  syncNextVAttachStartOverrideUi(showAttachControls)
+  syncNextVAttachRuntimeOwnershipUi()
+  syncNextVAttachSessionUi()
+}
+
+export function syncNextVAttachSessionUi() {
+  const isAttachMode = getNextVRuntimeTarget() === 'attach'
+  const isConnecting = nextVAttachSessionState.connecting === true
+  const isAttached = nextVAttachSessionState.attached === true
+  const hasAttachUrl = Boolean(getNextVAttachWsUrl())
+
+  if (nextVAttachBtn) {
+    nextVAttachBtn.disabled = !isAttachMode || isConnecting || isAttached || !hasAttachUrl
+  }
+  if (nextVDetachBtn) {
+    nextVDetachBtn.disabled = !isAttachMode || isConnecting || !isAttached
+  }
+  if (nextVAttachStatus) {
+    if (!isAttachMode) {
+      nextVAttachStatus.dataset.state = 'detached'
+      nextVAttachStatus.textContent = 'detached'
+    } else if (isConnecting) {
+      nextVAttachStatus.dataset.state = 'attaching'
+      nextVAttachStatus.textContent = 'attaching'
+    } else if (isAttached) {
+      nextVAttachStatus.dataset.state = 'attached'
+      nextVAttachStatus.textContent = 'attached'
+    } else if (nextVAttachSessionState.lastError) {
+      nextVAttachStatus.dataset.state = 'error'
+      nextVAttachStatus.textContent = 'attach failed'
+    } else {
+      nextVAttachStatus.dataset.state = 'detached'
+      nextVAttachStatus.textContent = 'detached'
+    }
+    if (nextVAttachSessionState.lastError) {
+      nextVAttachStatus.title = String(nextVAttachSessionState.lastError)
+    } else {
+      nextVAttachStatus.title = nextVAttachStatus.textContent
+    }
+  }
+}
+
+export function setNextVAttachWsUrl(value, options = {}) {
+  const { persist = true, sync = true } = options
+  const previousUrl = String(nextVRuntimeTargetState.attachWsUrl ?? '').trim()
+  const normalized = normalizeNextVAttachWsUrl(value)
+  nextVRuntimeTargetState.attachWsUrl = normalized
+  if (previousUrl !== normalized) {
+    nextVAttachSessionState.attached = false
+    nextVAttachSessionState.connecting = false
+  }
+  nextVAttachSessionState.lastError = ''
+  if (nextVAttachWsUrlInput) {
+    nextVAttachWsUrlInput.value = normalized
+  }
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVAttachWsUrl, normalized)
+  }
+  syncNextVAttachSessionUi()
+  if (sync && getNextVRuntimeTarget() === 'attach' && nextVAttachSessionState.attached === true) {
+    syncNextVRuntimeState()
+  }
+}
+
+export function getNextVRuntimeTarget() {
   return normalizeNextVRuntimeTarget(nextVRuntimeTargetState.target)
 }
 
-function setNextVRuntimeTarget(value, options = {}) {
+export function setNextVRuntimeTarget(value, options = {}) {
   const { persist = true, sync = true } = options
   const normalized = normalizeNextVRuntimeTarget(value)
   nextVRuntimeTargetState.target = normalized
+  if (normalized !== 'attach') {
+    nextVAttachSessionState.attached = false
+    nextVAttachSessionState.connecting = false
+    nextVAttachSessionState.lastError = ''
+  }
   if (nextVRuntimeTargetInput) {
     nextVRuntimeTargetInput.value = normalized
   }
+  syncNextVAttachWsUrlControls()
   if (persist) {
     localStorage.setItem(storageKeys.nextVRuntimeTarget, normalized)
   }
@@ -1108,18 +1974,31 @@ function setNextVRuntimeTarget(value, options = {}) {
   }
 }
 
-function buildNextVApiPath(pathname) {
-  const params = new URLSearchParams()
-  params.set('runtimeTarget', getNextVRuntimeTarget())
-  return `${pathname}?${params.toString()}`
+export function buildNextVApiPath(pathname) {
+  const url = new URL(String(pathname ?? ''), window.location.origin)
+  const params = url.searchParams
+  const runtimeTarget = getNextVRuntimeTarget()
+  params.set('runtimeTarget', runtimeTarget)
+  if (runtimeTarget === 'attach') {
+    const attachWsUrl = getNextVAttachWsUrl()
+    if (attachWsUrl) {
+      params.set('attachWsUrl', attachWsUrl)
+    } else {
+      params.delete('attachWsUrl')
+    }
+  } else {
+    params.delete('attachWsUrl')
+  }
+  const query = params.toString()
+  return query ? `${url.pathname}?${query}` : url.pathname
 }
 
-function normalizeDeclaredExternalChannels(rawChannels) {
+export function normalizeDeclaredExternalChannels(rawChannels) {
   if (!Array.isArray(rawChannels)) return []
   return [...new Set(rawChannels.map((channel) => String(channel ?? '').trim()).filter(Boolean))]
 }
 
-function getSelectedNextVInputChannel(tab = inputPanelState.currentTab) {
+export function getSelectedNextVInputChannel(tab = inputPanelState.currentTab) {
   const rawTab = String(tab ?? '').trim()
   if (!rawTab.startsWith('channel:')) return ''
   const channel = rawTab.slice('channel:'.length).trim()
@@ -1127,7 +2006,7 @@ function getSelectedNextVInputChannel(tab = inputPanelState.currentTab) {
   return nextVInputChannelState.declaredExternals.includes(channel) ? channel : ''
 }
 
-function renderNextVInputTabs() {
+export function renderNextVInputTabs() {
   if (!nextVInputTabs) return
 
   const selectedChannel = getSelectedNextVInputChannel()
@@ -1165,7 +2044,7 @@ function renderNextVInputTabs() {
   }
 }
 
-function syncSelectedInputChannelFields() {
+export function syncSelectedInputChannelFields() {
   const channel = getSelectedNextVInputChannel()
   if (nextVEventTypeInput) {
     nextVEventTypeInput.disabled = Boolean(channel)
@@ -1177,7 +2056,7 @@ function syncSelectedInputChannelFields() {
   }
 }
 
-function setDeclaredExternalChannels(channels, options = {}) {
+export function setDeclaredExternalChannels(channels, options = {}) {
   const { preserveSelection = true } = options
   nextVInputChannelState.declaredExternals = normalizeDeclaredExternalChannels(channels)
 
@@ -1194,7 +2073,7 @@ function setDeclaredExternalChannels(channels, options = {}) {
   syncSelectedInputChannelFields()
 }
 
-function setNextVInputTab(tab, options = {}) {
+export function setNextVInputTab(tab, options = {}) {
   const { persist = true } = options
   const requestedTab = String(tab ?? '').trim()
   const selectedChannel = getSelectedNextVInputChannel(requestedTab)
@@ -1214,7 +2093,7 @@ function setNextVInputTab(tab, options = {}) {
   }
 }
 
-function setAppMode(mode) {
+export function setAppMode(mode) {
   const nextMode = 'nextv'
   document.body.classList.remove('mode-chat', 'mode-script', 'mode-nextv')
   document.body.classList.add(`mode-${nextMode}`)
@@ -1229,15 +2108,7 @@ function setAppMode(mode) {
   })
 }
 
-function setChatMode() {
-  setNextVMode({ ensureEntrypoint: false, refreshGraph: false })
-}
-
-function setScriptMode() {
-  setNextVMode({ ensureEntrypoint: false, refreshGraph: false })
-}
-
-function setNextVMode(options = {}) {
+export function setNextVMode(options = {}) {
   const { ensureEntrypoint = true, refreshGraph = true, preserveViewport = false } = options
   setAppMode('nextv')
   if (ensureEntrypoint) {
@@ -1248,11 +2119,16 @@ function setNextVMode(options = {}) {
   }
 }
 
-function updateRemoteRuntimeIdentity(data, options = {}) {
+export function updateRemoteRuntimeIdentity(data, options = {}) {
   const { clear = false } = options
   if (clear) {
-    remoteRuntimeWorkspaceDir = ''
-    remoteRuntimeEntrypointPath = ''
+    _setRemoteRuntimeWorkspaceDir('')
+    _setRemoteRuntimeEntrypointPath('')
+    if (workspace) {
+      workspace.dispatchEvent(new CustomEvent('nextv:remote-workspace-identity', {
+        detail: { workspaceDir: '', entrypointPath: '' },
+      }))
+    }
     return
   }
 
@@ -1263,11 +2139,28 @@ function updateRemoteRuntimeIdentity(data, options = {}) {
     data?.remoteRuntimeEntrypointPath ?? data?.entrypointPath ?? data?.snapshot?.entrypointPath ?? ''
   ).trim()
 
-  if (nextWorkspaceDir) remoteRuntimeWorkspaceDir = nextWorkspaceDir
-  if (nextEntrypointPath) remoteRuntimeEntrypointPath = nextEntrypointPath
+  if (nextWorkspaceDir) {
+    _setRemoteRuntimeWorkspaceDir(nextWorkspaceDir)
+    if (nextVRuntimeTargetState.target === 'attach' && nextVWorkspaceDirInput) {
+      const normalizedValue = nextWorkspaceDir === '.' ? '' : nextWorkspaceDir
+      if (String(nextVWorkspaceDirInput.value ?? '').trim() !== normalizedValue) {
+        nextVWorkspaceDirInput.value = normalizedValue
+      }
+    }
+  }
+  if (nextEntrypointPath) _setRemoteRuntimeEntrypointPath(nextEntrypointPath)
+
+  if (workspace && (nextWorkspaceDir || nextEntrypointPath)) {
+    workspace.dispatchEvent(new CustomEvent('nextv:remote-workspace-identity', {
+      detail: {
+        workspaceDir: nextWorkspaceDir,
+        entrypointPath: nextEntrypointPath,
+      },
+    }))
+  }
 }
 
-function updateRemoteModeBadge() {
+export function updateRemoteModeBadge() {
   if (!remoteModeBadge) return
   remoteModeBadge.hidden = isRemoteMode !== true
   if (!isRemoteMode) {
@@ -1278,7 +2171,9 @@ function updateRemoteModeBadge() {
 
   let label = 'remote runtime'
   if (isRemoteControlMode) {
-    label = 'remote WS runtime (control)'
+    label = nextVRuntimeTargetState.target === 'attach'
+      ? 'attached WS runtime (control)'
+      : 'remote WS runtime (control)'
   } else if (remoteTransport === 'mqtt') {
     label = 'remote MQTT runtime'
   }
@@ -1299,10 +2194,15 @@ function updateRemoteModeBadge() {
   remoteModeBadge.title = label
 }
 
-function setNextVRunControls() {
-  const hasEntrypoint = Boolean(normalizeRelativePath(nextVEntrypointInput?.value ?? ''))
+export function setNextVRunControls() {
   const isExternalMode = nextVRuntimeTargetState.target === 'external'
-  const remoteBlocksControl = isRemoteMode && !isExternalMode && (!isRemoteControlMode || !isRemoteRuntimeConnected)
+  const isAttachMode = nextVRuntimeTargetState.target === 'attach'
+  const attachOverrideEnabled = isNextVAttachStartOverrideEnabled()
+  const hasEntrypoint = isAttachMode && !attachOverrideEnabled
+    ? Boolean(normalizeRelativePath(remoteRuntimeEntrypointPath ?? ''))
+    : Boolean(normalizeRelativePath(nextVEntrypointInput?.value ?? ''))
+  const attachBlocksControl = isAttachMode && nextVAttachSessionState.attached !== true
+  const remoteBlocksControl = attachBlocksControl || (isRemoteMode && !isExternalMode && (!isRemoteControlMode || !isRemoteRuntimeConnected))
   
   // In external mode: show run/start buttons separately
   // In embedded mode: show only start button
@@ -1320,7 +2220,7 @@ function setNextVRunControls() {
   }
   
   // Start button behavior:
-  // - In embedded mode: normal behavior (start the workflow)
+  // - In embedded/attach mode: normal behavior (attach starts remote workflow)
   // - In external mode: only enabled after process is running
   if (nextVStartBtn) {
     const startDisabled = isExternalMode
@@ -1328,11 +2228,19 @@ function setNextVRunControls() {
       : (remoteBlocksControl || nextVRuntimeRunning || isBusy || !hasEntrypoint)
     nextVStartBtn.disabled = startDisabled
   }
+
+  if (isAttachMode && nextVRunBtn) {
+    nextVRunBtn.hidden = true
+  }
   
   if (nextVStopBtn) nextVStopBtn.disabled = remoteBlocksControl || !nextVRuntimeRunning || isBusy
+  const isEmbeddedMode = !isRemoteMode && !isExternalMode && !isAttachMode
+  if (nextVReloadConfigBtn) nextVReloadConfigBtn.disabled = !isEmbeddedMode || !nextVRuntimeRunning || isBusy
+  if (nextVValidateBtn) nextVValidateBtn.disabled = !isEmbeddedMode || !nextVRuntimeRunning || isBusy
+  if (nextVPromoteBtn) nextVPromoteBtn.disabled = !isEmbeddedMode || !nextVCandidatePromotable || isBusy
 }
 
-function appendPanelLogRow(panel, line, cls = '') {
+export function appendPanelLogRow(panel, line, cls = '') {
   if (!panel) return
   const row = document.createElement('div')
   row.className = `script-log-row${cls ? ` ${cls}` : ''}`
@@ -1341,39 +2249,107 @@ function appendPanelLogRow(panel, line, cls = '') {
   panel.scrollTop = panel.scrollHeight
 }
 
-function clearNextVEventsOutput() {
+export function clearNextVEventsOutput() {
   if (nextVEventsOutput) nextVEventsOutput.innerHTML = ''
 }
 
-function clearNextVConsoleOutput() {
+export function clearNextVConsoleOutput() {
   if (nextVConsoleOutput) nextVConsoleOutput.innerHTML = ''
 }
 
-function clearNextVGraphOutput() {
+export function clearNextVGraphOutput() {
   if (nextVGraphOutput) nextVGraphOutput.innerHTML = ''
   for (const timerId of nextVGraphState.visualPulseTimers) {
     window.clearTimeout(timerId)
   }
   nextVGraphState.visualPulseTimers.clear()
   nextVGraphState.visualPulseTimersByNode.clear()
+  if (nextVGraphState.runtimeAgentTickerId) {
+    window.clearInterval(nextVGraphState.runtimeAgentTickerId)
+    nextVGraphState.runtimeAgentTickerId = null
+  }
+  nextVGraphState.handlerLabelLineElements.clear()
+  nextVGraphState.agentTimerLabelElements.clear()
   nextVGraphState.detailPopoverEl = null
   nextVGraphState.canvasEl = null
   nextVGraphState.layoutPositions = new Map()
   nextVGraphState.setSelectedGraphNodeFn = null
 }
 
-function normalizeFloatingPanelId(panelId) {
+
+// --- Imports (auto-generated by gen-es-modules.js) ---
+import {
+  FLOATING_PANEL_IDS,
+  _setPendingFloatingPanelChoiceResolver,
+  dirtyEditsCache,
+  editorLayoutState,
+  editorPaneDescriptors,
+  nextVFloatingCodeDirty,
+  nextVFloatingCodeDirty2,
+  nextVFloatingCodeLine,
+  nextVFloatingCodeLine2,
+  nextVFloatingCodePath,
+  nextVFloatingCodePath2,
+  nextVFloatingPanelChooser,
+  nextVFloatingPanelChooserCancelBtn,
+  nextVFloatingPanelChooserDetails,
+  nextVFloatingPanelChooserPanel1Btn,
+  nextVFloatingPanelChooserPanel2Btn,
+  nextVFloatingPanelChooserTitle,
+  nextVGraphState,
+  nextVViewState,
+  nextVWorkspaceDirInput,
+  pendingFloatingPanelChoiceResolver
+} from './state.js'
+import {
+  refreshNextVGraph
+} from './07_graph_render.js'
+import {
+  normalizeRelativePath,
+  normalizeNextVWorkspaceDir,
+  resolveNextVPath,
+  canonicalizeFloatingPanelPath,
+  normalizePathSegments,
+  pathDirname,
+  joinRelativePath,
+  normalizeGraphSourcePathForEditor
+} from './08_path_utils.js'
+import {
+  renderOpenFileTabs,
+  loadEditorFileContent,
+  saveEditorFileContent,
+  getPaneState,
+  getPaneTextarea,
+  renderPaneTitles,
+  renderScriptMirrorForPane,
+  getCurrentNextVEditorTabSize
+} from './09_editor.js'
+import {
+  pathBasename
+} from './10_file_tree.js'
+import {
+  setStatus,
+  appendScriptLogRow,
+  syncScriptBadgeState,
+  normalizeNewlines,
+  bindTextareaFileRefCursor,
+  findScriptReferenceAtOffset,
+  syncScriptMirrorScrollForPane,
+  toggleCommentInTextarea
+} from './13_layout.js'
+
+export function normalizeFloatingPanelId(panelId) {
   const candidate = String(panelId ?? '').trim().toUpperCase()
   if (FLOATING_PANEL_IDS.includes(candidate)) return candidate
   return nextVGraphState.activeFloatingPanelId || 'FLOAT1'
 }
 
-function getFloatingPanelState(panelId) {
+export function getFloatingPanelState(panelId) {
   const id = normalizeFloatingPanelId(panelId)
   return nextVGraphState.floatingPanels.get(id)
 }
 
-function getFloatingPanelDescriptor(panelId) {
+export function getFloatingPanelDescriptor(panelId) {
   const id = normalizeFloatingPanelId(panelId)
   return {
     id,
@@ -1386,7 +2362,7 @@ function getFloatingPanelDescriptor(panelId) {
   }
 }
 
-function setFloatingPanelActive(panelId) {
+export function setFloatingPanelActive(panelId) {
   const id = normalizeFloatingPanelId(panelId)
   nextVGraphState.activeFloatingPanelId = id
   const now = Date.now()
@@ -1407,7 +2383,7 @@ function setFloatingPanelActive(panelId) {
   }
 }
 
-function updateFloatingGraphCodePanelMeta(panelId) {
+export function updateFloatingGraphCodePanelMeta(panelId) {
   if (!panelId) {
     for (const currentId of FLOATING_PANEL_IDS) updateFloatingGraphCodePanelMeta(currentId)
     return
@@ -1433,23 +2409,107 @@ function updateFloatingGraphCodePanelMeta(panelId) {
   }
 }
 
-function isFloatingGraphCodePanelDirty(panelId) {
+export function isFloatingGraphCodePanelDirty(panelId) {
   const state = getFloatingPanelState(panelId)
   if (!state || !state.open || !state.filePath) return false
   return state.dirty
 }
 
-function getFloatingPanelByFilePath(filePath) {
-  const normalized = normalizeRelativePath(filePath)
+export function getFloatingPanelByFilePath(filePath) {
+  const normalized = canonicalizeFloatingPanelPath(filePath)
   if (!normalized) return ''
   for (const panelId of FLOATING_PANEL_IDS) {
     const state = getFloatingPanelState(panelId)
-    if (state?.open && normalizeRelativePath(state.filePath) === normalized) return panelId
+    if (state?.open && canonicalizeFloatingPanelPath(state.filePath) === normalized) return panelId
   }
   return ''
 }
 
-function getFirstAvailableFloatingPanelId() {
+export function areEditorPathsEquivalent(leftPath, rightPath) {
+  const left = normalizeRelativePath(leftPath)
+  const right = normalizeRelativePath(rightPath)
+  if (!left || !right) return false
+  if (left === right) return true
+
+  const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
+  if (workspaceDir) {
+    const stripWorkspace = (value) => (
+      value === workspaceDir
+        ? ''
+        : (value.startsWith(`${workspaceDir}/`) ? value.slice(workspaceDir.length + 1) : value)
+    )
+    if (stripWorkspace(left) === stripWorkspace(right)) return true
+  }
+
+  const resolvedLeft = canonicalizeFloatingPanelPath(left)
+  const resolvedRight = canonicalizeFloatingPanelPath(right)
+  return Boolean(resolvedLeft && resolvedRight && resolvedLeft === resolvedRight)
+}
+
+export function syncEditorBuffersAfterFloatingSave(savedPath, content) {
+  const normalizedSavedPath = normalizeRelativePath(savedPath)
+  if (!normalizedSavedPath) return
+
+  const normalizedContent = normalizeNewlines(String(content ?? ''))
+  let updatedAnyPane = false
+
+  for (const paneId of editorLayoutState.allPanes) {
+    const paneState = getPaneState(paneId)
+    const panePath = normalizeRelativePath(paneState?.path)
+    if (!panePath || !areEditorPathsEquivalent(panePath, normalizedSavedPath)) continue
+
+    const textarea = getPaneTextarea(paneId)
+    if (textarea) textarea.value = normalizedContent
+    paneState.loadedText = normalizedContent
+    paneState.dirty = false
+    renderScriptMirrorForPane(paneId, normalizedContent)
+    syncScriptMirrorScrollForPane(paneId)
+    updatedAnyPane = true
+  }
+
+  if (updatedAnyPane) {
+    syncScriptBadgeState()
+    renderPaneTitles()
+    renderOpenFileTabs()
+  }
+
+  for (const [cachedPath] of dirtyEditsCache) {
+    if (areEditorPathsEquivalent(cachedPath, normalizedSavedPath)) {
+      dirtyEditsCache.delete(cachedPath)
+    }
+  }
+}
+
+export function syncFloatingPanelsFromEditorBuffer(filePath, content, options = {}) {
+  const normalizedPath = normalizeRelativePath(filePath)
+  if (!normalizedPath) return
+
+  const markSaved = options.markSaved === true
+  const skipIfDirty = options.skipIfDirty === true
+  const normalizedContent = normalizeNewlines(String(content ?? ''))
+
+  for (const panelId of FLOATING_PANEL_IDS) {
+    const panelState = getFloatingPanelState(panelId)
+    const descriptor = getFloatingPanelDescriptor(panelId)
+    if (!panelState?.open || !panelState.filePath || !descriptor?.textarea) continue
+    if (!areEditorPathsEquivalent(panelState.filePath, normalizedPath)) continue
+    if (skipIfDirty && panelState.dirty) continue
+
+    descriptor.textarea.value = normalizedContent
+    if (markSaved) {
+      panelState.loadedText = normalizedContent
+      panelState.dirty = false
+    } else {
+      panelState.dirty = normalizedContent !== panelState.loadedText
+    }
+
+    renderScriptMirrorForPane(panelId, normalizedContent)
+    syncScriptMirrorScrollForPane(panelId)
+    updateFloatingGraphCodePanelMeta(panelId)
+  }
+}
+
+export function getFirstAvailableFloatingPanelId() {
   for (const panelId of FLOATING_PANEL_IDS) {
     const state = getFloatingPanelState(panelId)
     if (!state?.open) return panelId
@@ -1457,15 +2517,15 @@ function getFirstAvailableFloatingPanelId() {
   return ''
 }
 
-function closeFloatingPanelChooser(selection = null) {
+export function closeFloatingPanelChooser(selection = null) {
   if (nextVFloatingPanelChooser) nextVFloatingPanelChooser.hidden = true
   if (pendingFloatingPanelChoiceResolver) {
     pendingFloatingPanelChoiceResolver(selection)
-    pendingFloatingPanelChoiceResolver = null
+    _setPendingFloatingPanelChoiceResolver(null)
   }
 }
 
-function showFloatingPanelChooser(options = {}) {
+export function showFloatingPanelChooser(options = {}) {
   if (!nextVFloatingPanelChooser) return Promise.resolve(null)
 
   const targetPath = normalizeRelativePath(options.filePath)
@@ -1486,12 +2546,12 @@ function showFloatingPanelChooser(options = {}) {
 
   nextVFloatingPanelChooser.hidden = false
   return new Promise((resolve) => {
-    pendingFloatingPanelChoiceResolver = resolve
+    _setPendingFloatingPanelChoiceResolver(resolve)
   })
 }
 
-async function chooseFloatingPanelForOpen(options = {}) {
-  const requestedPath = normalizeRelativePath(options.filePath)
+export async function chooseFloatingPanelForOpen(options = {}) {
+  const requestedPath = canonicalizeFloatingPanelPath(options.filePath)
   const existingPanelId = getFloatingPanelByFilePath(requestedPath)
   if (existingPanelId) {
     setFloatingPanelActive(existingPanelId)
@@ -1513,7 +2573,7 @@ async function chooseFloatingPanelForOpen(options = {}) {
   return selectedPanelId
 }
 
-async function saveFloatingGraphCodePanel(arg = {}) {
+export async function saveFloatingGraphCodePanel(arg = {}) {
   const panelId = typeof arg === 'string' ? arg : arg.panelId
   const options = (arg && typeof arg === 'object' && !Array.isArray(arg)) ? arg : {}
   const id = normalizeFloatingPanelId(panelId)
@@ -1523,20 +2583,35 @@ async function saveFloatingGraphCodePanel(arg = {}) {
 
   const silent = options.silent === true
   const content = normalizeNewlines(descriptor.textarea.value ?? '')
-  const { savedPath, bytes } = await saveEditorFileContent(state.filePath, content)
-  state.filePath = savedPath
-  state.loadedText = content
-  state.dirty = false
-  updateFloatingGraphCodePanelMeta(id)
 
-  if (!silent) {
-    appendScriptLogRow(`[file:save] path=${savedPath} bytes=${bytes}`, 'result')
-    setStatus('floating panel saved')
+  try {
+    const { savedPath, bytes } = await saveEditorFileContent(state.filePath, content)
+    state.filePath = canonicalizeFloatingPanelPath(savedPath)
+    state.loadedText = content
+    state.dirty = false
+    updateFloatingGraphCodePanelMeta(id)
+    syncEditorBuffersAfterFloatingSave(state.filePath, content)
+
+    if (!silent) {
+      appendScriptLogRow(`[file:save] path=${savedPath} bytes=${bytes}`, 'result')
+      setStatus('floating panel saved')
+    }
+
+    if (nextVViewState.currentView === 'graph') {
+      refreshNextVGraph({ silent: true, preserveViewport: true })
+    }
+
+    return true
+  } catch (err) {
+    if (!silent) {
+      appendScriptLogRow(`[file:error] ${err.message}`, 'error')
+      setStatus('floating panel save failed', 'responding')
+    }
+    return false
   }
-  return true
 }
 
-function closeFloatingGraphCodePanel(arg = {}) {
+export function closeFloatingGraphCodePanel(arg = {}) {
   const panelId = typeof arg === 'string' ? arg : arg.panelId
   const options = (arg && typeof arg === 'object' && !Array.isArray(arg)) ? arg : {}
   const id = normalizeFloatingPanelId(panelId)
@@ -1570,9 +2645,10 @@ function closeFloatingGraphCodePanel(arg = {}) {
   return true
 }
 
-async function openFloatingGraphCodePanel(options = {}) {
+export async function openFloatingGraphCodePanel(options = {}) {
   const requestedPath = resolveNextVPath(normalizeGraphSourcePathForEditor(options.filePath))
   if (!requestedPath) return
+  const canonicalRequestedPath = canonicalizeFloatingPanelPath(requestedPath)
 
   const requestedPanelId = options.panelId ? normalizeFloatingPanelId(options.panelId) : ''
   const panelId = requestedPanelId || await chooseFloatingPanelForOpen({ filePath: requestedPath })
@@ -1582,8 +2658,7 @@ async function openFloatingGraphCodePanel(options = {}) {
   const descriptor = getFloatingPanelDescriptor(panelId)
   if (!state || !descriptor.panel || !descriptor.textarea) return
 
-  const normalizedRequestedPath = normalizeRelativePath(requestedPath)
-  if (state.open && state.filePath && normalizeRelativePath(state.filePath) === normalizedRequestedPath) {
+  if (state.open && state.filePath && canonicalizeFloatingPanelPath(state.filePath) === canonicalRequestedPath) {
     state.line = Number.isFinite(Number(options.line)) ? Number(options.line) : state.line
     setFloatingPanelActive(panelId)
     if (state.line && state.line > 1) {
@@ -1599,13 +2674,13 @@ async function openFloatingGraphCodePanel(options = {}) {
     return
   }
 
-  if (state.open && state.filePath && normalizeRelativePath(state.filePath) !== normalizedRequestedPath && isFloatingGraphCodePanelDirty(panelId)) {
+  if (state.open && state.filePath && canonicalizeFloatingPanelPath(state.filePath) !== canonicalRequestedPath && isFloatingGraphCodePanelDirty(panelId)) {
     const discard = window.confirm('Discard unsaved floating panel edits?')
     if (!discard) return
   }
 
   const data = await loadEditorFileContent(requestedPath, { kind: 'editor' })
-  const normalizedPath = normalizeRelativePath(data.filePath ?? requestedPath)
+  const normalizedPath = canonicalizeFloatingPanelPath(data.filePath ?? requestedPath)
   const text = normalizeNewlines(String(data.content ?? ''))
 
   state.open = true
@@ -1633,7 +2708,7 @@ async function openFloatingGraphCodePanel(options = {}) {
   descriptor.textarea.focus()
 }
 
-function bindFloatingGraphCodePanelEvents() {
+export function bindFloatingGraphCodePanelEvents() {
   const bindDragForPanel = (panelId) => {
     const descriptor = getFloatingPanelDescriptor(panelId)
     if (!descriptor.panel) return
@@ -1706,6 +2781,61 @@ function bindFloatingGraphCodePanelEvents() {
         return
       }
 
+      const isCommentToggle = (event.ctrlKey || event.metaKey) && !event.altKey && (event.key === '/' || event.code === 'Slash')
+      if (isCommentToggle) {
+        event.preventDefault()
+        toggleCommentInTextarea(textarea)
+        return
+      }
+
+      if (event.key === 'Tab') {
+        event.preventDefault()
+        const indentWidth = getCurrentNextVEditorTabSize()
+        const indentSpaces = ' '.repeat(indentWidth)
+        const value = textarea.value
+        const start = Number(textarea.selectionStart)
+        const end = Number(textarea.selectionEnd)
+        const hasSelection = start !== end
+
+        if (!hasSelection && !event.shiftKey) {
+          textarea.value = `${value.slice(0, start)}\t${value.slice(end)}`
+          textarea.setSelectionRange(start + 1, start + 1)
+          textarea.dispatchEvent(new Event('input', { bubbles: true }))
+          return
+        }
+
+        const lineStart = value.lastIndexOf('\n', Math.max(0, start - 1)) + 1
+        const lineEndMatch = value.indexOf('\n', hasSelection ? end : start)
+        const lineEnd = lineEndMatch === -1 ? value.length : lineEndMatch
+        const block = value.slice(lineStart, lineEnd)
+        const lines = block.split('\n')
+        let removedBeforeCaret = 0
+        const transformedLines = event.shiftKey
+          ? lines.map((line, index) => {
+              if (line.startsWith('\t')) {
+                if (index === 0 && start > lineStart) removedBeforeCaret = 1
+                return line.slice(1)
+              }
+              if (line.startsWith(indentSpaces)) {
+                if (index === 0 && start > lineStart) removedBeforeCaret = Math.min(indentWidth, start - lineStart)
+                return line.slice(indentWidth)
+              }
+              return line
+            })
+          : lines.map((line) => `\t${line}`)
+        const transformedBlock = transformedLines.join('\n')
+        textarea.value = `${value.slice(0, lineStart)}${transformedBlock}${value.slice(lineEnd)}`
+        if (hasSelection) {
+          textarea.setSelectionRange(lineStart, lineStart + transformedBlock.length)
+        } else if (event.shiftKey) {
+          textarea.setSelectionRange(Math.max(lineStart, start - removedBeforeCaret), Math.max(lineStart, start - removedBeforeCaret))
+        } else {
+          textarea.setSelectionRange(start + 1, start + 1)
+        }
+        textarea.dispatchEvent(new Event('input', { bubbles: true }))
+        return
+      }
+
       if (event.key === 'Escape') {
         event.preventDefault()
         closeFloatingGraphCodePanel({ panelId })
@@ -1757,23 +2887,34 @@ function bindFloatingGraphCodePanelEvents() {
   }
 }
 
-function getNextVGraphViewport() {
+
+// --- Imports (auto-generated by gen-es-modules.js) ---
+import {
+  nextVGraphState,
+  nextVGraphMappingApi,
+  nextVGraphOutput
+} from './state.js'
+import {
+  clearNextVGraphOutput
+} from './03_ui_controls.js'
+
+export function getNextVGraphViewport() {
   return document.getElementById('nextv-graph-viewport')
 }
 
-function getNextVGraphSvg() {
+export function getNextVGraphSvg() {
   return document.querySelector('#nextv-graph-viewport .nextv-graph-svg')
 }
 
-function getNextVGraphCanvas() {
+export function getNextVGraphCanvas() {
   return document.querySelector('#nextv-graph-viewport .nextv-graph-canvas')
 }
 
-function getNextVGraphPadding(width, height) {
+export function getNextVGraphPadding(width, height) {
   return Math.max(220, Math.round(Math.max(width, height) * 0.7))
 }
 
-function getNextVGraphBaseMetrics() {
+export function getNextVGraphBaseMetrics() {
   const svg = getNextVGraphSvg()
   if (!svg) {
     return { width: 0, height: 0, padding: 0 }
@@ -1786,7 +2927,7 @@ function getNextVGraphBaseMetrics() {
   }
 }
 
-function getNextVGraphZoomProfile(zoom) {
+export function getNextVGraphZoomProfile(zoom) {
   const normalizedZoom = clampNextVGraphZoom(zoom)
   const zoomOutProgress = Math.max(0, Math.min(1, (1 - normalizedZoom) / 0.75))
   return {
@@ -1796,13 +2937,13 @@ function getNextVGraphZoomProfile(zoom) {
   }
 }
 
-function getNextVGraphRenderScale(zoom) {
+export function getNextVGraphRenderScale(zoom) {
   const normalizedZoom = clampNextVGraphZoom(zoom)
   const profile = getNextVGraphZoomProfile(normalizedZoom)
   return normalizedZoom * profile.density
 }
 
-function getNextVGraphScaledPadding(zoom, viewport = getNextVGraphViewport()) {
+export function getNextVGraphScaledPadding(zoom, viewport = getNextVGraphViewport()) {
   const { padding } = getNextVGraphBaseMetrics()
   const normalizedZoom = clampNextVGraphZoom(zoom)
   const profile = getNextVGraphZoomProfile(normalizedZoom)
@@ -1826,13 +2967,13 @@ function getNextVGraphScaledPadding(zoom, viewport = getNextVGraphViewport()) {
   }
 }
 
-function clampNextVGraphZoom(value) {
+export function clampNextVGraphZoom(value) {
   const numeric = Number(value)
   if (!Number.isFinite(numeric)) return 1
   return Math.max(0.25, Math.min(4, numeric))
 }
 
-function getNextVGraphWheelZoomStep() {
+export function getNextVGraphWheelZoomStep() {
   const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
   if (zoom < 0.75) return 0.05
   if (zoom > 2) return 0.2
@@ -1841,7 +2982,7 @@ function getNextVGraphWheelZoomStep() {
   return 0.05 + (0.15 * progress)
 }
 
-function applyNextVGraphZoom() {
+export function applyNextVGraphZoom() {
   const canvas = getNextVGraphCanvas()
   const svg = getNextVGraphSvg()
   const viewport = getNextVGraphViewport()
@@ -1871,7 +3012,7 @@ function applyNextVGraphZoom() {
   }
 }
 
-function positionNextVGraphPopover() {
+export function positionNextVGraphPopover() {
   const popover = nextVGraphState.detailPopoverEl
   const canvas = nextVGraphState.canvasEl ?? getNextVGraphCanvas()
   const selectedNodeId = String(nextVGraphState.selectedNodeId ?? '').trim()
@@ -1976,7 +3117,7 @@ function positionNextVGraphPopover() {
   popover.style.visibility = 'visible'
 }
 
-function centerNextVGraphViewport() {
+export function centerNextVGraphViewport() {
   const viewport = getNextVGraphViewport()
   const canvas = getNextVGraphCanvas()
   if (!viewport || !canvas) return
@@ -1990,7 +3131,7 @@ function centerNextVGraphViewport() {
     : Math.max(0, (canvas.scrollHeight - viewport.clientHeight) / 2)
 }
 
-function captureNextVGraphViewportState(viewport = getNextVGraphViewport()) {
+export function captureNextVGraphViewportState(viewport = getNextVGraphViewport()) {
   const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
   const renderScale = getNextVGraphRenderScale(zoom)
   if (!Number.isFinite(renderScale) || renderScale <= 0) return null
@@ -2016,7 +3157,7 @@ function captureNextVGraphViewportState(viewport = getNextVGraphViewport()) {
   }
 }
 
-function restoreNextVGraphViewportState(viewportState, viewport = getNextVGraphViewport()) {
+export function restoreNextVGraphViewportState(viewportState, viewport = getNextVGraphViewport()) {
   if (!viewport || !viewportState) return false
   if (viewport.clientWidth < 2 || viewport.clientHeight < 2) return false
 
@@ -2061,7 +3202,7 @@ function restoreNextVGraphViewportState(viewportState, viewport = getNextVGraphV
   return true
 }
 
-function scheduleNextVGraphViewportRestore(viewportState, attemptsRemaining = 10) {
+export function scheduleNextVGraphViewportRestore(viewportState, attemptsRemaining = 10) {
   if (restoreNextVGraphViewportState(viewportState)) {
     positionNextVGraphPopover()
     return
@@ -2077,7 +3218,7 @@ function scheduleNextVGraphViewportRestore(viewportState, attemptsRemaining = 10
   })
 }
 
-function setNextVGraphZoom(value, options = {}) {
+export function setNextVGraphZoom(value, options = {}) {
   const { anchorClientX = null, anchorClientY = null } = options
   const viewport = getNextVGraphViewport()
   const previousZoom = clampNextVGraphZoom(nextVGraphState.zoom)
@@ -2113,15 +3254,15 @@ function setNextVGraphZoom(value, options = {}) {
   }
 }
 
-function zoomNextVGraph(delta, options = {}) {
+export function zoomNextVGraph(delta, options = {}) {
   setNextVGraphZoom(nextVGraphState.zoom + delta, options)
 }
 
-function resetNextVGraphZoom() {
+export function resetNextVGraphZoom() {
   setNextVGraphZoom(1)
 }
 
-function getNextVGraphFitZoom() {
+export function getNextVGraphFitZoom() {
   const viewport = getNextVGraphViewport()
   const { width: baseWidth, height: baseHeight } = getNextVGraphBaseMetrics()
   if (!viewport || baseWidth <= 0 || baseHeight <= 0) return 1
@@ -2136,7 +3277,7 @@ function getNextVGraphFitZoom() {
   return clampNextVGraphZoom(Math.min(1, fitZoom))
 }
 
-function renderNextVGraphMessage(message, cls = '') {
+export function renderNextVGraphMessage(message, cls = '') {
   if (!nextVGraphOutput) return
   clearNextVGraphOutput()
   const row = document.createElement('div')
@@ -2145,7 +3286,7 @@ function renderNextVGraphMessage(message, cls = '') {
   nextVGraphOutput.appendChild(row)
 }
 
-function getTransitionClassName(classification) {
+export function getTransitionClassName(classification) {
   const value = String(classification ?? '').trim().toLowerCase()
   if (value === 'pure' || value === 'llm' || value === 'side_effect' || value === 'declared_output' || value === 'mixed') {
     return value
@@ -2153,7 +3294,14 @@ function getTransitionClassName(classification) {
   return 'unknown'
 }
 
-function getControlProvenanceClass(value) {
+function formatInlineAgentElapsedMs(value) {
+  const elapsedMs = Math.max(0, Number(value) || 0)
+  if (elapsedMs >= 10000) return `${(elapsedMs / 1000).toFixed(1)}s`
+  if (elapsedMs >= 1000) return `${(elapsedMs / 1000).toFixed(2)}s`
+  return `${Math.round(elapsedMs)}ms`
+}
+
+export function getControlProvenanceClass(value) {
   if (typeof nextVGraphMappingApi?.getControlProvenanceClass === 'function') {
     return nextVGraphMappingApi.getControlProvenanceClass(value)
   }
@@ -2161,11 +3309,12 @@ function getControlProvenanceClass(value) {
   const normalized = String(value ?? '').trim().toLowerCase()
   if (normalized === 'bounded') return 'bounded'
   if (normalized === 'unbounded') return 'unbounded'
+  if (normalized === 'operational') return 'operational'
   if (normalized === 'mixed') return 'mixed'
   return 'unknown'
 }
 
-function buildNextVControlGraphArtifacts(controlEdges) {
+export function buildNextVControlGraphArtifacts(controlEdges) {
   if (typeof nextVGraphMappingApi?.buildControlGraphArtifacts === 'function') {
     return nextVGraphMappingApi.buildControlGraphArtifacts(controlEdges)
   }
@@ -2198,6 +3347,7 @@ function buildNextVControlGraphArtifacts(controlEdges) {
       eventType: String(rawEdge?.eventType ?? '').trim(),
       provenance: getControlProvenanceClass(rawEdge?.provenance),
       boundedControl: rawEdge?.boundedControl === true,
+      operationalControl: rawEdge?.operationalControl === true,
       line: Number.isFinite(Number(rawEdge?.line)) ? Number(rawEdge.line) : null,
       statement: String(rawEdge?.statement ?? '').trim(),
     })
@@ -2209,7 +3359,7 @@ function buildNextVControlGraphArtifacts(controlEdges) {
   }
 }
 
-function formatTransitionClassification(classification) {
+export function formatTransitionClassification(classification) {
   const value = getTransitionClassName(classification)
   if (value === 'side_effect') return 'tool effect'
   if (value === 'declared_output') return 'output'
@@ -2219,7 +3369,11 @@ function formatTransitionClassification(classification) {
   return 'unknown'
 }
 
-function getNextVGraphHandlerLabel(nodeObj, transition) {
+export function getNextVGraphHandlerLabel(nodeObj, transition) {
+  return getNextVGraphHandlerLabelLines(nodeObj, transition).join('\n')
+}
+
+export function getNextVGraphHandlerLabelLines(nodeObj, transition, options = {}) {
   const eventLabel = String(nodeObj?.eventType ?? nodeObj?.id ?? '').trim()
   const agents = Array.isArray(transition?.agents)
     ? transition.agents.map((name) => String(name ?? '').trim()).filter(Boolean)
@@ -2230,43 +3384,61 @@ function getNextVGraphHandlerLabel(nodeObj, transition) {
   const outputs = Array.isArray(transition?.outputs)
     ? transition.outputs.map((out) => String(out ?? '').trim()).filter(Boolean)
     : []
+  const timerSlots = Array.isArray(options?.timerSlots) ? options.timerSlots : []
 
-  const parts = []
-  if (agents.length === 1) {
-    parts.push(`agent:${agents[0]}`)
-  } else if (agents.length > 1) {
-    parts.push(`agents:${agents.length}`)
-  }
+  const isParallel = transition?.hasParallelAgents === true
+  const parallelPrefix = isParallel ? '‖ ' : ''
 
-  if (tools.length === 1) {
-    parts.push(`tool:${tools[0]}`)
-  } else if (tools.length > 1) {
-    parts.push(`tools:${tools.length}`)
-  }
+  const callOrder = Array.isArray(transition?.callOrder) ? transition.callOrder : null
+  const toolFirstInSource = callOrder !== null && callOrder.length > 0 &&
+    callOrder.findIndex((entry) => entry.kind === 'tool') < callOrder.findIndex((entry) => entry.kind === 'agent')
 
-  // Keep labels concise: include output only when there's no agent/tool summary.
-  if (parts.length === 0) {
-    if (outputs.length === 1) {
-      parts.push(`output:${outputs[0]}`)
-    } else if (outputs.length > 1) {
-      parts.push(`outputs:${outputs.length}`)
+  const agentLines = agents.map((name, index) => {
+    const slot = timerSlots[index]
+    const elapsedMs = Math.max(0, Number(slot?.elapsedMs) || 0)
+    const timerSuffix = (slot?.active === true || elapsedMs > 0)
+      ? `  ${formatInlineAgentElapsedMs(elapsedMs)}`
+      : ''
+    return `${parallelPrefix}agent:${name}${timerSuffix}`
+  })
+  const toolLines = tools.length === 1
+    ? [`tool:${tools[0]}`]
+    : tools.length > 1
+      ? [`tools:${tools.length}`]
+      : []
+
+  const lines = []
+  if (agentLines.length > 0 && toolLines.length > 0) {
+    if (toolFirstInSource) {
+      lines.push(...toolLines)
+      lines.push(...agentLines)
+    } else {
+      lines.push(...agentLines)
+      lines.push(...toolLines)
     }
+  } else if (agentLines.length > 0) {
+    lines.push(...agentLines)
+  } else if (toolLines.length > 0) {
+    lines.push(...toolLines)
   }
 
-  if (parts.length > 0) {
-    return parts.slice(0, 2).join('+')
+  if (lines.length === 0) {
+    if (outputs.length === 1) return [`output:${outputs[0]}`]
+    if (outputs.length > 1) return [`outputs:${outputs.length}`]
+
+    const classification = getTransitionClassName(transition?.classification)
+    if (classification === 'pure') return ['logic']
+    if (classification === 'side_effect') return ['tool']
+    if (classification === 'declared_output') return ['output']
+    if (classification === 'mixed') return ['mixed']
+
+    return [eventLabel]
   }
 
-  const classification = getTransitionClassName(transition?.classification)
-  if (classification === 'pure') return 'logic'
-  if (classification === 'side_effect') return 'tool'
-  if (classification === 'declared_output') return 'output'
-  if (classification === 'mixed') return 'mixed'
-
-  return eventLabel
+  return lines
 }
 
-function splitNextVGraphHandlerLabelLines(label, options = {}) {
+export function splitNextVGraphHandlerLabelLines(label, options = {}) {
   const maxLineLength = Number.isFinite(Number(options.maxLineLength))
     ? Math.max(8, Number(options.maxLineLength))
     : 20
@@ -2277,26 +3449,30 @@ function splitNextVGraphHandlerLabelLines(label, options = {}) {
   const raw = String(label ?? '').trim()
   if (!raw) return ['']
 
-  const segments = raw.includes('+')
-    ? raw.split('+').map((part) => String(part ?? '').trim()).filter(Boolean)
-    : [raw]
+  // Hard newlines (from parallel agent blocks) always force a line break.
+  const hardLines = raw.split('\n').map((s) => s.trim()).filter(Boolean)
 
   const lines = []
-  let current = ''
-  for (const segment of segments) {
-    if (!current) {
-      current = segment
-      continue
+  for (const hardLine of hardLines) {
+    const segments = hardLine.includes('+')
+      ? hardLine.split('+').map((part) => String(part ?? '').trim()).filter(Boolean)
+      : [hardLine]
+    let current = ''
+    for (const segment of segments) {
+      if (!current) {
+        current = segment
+        continue
+      }
+      const candidate = `${current}+${segment}`
+      if (candidate.length <= maxLineLength) {
+        current = candidate
+      } else {
+        lines.push(current)
+        current = segment
+      }
     }
-    const candidate = `${current}+${segment}`
-    if (candidate.length <= maxLineLength) {
-      current = candidate
-    } else {
-      lines.push(current)
-      current = segment
-    }
+    if (current) lines.push(current)
   }
-  if (current) lines.push(current)
 
   if (lines.length > maxLines) {
     const collapsed = lines.slice(0, maxLines - 1)
@@ -2307,7 +3483,7 @@ function splitNextVGraphHandlerLabelLines(label, options = {}) {
   return lines
 }
 
-function getNextVGraphTransitionScore(transition) {
+export function getNextVGraphTransitionScore(transition) {
   if (!transition || typeof transition !== 'object') return -1
   const agents = Array.isArray(transition.agents) ? transition.agents.length : 0
   const tools = Array.isArray(transition.tools) ? transition.tools.length : 0
@@ -2329,7 +3505,7 @@ function getNextVGraphTransitionScore(transition) {
   return (agents * 1000) + (tools * 100) + (outputs * 10) + classScore
 }
 
-function buildNextVGraphTransitionLookup(transitions) {
+export function buildNextVGraphTransitionLookup(transitions) {
   const byEvent = new Map()
   for (const transition of transitions) {
     const eventType = String(transition?.eventType ?? '').trim()
@@ -2342,21 +3518,449 @@ function buildNextVGraphTransitionLookup(transitions) {
   return byEvent
 }
 
-function appendTransitionChip(container, text, cls = '') {
+export function appendTransitionChip(container, text, cls = '') {
   const chip = document.createElement('span')
   chip.className = `nextv-graph-chip${cls ? ` ${cls}` : ''}`
   chip.textContent = text
   container.appendChild(chip)
 }
 
-function clearNextVGraphRuntimeTimers() {
+
+// --- Imports (auto-generated by gen-es-modules.js) ---
+import {
+  nextVGraphState,
+  workspace
+} from './state.js'
+import {
+  normalizeNextVGraphDirection
+} from './03_ui_controls.js'
+import {
+  getNextVGraphViewport,
+  getNextVGraphCanvas,
+  getNextVGraphRenderScale,
+  getNextVGraphScaledPadding,
+  clampNextVGraphZoom,
+  getNextVGraphHandlerLabelLines,
+  splitNextVGraphHandlerLabelLines
+} from './05_graph_viewport.js'
+
+export function clearNextVGraphRuntimeTimers() {
   for (const timerId of nextVGraphState.runtimeTimers) {
     window.clearTimeout(timerId)
   }
   nextVGraphState.runtimeTimers.clear()
 }
 
-function resetNextVGraphRuntimeState(options = {}) {
+export function parseNextVGraphRuntimeEventTimestampMs(runtimeEvent) {
+  const raw = String(runtimeEvent?.timestamp ?? '').trim()
+  if (!raw) return Date.now()
+  const parsed = Date.parse(raw)
+  if (!Number.isFinite(parsed)) return Date.now()
+  return parsed
+}
+
+export function formatNextVGraphAgentElapsedMs(value) {
+  const elapsedMs = Math.max(0, Number(value) || 0)
+  if (elapsedMs >= 10000) {
+    return `${(elapsedMs / 1000).toFixed(1)}s`
+  }
+  if (elapsedMs >= 1000) {
+    return `${(elapsedMs / 1000).toFixed(2)}s`
+  }
+  return `${Math.round(elapsedMs)}ms`
+}
+
+export function syncNextVGraphAgentTicker() {
+  nextVGraphTimerApi.syncTicker(nextVGraphState, window, applyNextVGraphRuntimeVisuals)
+}
+
+export function extractExecutionAgentElapsedMs(result) {
+  const agentCalls = Array.isArray(result?.agentCalls) ? result.agentCalls : []
+  let maxElapsedMs = null
+  for (const call of agentCalls) {
+    const elapsedMs = Number(call?.metadata?.elapsedMs)
+    if (!Number.isFinite(elapsedMs) || elapsedMs < 0) continue
+    maxElapsedMs = maxElapsedMs == null ? elapsedMs : Math.max(maxElapsedMs, elapsedMs)
+  }
+  return maxElapsedMs
+}
+
+function getNextVGraphTransitionForHandlerNode(nodeId) {
+  const normalizedNodeId = String(nodeId ?? '').trim()
+  if (!normalizedNodeId.startsWith('handler:')) return null
+  const eventType = normalizedNodeId.slice('handler:'.length)
+  return (Array.isArray(nextVGraphState.transitions) ? nextVGraphState.transitions : []).find(
+    (transition) => String(transition?.eventType ?? '').trim() === eventType,
+  ) ?? null
+}
+
+function getNextVGraphAgentEntriesForHandlerNode(nodeId) {
+  const transition = getNextVGraphTransitionForHandlerNode(nodeId)
+  const entries = Array.isArray(transition?.agentEntries)
+    ? transition.agentEntries.filter((entry) => entry && typeof entry === 'object')
+    : []
+  if (entries.length > 0) return entries
+
+  const agents = Array.isArray(transition?.agents)
+    ? transition.agents.map((name) => ({ name: String(name ?? '').trim(), line: null })).filter((entry) => entry.name)
+    : []
+  return agents
+}
+
+function ensureNextVGraphAgentTimerRecord(nodeId) {
+  const entries = getNextVGraphAgentEntriesForHandlerNode(nodeId)
+  const slotCount = Math.max(1, entries.length || 0)
+  const existing = nextVGraphState.runtimeAgentCallTimersByNode.get(nodeId)
+  const slots = Array.isArray(existing?.slots) ? existing.slots.slice(0, slotCount) : []
+  while (slots.length < slotCount) {
+    slots.push({ active: false, startMs: 0, elapsedMs: 0 })
+  }
+  const record = {
+    slots,
+    nextStartIndex: Number.isInteger(existing?.nextStartIndex) ? existing.nextStartIndex : 0,
+  }
+  nextVGraphState.runtimeAgentCallTimersByNode.set(nodeId, record)
+  return record
+}
+
+function findNextVGraphAgentStartSlot(record) {
+  const slots = Array.isArray(record?.slots) ? record.slots : []
+  if (slots.length === 0) return 0
+
+  const startIndex = Number.isInteger(record?.nextStartIndex) ? record.nextStartIndex : 0
+  for (let offset = 0; offset < slots.length; offset += 1) {
+    const idx = (startIndex + offset) % slots.length
+    const slot = slots[idx]
+    if (slot?.active !== true && Math.max(0, Number(slot?.elapsedMs) || 0) === 0) {
+      return idx
+    }
+  }
+  for (let offset = 0; offset < slots.length; offset += 1) {
+    const idx = (startIndex + offset) % slots.length
+    const slot = slots[idx]
+    if (slot?.active !== true) return idx
+  }
+  return startIndex % slots.length
+}
+
+function findNextVGraphAgentFinishSlot(record) {
+  const slots = Array.isArray(record?.slots) ? record.slots : []
+  let bestIndex = -1
+  let bestStartMs = Number.POSITIVE_INFINITY
+  for (let idx = 0; idx < slots.length; idx += 1) {
+    const slot = slots[idx]
+    if (slot?.active !== true) continue
+    const startMs = Number(slot?.startMs)
+    const resolvedStart = Number.isFinite(startMs) ? startMs : 0
+    if (resolvedStart < bestStartMs) {
+      bestStartMs = resolvedStart
+      bestIndex = idx
+    }
+  }
+  return bestIndex >= 0 ? bestIndex : 0
+}
+
+export function reconcileNextVGraphAgentTimersFromExecution(nodeId, result) {
+  const normalizedNodeId = String(nodeId ?? '').trim()
+  if (!normalizedNodeId) return false
+
+  const calls = Array.isArray(result?.agentCalls) ? result.agentCalls : []
+  const entries = getNextVGraphAgentEntriesForHandlerNode(normalizedNodeId)
+  if (calls.length === 0 || entries.length === 0) return false
+
+  const indicesByLine = new Map()
+  for (let idx = 0; idx < entries.length; idx += 1) {
+    const line = Number(entries[idx]?.line)
+    if (!Number.isFinite(line)) continue
+    if (!indicesByLine.has(line)) indicesByLine.set(line, [])
+    indicesByLine.get(line).push(idx)
+  }
+
+  const slots = Array.from({ length: Math.max(1, entries.length) }, () => ({ active: false, startMs: 0, elapsedMs: 0 }))
+  let fallbackIndex = 0
+  for (const call of calls) {
+    const callLine = Number(call?.line)
+    let slotIndex = -1
+    if (Number.isFinite(callLine)) {
+      const lineIndices = indicesByLine.get(callLine)
+      if (Array.isArray(lineIndices) && lineIndices.length > 0) {
+        slotIndex = lineIndices.shift()
+      }
+    }
+    if (slotIndex < 0) {
+      slotIndex = Math.min(fallbackIndex, slots.length - 1)
+      fallbackIndex += 1
+    }
+    const elapsedMs = Math.max(0, Number(call?.metadata?.elapsedMs) || 0)
+    slots[slotIndex] = { active: false, startMs: 0, elapsedMs }
+  }
+
+  nextVGraphState.runtimeAgentCallTimersByNode.set(normalizedNodeId, {
+    slots,
+    nextStartIndex: Math.min(calls.length, slots.length - 1),
+  })
+  return true
+}
+
+function resolveNextVGraphRuntimeHandlerNode(runtimeEvent) {
+  const fallbackNode = String(nextVGraphState.runtimeLastDispatchedNode ?? '').trim()
+  const runtimeEventSourcePath = normalizeNextVGraphFilePath(runtimeEvent?.sourcePath)
+  const runtimeEventSourceLineRaw = Number(runtimeEvent?.sourceLine)
+  const runtimeEventSourceLine = Number.isFinite(runtimeEventSourceLineRaw) ? runtimeEventSourceLineRaw : null
+  const runtimeEventSourcePathLower = runtimeEventSourcePath ? runtimeEventSourcePath.toLowerCase() : ''
+  const runtimeEventSourcePathBase = runtimeEventSourcePathLower.includes('/')
+    ? runtimeEventSourcePathLower.slice(runtimeEventSourcePathLower.lastIndexOf('/') + 1)
+    : runtimeEventSourcePathLower
+
+  const fallbackNodeObj = (Array.isArray(nextVGraphState.nodes) ? nextVGraphState.nodes : []).find(
+    (nodeObj) => String(nodeObj?.id ?? '').trim() === fallbackNode,
+  )
+  const fallbackNodeSourcePath = normalizeNextVGraphFilePath(fallbackNodeObj?.sourcePath)
+  const fallbackNodeSourcePathLower = fallbackNodeSourcePath ? fallbackNodeSourcePath.toLowerCase() : ''
+
+  let bestMatchingNodeId = ''
+  let bestMatchingNodeLine = Number.NEGATIVE_INFINITY
+  let firstPathMatchNodeId = ''
+  let firstCaseInsensitivePathMatchNodeId = ''
+  let firstSuffixPathMatchNodeId = ''
+  let bestSuffixNodeId = ''
+  let bestSuffixNodeLine = Number.NEGATIVE_INFINITY
+  let bestCaseInsensitiveNodeId = ''
+  let bestCaseInsensitiveNodeLine = Number.NEGATIVE_INFINITY
+  let bestLineOnlyNodeId = ''
+  let bestLineOnlyNodeLine = Number.NEGATIVE_INFINITY
+
+  for (const nodeObj of Array.isArray(nextVGraphState.nodes) ? nextVGraphState.nodes : []) {
+    if (String(nodeObj?.kind ?? '').trim() !== 'handler') continue
+    const nodeId = String(nodeObj?.id ?? '').trim()
+    if (!nodeId) continue
+    const nodeSourceLineRaw = Number(nodeObj?.sourceLine)
+    const nodeSourceLine = Number.isFinite(nodeSourceLineRaw) ? nodeSourceLineRaw : null
+
+    const nodeSourcePath = normalizeNextVGraphFilePath(nodeObj?.sourcePath)
+    const nodeSourcePathLower = nodeSourcePath ? nodeSourcePath.toLowerCase() : ''
+
+    // Last-resort fallback: only line-match within the currently active file context,
+    // or when runtime events have no sourcePath at all.
+    if (runtimeEventSourceLine != null && nodeSourceLine != null && nodeSourceLine <= runtimeEventSourceLine) {
+      const allowLineOnlyFallback = !runtimeEventSourcePathLower
+        || (fallbackNodeSourcePathLower && nodeSourcePathLower && nodeSourcePathLower === fallbackNodeSourcePathLower)
+      if (allowLineOnlyFallback && nodeSourceLine >= bestLineOnlyNodeLine) {
+        bestLineOnlyNodeLine = nodeSourceLine
+        bestLineOnlyNodeId = nodeId
+      }
+    }
+
+    if (!runtimeEventSourcePath || !nodeSourcePath) continue
+
+    if (nodeSourcePath === runtimeEventSourcePath) {
+      if (!firstPathMatchNodeId) {
+        firstPathMatchNodeId = nodeId
+      }
+
+      if (runtimeEventSourceLine == null || nodeSourceLine == null) continue
+      if (nodeSourceLine > runtimeEventSourceLine) continue
+      if (nodeSourceLine < bestMatchingNodeLine) continue
+
+      bestMatchingNodeLine = nodeSourceLine
+      bestMatchingNodeId = nodeId
+      continue
+    }
+
+    if (runtimeEventSourcePathLower && nodeSourcePath.toLowerCase() === runtimeEventSourcePathLower) {
+      if (!firstCaseInsensitivePathMatchNodeId) {
+        firstCaseInsensitivePathMatchNodeId = nodeId
+      }
+      if (runtimeEventSourceLine == null || nodeSourceLine == null) continue
+      if (nodeSourceLine > runtimeEventSourceLine) continue
+      if (nodeSourceLine < bestCaseInsensitiveNodeLine) continue
+
+      bestCaseInsensitiveNodeLine = nodeSourceLine
+      bestCaseInsensitiveNodeId = nodeId
+      continue
+    }
+
+    // Handle relative-vs-absolute workspace path differences such as:
+    // "music-select.nrv" vs "workspaces-local/music-agent/music-select.nrv".
+    const nodeSourcePathBase = nodeSourcePathLower.includes('/')
+      ? nodeSourcePathLower.slice(nodeSourcePathLower.lastIndexOf('/') + 1)
+      : nodeSourcePathLower
+    const isSuffixPathMatch = Boolean(
+      runtimeEventSourcePathLower
+      && nodeSourcePathLower
+      && (
+        runtimeEventSourcePathLower.endsWith(`/${nodeSourcePathLower}`)
+        || nodeSourcePathLower.endsWith(`/${runtimeEventSourcePathLower}`)
+        || (runtimeEventSourcePathBase && nodeSourcePathBase && runtimeEventSourcePathBase === nodeSourcePathBase)
+      )
+    )
+    if (isSuffixPathMatch) {
+      if (!firstSuffixPathMatchNodeId) {
+        firstSuffixPathMatchNodeId = nodeId
+      }
+      if (runtimeEventSourceLine == null || nodeSourceLine == null) continue
+      if (nodeSourceLine > runtimeEventSourceLine) continue
+      if (nodeSourceLine < bestSuffixNodeLine) continue
+
+      bestSuffixNodeLine = nodeSourceLine
+      bestSuffixNodeId = nodeId
+    }
+  }
+
+  return (
+    bestMatchingNodeId
+    || firstPathMatchNodeId
+    || bestCaseInsensitiveNodeId
+    || firstCaseInsensitivePathMatchNodeId
+    || bestSuffixNodeId
+    || firstSuffixPathMatchNodeId
+    || bestLineOnlyNodeId
+    || fallbackNode
+  )
+}
+
+export function resolveNextVGraphHandlerNodeForSource(sourcePath, sourceLine, fallbackNode = '') {
+  return resolveNextVGraphRuntimeHandlerNode({
+    sourcePath,
+    sourceLine,
+    line: sourceLine,
+  }) || String(fallbackNode ?? '').trim()
+}
+
+function findNextVGraphAgentStartSlotIndex(record, lineNumber) {
+  const slots = Array.isArray(record?.slots) ? record.slots : []
+  if (slots.length === 0) return 0
+
+  const targetLine = Number(lineNumber)
+  if (Number.isFinite(targetLine)) {
+    for (let idx = 0; idx < slots.length; idx += 1) {
+      const slotLine = Number(slots[idx]?.line)
+      if (!Number.isFinite(slotLine) || slotLine !== targetLine) continue
+      if (slots[idx]?.active === true) continue
+      if (Math.max(0, Number(slots[idx]?.elapsedMs) || 0) === 0) {
+        return idx
+      }
+    }
+    for (let idx = 0; idx < slots.length; idx += 1) {
+      const slotLine = Number(slots[idx]?.line)
+      if (Number.isFinite(slotLine) && slotLine === targetLine && slots[idx]?.active !== true) {
+        return idx
+      }
+    }
+  }
+
+  const startIndex = Number.isInteger(record?.nextStartIndex) ? record.nextStartIndex : 0
+  for (let offset = 0; offset < slots.length; offset += 1) {
+    const idx = (startIndex + offset) % slots.length
+    const slot = slots[idx]
+    if (slot?.active !== true && Math.max(0, Number(slot?.elapsedMs) || 0) === 0) {
+      return idx
+    }
+  }
+
+  for (let offset = 0; offset < slots.length; offset += 1) {
+    const idx = (startIndex + offset) % slots.length
+    if (slots[idx]?.active !== true) return idx
+  }
+
+  return startIndex % slots.length
+}
+
+function findNextVGraphAgentFinishSlotIndex(record, lineNumber) {
+  const slots = Array.isArray(record?.slots) ? record.slots : []
+  if (slots.length === 0) return 0
+
+  const targetLine = Number(lineNumber)
+  if (Number.isFinite(targetLine)) {
+    let bestIndex = -1
+    let bestStartMs = Number.POSITIVE_INFINITY
+    for (let idx = 0; idx < slots.length; idx += 1) {
+      const slot = slots[idx]
+      const slotLine = Number(slot?.line)
+      if (!Number.isFinite(slotLine) || slotLine !== targetLine) continue
+      if (slot?.active !== true) continue
+      const slotStartMs = Number(slot?.startMs)
+      const resolvedStartMs = Number.isFinite(slotStartMs) ? slotStartMs : 0
+      if (resolvedStartMs < bestStartMs) {
+        bestStartMs = resolvedStartMs
+        bestIndex = idx
+      }
+    }
+    if (bestIndex >= 0) return bestIndex
+  }
+
+  const oldestActiveIndex = findNextVGraphAgentFinishSlot(record)
+  if (Number.isInteger(oldestActiveIndex) && slots[oldestActiveIndex]?.active === true) {
+    return oldestActiveIndex
+  }
+
+  for (let idx = 0; idx < slots.length; idx += 1) {
+    if (slots[idx]?.active !== true) return idx
+  }
+
+  return 0
+}
+
+function startNextVGraphAgentTimer(runtimeEvent) {
+  const currentNode = resolveNextVGraphRuntimeHandlerNode(runtimeEvent)
+  const agentName = String(runtimeEvent?.agent ?? '').trim()
+  if (!currentNode || !agentName) return false
+
+  const timerRecord = ensureNextVGraphAgentTimerRecord(currentNode)
+  const slotIndex = findNextVGraphAgentStartSlotIndex(timerRecord, runtimeEvent?.line ?? runtimeEvent?.sourceLine)
+  timerRecord.slots[slotIndex] = {
+    active: true,
+    startMs: parseNextVGraphRuntimeEventTimestampMs(runtimeEvent),
+    elapsedMs: 0,
+    line: Number.isFinite(Number(runtimeEvent?.line))
+      ? Number(runtimeEvent.line)
+      : (Number.isFinite(Number(runtimeEvent?.sourceLine)) ? Number(runtimeEvent.sourceLine) : null),
+  }
+  timerRecord.nextStartIndex = Math.min(slotIndex + 1, timerRecord.slots.length - 1)
+  nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, timerRecord)
+  nextVGraphState.runtimeLastDispatchedNode = currentNode
+  applyNextVGraphRuntimeVisuals()
+  return true
+}
+
+function finishNextVGraphAgentTimer(runtimeEvent) {
+  const currentNode = resolveNextVGraphRuntimeHandlerNode(runtimeEvent)
+  const agentName = String(runtimeEvent?.agent ?? '').trim()
+  if (!currentNode || !agentName) return false
+
+  const timerRecord = ensureNextVGraphAgentTimerRecord(currentNode)
+  const slotIndex = findNextVGraphAgentFinishSlotIndex(timerRecord, runtimeEvent?.line ?? runtimeEvent?.sourceLine)
+  const currentSlot = timerRecord.slots[slotIndex] ?? null
+  const elapsedMs = Number(runtimeEvent?.metadata?.elapsedMs)
+  const startMs = Number(currentSlot?.startMs)
+  timerRecord.slots[slotIndex] = {
+    active: false,
+    startMs: Number.isFinite(startMs) ? startMs : 0,
+    elapsedMs: Number.isFinite(elapsedMs) && elapsedMs >= 0
+      ? elapsedMs
+      : Math.max(0, parseNextVGraphRuntimeEventTimestampMs(runtimeEvent) - (Number.isFinite(startMs) ? startMs : parseNextVGraphRuntimeEventTimestampMs(runtimeEvent))),
+    line: Number.isFinite(Number(runtimeEvent?.line))
+      ? Number(runtimeEvent.line)
+      : (Number.isFinite(Number(runtimeEvent?.sourceLine)) ? Number(runtimeEvent.sourceLine) : (Number(currentSlot?.line) || null)),
+  }
+  timerRecord.nextStartIndex = Math.min(slotIndex + 1, timerRecord.slots.length - 1)
+  nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, timerRecord)
+  nextVGraphState.runtimeLastDispatchedNode = currentNode
+  applyNextVGraphRuntimeVisuals()
+  return true
+}
+
+export function finalizeNextVGraphActiveAgentTimers(options = {}) {
+  return nextVGraphTimerApi.finalizeActive(
+    nextVGraphState,
+    options,
+    Date.now,
+    window,
+    applyNextVGraphRuntimeVisuals,
+  )
+}
+
+export function resetNextVGraphRuntimeState(options = {}) {
   const { keepExternalNodes = true, keepContractState = true } = options
   clearNextVGraphRuntimeTimers()
   nextVGraphState.runtimeStepByNode.clear()
@@ -2365,8 +3969,10 @@ function resetNextVGraphRuntimeState(options = {}) {
   nextVGraphState.runtimeActiveEdges.clear()
   nextVGraphState.runtimeTriggeredExternalNodes.clear()
   nextVGraphState.runtimeWarningNodes.clear()
+  nextVGraphState.runtimeAgentCallTimersByNode.clear()
   nextVGraphState.runtimeLastDispatchedNode = ''
   nextVGraphState.runtimeSequence = 0
+  syncNextVGraphAgentTicker()
   if (!keepExternalNodes) {
     nextVGraphState.runtimeExternalNodes.clear()
   }
@@ -2377,12 +3983,12 @@ function resetNextVGraphRuntimeState(options = {}) {
   }
 }
 
-function beginNextVGraphExecutionTrail() {
+export function beginNextVGraphExecutionTrail() {
   resetNextVGraphRuntimeState({ keepExternalNodes: true })
   applyNextVGraphRuntimeVisuals()
 }
 
-function flashNextVGraphExternalEvent(eventType) {
+export function flashNextVGraphExternalEvent(eventType) {
   const nodeId = String(eventType ?? '').trim()
   if (!nodeId || !nextVGraphState.nodeElements.has(nodeId)) return
 
@@ -2400,7 +4006,7 @@ function flashNextVGraphExternalEvent(eventType) {
   nextVGraphState.runtimeTimers.add(timerId)
 }
 
-function flashNextVGraphSignalDispatch(signalType, durationMs = 650) {
+export function flashNextVGraphSignalDispatch(signalType, durationMs = 650) {
   const signal = String(signalType ?? '').trim()
   if (!signal) return
 
@@ -2436,7 +4042,7 @@ function flashNextVGraphSignalDispatch(signalType, durationMs = 650) {
   nextVGraphState.runtimeTimers.add(timerId)
 }
 
-function formatNextVGraphEventValue(value) {
+export function formatNextVGraphEventValue(value) {
   if (value === undefined) return ''
   if (value === null) return 'null'
   if (typeof value === 'string') {
@@ -2455,7 +4061,7 @@ function formatNextVGraphEventValue(value) {
   }
 }
 
-function flashNextVGraphEventValue(eventType, value, options = {}) {
+export function flashNextVGraphEventValue(eventType, value, options = {}) {
   const formatted = formatNextVGraphEventValue(value)
   if (!formatted) return
 
@@ -2501,62 +4107,161 @@ function flashNextVGraphEventValue(eventType, value, options = {}) {
   nextVGraphState.runtimeTimers.add(timerId)
 }
 
-function getNextVGraphEdgeFlashAnchor(edgeKey) {
+function getNextVGraphEdgePlacementCandidates(edgeKey) {
   const edgeElement = nextVGraphState.edgeElements.get(edgeKey)
-  if (!edgeElement) return null
+  if (!edgeElement) return []
 
-  let point = null
+  const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
+  const renderScale = getNextVGraphRenderScale(zoom)
+  const scaledPadding = getNextVGraphScaledPadding(zoom, getNextVGraphViewport())
+  const toCanvas = (point) => ({
+    x: scaledPadding.x + (Number(point.x) * renderScale),
+    y: scaledPadding.y + (Number(point.y) * renderScale),
+  })
+
+  const ratioSamples = [0.34, 0.42, 0.5, 0.58, 0.66]
+  const normalOffsets = [12, 18, 26, 34]
+  const candidates = []
+
+  const pushCandidates = (point, normal, ratio) => {
+    const base = toCanvas(point)
+    const nx = Number(normal?.x)
+    const ny = Number(normal?.y)
+    const normalLength = Math.hypot(nx, ny) || 1
+    const unitNormal = { x: nx / normalLength, y: ny / normalLength }
+    const ratioScore = 1 - Math.abs(0.5 - ratio)
+
+    for (const offset of normalOffsets) {
+      for (const sign of [1, -1]) {
+        candidates.push({
+          x: base.x + (unitNormal.x * offset * sign),
+          y: base.y + (unitNormal.y * offset * sign),
+          score: (ratioScore * 100) - offset,
+        })
+      }
+    }
+  }
+
   if (typeof edgeElement.getTotalLength === 'function' && typeof edgeElement.getPointAtLength === 'function') {
     try {
       const totalLength = Number(edgeElement.getTotalLength())
       if (Number.isFinite(totalLength) && totalLength > 0) {
-        point = edgeElement.getPointAtLength(totalLength * 0.62)
+        for (const ratio of ratioSamples) {
+          const edgeLen = totalLength * ratio
+          const point = edgeElement.getPointAtLength(edgeLen)
+          const span = Math.max(8, totalLength * 0.06)
+          const before = edgeElement.getPointAtLength(Math.max(0, edgeLen - span))
+          const after = edgeElement.getPointAtLength(Math.min(totalLength, edgeLen + span))
+          const tx = Number(after.x) - Number(before.x)
+          const ty = Number(after.y) - Number(before.y)
+          const tangentLength = Math.hypot(tx, ty) || 1
+          pushCandidates(point, { x: -(ty / tangentLength), y: tx / tangentLength }, ratio)
+        }
       }
     } catch {
-      // Fall back to data attributes below.
+      // Fall through to straight-line fallback below.
     }
   }
 
-  if (!point) {
+  if (candidates.length === 0) {
     const x1 = Number(edgeElement.getAttribute('x1'))
     const y1 = Number(edgeElement.getAttribute('y1'))
     const x2 = Number(edgeElement.getAttribute('x2'))
     const y2 = Number(edgeElement.getAttribute('y2'))
     if ([x1, y1, x2, y2].every(Number.isFinite)) {
-      point = {
-        x: x1 + ((x2 - x1) * 0.62),
-        y: y1 + ((y2 - y1) * 0.62),
+      const tx = x2 - x1
+      const ty = y2 - y1
+      const tangentLength = Math.hypot(tx, ty) || 1
+      const normal = { x: -(ty / tangentLength), y: tx / tangentLength }
+      for (const ratio of ratioSamples) {
+        pushCandidates(
+          {
+            x: x1 + ((x2 - x1) * ratio),
+            y: y1 + ((y2 - y1) * ratio),
+          },
+          normal,
+          ratio,
+        )
       }
     }
   }
 
-  if (!point) return null
+  return candidates.sort((a, b) => b.score - a.score)
+}
 
-  const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
-  const renderScale = getNextVGraphRenderScale(zoom)
-  const scaledPadding = getNextVGraphScaledPadding(zoom, getNextVGraphViewport())
-  return {
-    x: scaledPadding.x + (point.x * renderScale),
-    y: scaledPadding.y + (point.y * renderScale),
+function rectsIntersect(a, b) {
+  return !(
+    a.right <= b.left
+    || a.left >= b.right
+    || a.bottom <= b.top
+    || a.top >= b.bottom
+  )
+}
+
+function rectOverlapArea(a, b) {
+  const overlapWidth = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left))
+  const overlapHeight = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top))
+  return overlapWidth * overlapHeight
+}
+
+function badgeOverlapsAnyNodeShape(badgeRect, nodeShapeRects) {
+  const margin = 4
+  const expanded = {
+    left: badgeRect.left - margin,
+    right: badgeRect.right + margin,
+    top: badgeRect.top - margin,
+    bottom: badgeRect.bottom + margin,
+  }
+  for (const rect of nodeShapeRects) {
+    if (rectsIntersect(expanded, rect)) return true
+  }
+  return false
+}
+
+function positionNextVGraphEdgeBadge(badge, edgeKey, canvas) {
+  const nodeShapeRects = Array.from(canvas.querySelectorAll('.nextv-graph-node-shape')).map((el) => el.getBoundingClientRect())
+  const candidates = getNextVGraphEdgePlacementCandidates(edgeKey)
+  if (candidates.length === 0) return
+
+  let bestCandidate = null
+  let bestOverlap = Number.POSITIVE_INFINITY
+  for (const candidate of candidates) {
+    badge.style.left = `${Math.round(candidate.x)}px`
+    badge.style.top = `${Math.round(candidate.y)}px`
+    const rect = badge.getBoundingClientRect()
+    if (!badgeOverlapsAnyNodeShape(rect, nodeShapeRects)) {
+      return
+    }
+
+    let overlapArea = 0
+    for (const nodeRect of nodeShapeRects) {
+      overlapArea += rectOverlapArea(rect, nodeRect)
+    }
+    if (overlapArea < bestOverlap) {
+      bestOverlap = overlapArea
+      bestCandidate = candidate
+    }
+  }
+
+  // Fallback to the lowest-overlap candidate when all positions collide.
+  if (bestCandidate) {
+    badge.style.left = `${Math.round(bestCandidate.x)}px`
+    badge.style.top = `${Math.round(bestCandidate.y)}px`
   }
 }
 
-function flashNextVGraphEdgeValue(edgeKey, value) {
+export function flashNextVGraphEdgeValue(edgeKey, value) {
   const formatted = formatNextVGraphEventValue(value)
   if (!formatted) return
-
-  const anchor = getNextVGraphEdgeFlashAnchor(edgeKey)
-  if (!anchor) return
 
   const canvas = nextVGraphState.canvasEl ?? getNextVGraphCanvas()
   if (!canvas) return
 
   const badge = document.createElement('div')
-  badge.className = 'nextv-graph-emit-value-flash nextv-graph-effect-value-flash'
+  badge.className = 'nextv-graph-emit-value-flash nextv-graph-effect-value-flash nextv-graph-edge-value-flash'
   badge.textContent = formatted
-  badge.style.left = `${Math.round(anchor.x + 10)}px`
-  badge.style.top = `${Math.round(anchor.y - 14)}px`
   canvas.appendChild(badge)
+  positionNextVGraphEdgeBadge(badge, edgeKey, canvas)
 
   window.requestAnimationFrame(() => {
     badge.classList.add('visible')
@@ -2573,11 +4278,11 @@ function flashNextVGraphEdgeValue(edgeKey, value) {
   nextVGraphState.runtimeTimers.add(timerId)
 }
 
-function getNextVGraphEdgeKey(from, to) {
+export function getNextVGraphEdgeKey(from, to) {
   return `${String(from ?? '').trim()}\u0000${String(to ?? '').trim()}`
 }
 
-function pulseNextVGraphNode(nodeId, durationMs = 650) {
+export function pulseNextVGraphNode(nodeId, durationMs = 650) {
   const normalizedNodeId = String(nodeId ?? '').trim()
   if (!normalizedNodeId) return false
 
@@ -2605,7 +4310,7 @@ function pulseNextVGraphNode(nodeId, durationMs = 650) {
   return true
 }
 
-function queueNextVGraphTimerPulse(eventType) {
+export function queueNextVGraphTimerPulse(eventType) {
   const normalizedEventType = String(eventType ?? '').trim()
   if (!normalizedEventType) return
   nextVGraphState.pendingTimerPulses.push(normalizedEventType)
@@ -2614,7 +4319,7 @@ function queueNextVGraphTimerPulse(eventType) {
   }
 }
 
-function flushNextVGraphPendingTimerPulses() {
+export function flushNextVGraphPendingTimerPulses() {
   if (nextVGraphState.pendingTimerPulses.length === 0) return
 
   const pulses = nextVGraphState.pendingTimerPulses.slice()
@@ -2624,7 +4329,7 @@ function flushNextVGraphPendingTimerPulses() {
   }
 }
 
-function flashNextVGraphTimerPulse(eventType, options = {}) {
+export function flashNextVGraphTimerPulse(eventType, options = {}) {
   const force = options?.force === true
   const normalizedEventType = String(eventType ?? '').trim()
   if (!normalizedEventType) return
@@ -2651,7 +4356,7 @@ function flashNextVGraphTimerPulse(eventType, options = {}) {
   }
 }
 
-function fadeNextVGraphActiveHighlights(delayMs = 700) {
+export function fadeNextVGraphActiveHighlights(delayMs = 700) {
   const timerId = window.setTimeout(() => {
     nextVGraphState.runtimeTimers.delete(timerId)
     if (nextVGraphState.runtimeActiveNodes.size === 0 && nextVGraphState.runtimeActiveEdges.size === 0) {
@@ -2665,21 +4370,21 @@ function fadeNextVGraphActiveHighlights(delayMs = 700) {
   nextVGraphState.runtimeTimers.add(timerId)
 }
 
-function getNextVGraphEffectOutputNodeId(sourceEvent, outputFormat) {
+export function getNextVGraphEffectOutputNodeId(sourceEvent, outputFormat) {
   const source = String(sourceEvent ?? '').trim()
   const format = String(outputFormat ?? '').trim()
   if (!source || !format) return ''
   return `__effect__${source}__output__${format}`
 }
 
-function getNextVGraphEffectToolNodeId(sourceEvent, toolName) {
+export function getNextVGraphEffectToolNodeId(sourceEvent, toolName) {
   const source = String(sourceEvent ?? '').trim()
   const tool = String(toolName ?? '').trim() || 'dynamic'
   if (!source) return ''
   return `__effect__${source}__tool__${tool}`
 }
 
-function collectNextVGraphExternalNodeCandidates(nodes, edges) {
+export function collectNextVGraphExternalNodeCandidates(nodes, edges) {
   // Only event-kind nodes can be external; count only inbound emit edges.
   const eventNodeIds = new Set(
     nodes.filter((n) => n.kind === 'event').map((n) => n.id)
@@ -2708,13 +4413,13 @@ function collectNextVGraphExternalNodeCandidates(nodes, edges) {
 // Must match BUILTIN_OUTPUT_CHANNELS in src/nextv_event_graph.js
 const BUILTIN_GRAPH_OUTPUT_CHANNELS = new Set(['text', 'json', 'voice', 'console', 'visual', 'interaction'])
 
-function getEffectOutputClassification(channel) {
+export function getEffectOutputClassification(channel) {
   return BUILTIN_GRAPH_OUTPUT_CHANNELS.has(String(channel ?? '').trim())
     ? 'declared_output'
     : 'side_effect'
 }
 
-function collectNextVGraphEffects(transitions) {
+export function collectNextVGraphEffects(transitions) {
   const effectNodesById = new Map()
   const effectEdges = []
   const effectEdgeKeys = new Set()
@@ -2775,11 +4480,11 @@ function collectNextVGraphEffects(transitions) {
   return { effectNodes: Array.from(effectNodesById.values()), effectEdges }
 }
 
-function normalizeNextVGraphFilePath(pathValue) {
+export function normalizeNextVGraphFilePath(pathValue) {
   return String(pathValue ?? '').trim().replace(/\\/g, '/')
 }
 
-function compactNextVGraphFileLabel(pathValue) {
+export function compactNextVGraphFileLabel(pathValue) {
   const normalized = normalizeNextVGraphFilePath(pathValue)
   if (!normalized) return '(entrypoint)'
   const parts = normalized.split('/').filter(Boolean)
@@ -2789,7 +4494,7 @@ function compactNextVGraphFileLabel(pathValue) {
   return parts.slice(-2).join('/')
 }
 
-function getNextVGraphNodeGroupKey(nodeObj, entrypointPath = '') {
+export function getNextVGraphNodeGroupKey(nodeObj, entrypointPath = '') {
   const nodeSourcePath = normalizeNextVGraphFilePath(nodeObj?.sourcePath)
   if (nodeSourcePath) return nodeSourcePath
 
@@ -2799,7 +4504,7 @@ function getNextVGraphNodeGroupKey(nodeObj, entrypointPath = '') {
   return '(entrypoint)'
 }
 
-function getNextVGraphNodeVisual(nodeObj, effectLabel = '') {
+export function getNextVGraphNodeVisual(nodeObj, effectLabel = '') {
   const nodeKind = String(nodeObj?.kind ?? 'event')
   const label = nodeKind === 'effect'
     ? String(effectLabel || nodeObj?.id || '')
@@ -2869,7 +4574,9 @@ function getNextVGraphNodeVisual(nodeObj, effectLabel = '') {
   }
 }
 
-function applyNextVGraphRuntimeVisuals() {
+export function applyNextVGraphRuntimeVisuals() {
+  const nowMs = Date.now()
+
   for (const [nodeName, nodeElement] of nextVGraphState.nodeElements.entries()) {
     const isActive = nextVGraphState.runtimeActiveNodes.has(nodeName)
     const hasWarning = nextVGraphState.runtimeWarningNodes.has(nodeName)
@@ -2877,6 +4584,8 @@ function applyNextVGraphRuntimeVisuals() {
     const isTriggeredExternal = nextVGraphState.runtimeTriggeredExternalNodes.has(nodeName)
     const stepValue = nextVGraphState.runtimeStepByNode.get(nodeName)
     const stepLabel = nextVGraphState.stepLabelElements.get(nodeName)
+    const handlerLineElements = nextVGraphState.handlerLabelLineElements.get(nodeName)
+    const agentTimerRecord = nextVGraphState.runtimeAgentCallTimersByNode.get(nodeName)
 
     nodeElement.classList.toggle('is-active', isActive)
     nodeElement.classList.toggle('is-runtime-warning', hasWarning)
@@ -2892,6 +4601,28 @@ function applyNextVGraphRuntimeVisuals() {
       } else {
         stepLabel.textContent = ''
         stepLabel.classList.remove('visible')
+      }
+    }
+
+    if (Array.isArray(handlerLineElements) && nodeName.startsWith('handler:')) {
+      const transition = getNextVGraphTransitionForHandlerNode(nodeName)
+      const nodeObj = nextVGraphState.nodes.find((entry) => entry?.id === nodeName)
+      const timerSlots = Array.isArray(agentTimerRecord?.slots)
+        ? agentTimerRecord.slots.map((slot) => {
+          const startMs = Number(slot?.startMs)
+          const resolvedElapsedMs = slot?.active === true
+            ? Math.max(0, nowMs - (Number.isFinite(startMs) ? startMs : nowMs))
+            : Math.max(0, Number(slot?.elapsedMs) || 0)
+          return {
+            active: slot?.active === true,
+            startMs,
+            elapsedMs: resolvedElapsedMs,
+          }
+        })
+        : []
+      const displayLines = getNextVGraphHandlerLabelLines(nodeObj, transition, { timerSlots })
+      for (let idx = 0; idx < handlerLineElements.length; idx += 1) {
+        handlerLineElements[idx].textContent = String(displayLines[idx] ?? '')
       }
     }
   }
@@ -2914,7 +4645,7 @@ function applyNextVGraphRuntimeVisuals() {
   }
 }
 
-function markNextVGraphNodeActive(nodeName) {
+export function markNextVGraphNodeActive(nodeName) {
   const normalizedNode = String(nodeName ?? '').trim()
   if (!normalizedNode) return
   nextVGraphState.runtimeActiveNodes.clear()
@@ -2922,7 +4653,7 @@ function markNextVGraphNodeActive(nodeName) {
   applyNextVGraphRuntimeVisuals()
 }
 
-function markNextVGraphEdgeActive(from, to) {
+export function markNextVGraphEdgeActive(from, to) {
   const edgeKey = getNextVGraphEdgeKey(from, to)
   if (!edgeKey || !nextVGraphState.edgeElements.has(edgeKey)) return
 
@@ -2932,7 +4663,7 @@ function markNextVGraphEdgeActive(from, to) {
   applyNextVGraphRuntimeVisuals()
 }
 
-function markNextVGraphEffectEdgeActive(sourceNode, effectType, effectName) {
+export function markNextVGraphEffectEdgeActive(sourceNode, effectType, effectName) {
   // sourceNode may be a handler ID ("handler:X") or a raw event type; normalize to raw event type for node ID lookup.
   const source = String(sourceNode ?? '').trim()
   if (!source) return
@@ -2950,7 +4681,7 @@ function markNextVGraphEffectEdgeActive(sourceNode, effectType, effectName) {
   markNextVGraphEdgeActive(handlerId, effectNodeId)
 }
 
-function resolveNextVGraphEffectEdgeKey(sourceNode, effectType, effectName) {
+export function resolveNextVGraphEffectEdgeKey(sourceNode, effectType, effectName) {
   const source = String(sourceNode ?? '').trim()
   if (!source) return ''
   const rawEvent = source.startsWith('handler:') ? source.slice('handler:'.length) : source
@@ -2967,7 +4698,7 @@ function resolveNextVGraphEffectEdgeKey(sourceNode, effectType, effectName) {
   return getNextVGraphEdgeKey(handlerId, effectNodeId)
 }
 
-function updateNextVGraphRuntimeStep(nodeName) {
+export function updateNextVGraphRuntimeStep(nodeName) {
   const normalizedNode = String(nodeName ?? '').trim()
   if (!normalizedNode) return
 
@@ -2977,7 +4708,7 @@ function updateNextVGraphRuntimeStep(nodeName) {
   }
 }
 
-function inferNextVGraphFallbackHandler(eventType) {
+export function inferNextVGraphFallbackHandler(eventType) {
   const sourceEventType = String(eventType ?? '').trim()
   if (!sourceEventType) return ''
 
@@ -3011,20 +4742,20 @@ function inferNextVGraphFallbackHandler(eventType) {
   return sourceHandlerId
 }
 
-function markNextVGraphRuntimeWarning(nodeName) {
+export function markNextVGraphRuntimeWarning(nodeName) {
   const normalizedNode = String(nodeName ?? '').trim()
   if (!normalizedNode) return
   nextVGraphState.runtimeWarningNodes.add(normalizedNode)
   applyNextVGraphRuntimeVisuals()
 }
 
-function inferNextVGraphNodeFromWarning(runtimeEvent) {
+export function inferNextVGraphNodeFromWarning(runtimeEvent) {
   const explicitSignalType = String(runtimeEvent?.signalType ?? '').trim()
   if (explicitSignalType) return explicitSignalType
   return String(nextVGraphState.runtimeLastDispatchedNode ?? '').trim()
 }
 
-function handleNextVGraphRuntimeEvent(runtimeEvent) {
+export function handleNextVGraphRuntimeEvent(runtimeEvent) {
   if (!runtimeEvent || typeof runtimeEvent !== 'object') return
 
   if (runtimeEvent.type === 'signal_dispatch') {
@@ -3053,7 +4784,18 @@ function handleNextVGraphRuntimeEvent(runtimeEvent) {
 
     nextVGraphState.runtimeLastDispatchedNode = handlerId
     applyNextVGraphRuntimeVisuals()
-    flashNextVGraphEventValue(signalType, runtimeEvent.value, { nodeId: handlerId })
+    const emitEdgeKey = previousNode ? getNextVGraphEdgeKey(previousNode, signalType) : ''
+    const collapsedEmitEdgeKey = previousNode ? getNextVGraphEdgeKey(previousNode, handlerId) : ''
+    const payloadEdgeKey = (emitEdgeKey && nextVGraphState.edgeElements.has(emitEdgeKey))
+      ? emitEdgeKey
+      : (collapsedEmitEdgeKey && nextVGraphState.edgeElements.has(collapsedEmitEdgeKey))
+        ? collapsedEmitEdgeKey
+      : (subscriptionKey && nextVGraphState.edgeElements.has(subscriptionKey) ? subscriptionKey : '')
+    if (payloadEdgeKey) {
+      flashNextVGraphEdgeValue(payloadEdgeKey, runtimeEvent.value)
+    } else {
+      flashNextVGraphEventValue(signalType, runtimeEvent.value, { nodeId: handlerId })
+    }
     if (nextVGraphState.autoFollowEnabled && typeof nextVGraphState.setSelectedGraphNodeFn === 'function') {
       nextVGraphState.setSelectedGraphNodeFn(handlerId)
     }
@@ -3061,9 +4803,10 @@ function handleNextVGraphRuntimeEvent(runtimeEvent) {
   }
 
   if (runtimeEvent.type === 'output') {
-    const currentNode = String(nextVGraphState.runtimeLastDispatchedNode ?? '').trim()
+    const currentNode = resolveNextVGraphRuntimeHandlerNode(runtimeEvent)
     const format = String(runtimeEvent.format ?? '').trim()
     if (currentNode && format) {
+      nextVGraphState.runtimeLastDispatchedNode = currentNode
       markNextVGraphEffectEdgeActive(currentNode, 'output', format)
       const edgeKey = resolveNextVGraphEffectEdgeKey(currentNode, 'output', format)
       flashNextVGraphEdgeValue(edgeKey, runtimeEvent.value ?? runtimeEvent.content)
@@ -3071,9 +4814,58 @@ function handleNextVGraphRuntimeEvent(runtimeEvent) {
     return
   }
 
+  if (runtimeEvent.type === 'agent_call') {
+    startNextVGraphAgentTimer(runtimeEvent)
+    return
+  }
+
+  if (runtimeEvent.type === 'agent_result') {
+    finishNextVGraphAgentTimer(runtimeEvent)
+    return
+  }
+
   if (runtimeEvent.type === 'tool_call' || runtimeEvent.type === 'tool_result') {
-    const currentNode = String(nextVGraphState.runtimeLastDispatchedNode ?? '').trim()
-    const toolName = String(runtimeEvent.tool ?? '').trim()
+    const currentNode = resolveNextVGraphRuntimeHandlerNode(runtimeEvent)
+    const toolName = String(runtimeEvent.tool ?? runtimeEvent.agent ?? '').trim()
+    const runtimeEventTimestampMs = parseNextVGraphRuntimeEventTimestampMs(runtimeEvent)
+
+    if (currentNode && toolName) {
+      nextVGraphState.runtimeLastDispatchedNode = currentNode
+      const hasDeclaredAgentEntries = getNextVGraphAgentEntriesForHandlerNode(currentNode).length > 0
+      if (!hasDeclaredAgentEntries) {
+        const timerRecord = ensureNextVGraphAgentTimerRecord(currentNode)
+        if (runtimeEvent.type === 'tool_call') {
+          const slotIndex = findNextVGraphAgentStartSlot(timerRecord)
+          timerRecord.slots[slotIndex] = {
+            active: true,
+            startMs: runtimeEventTimestampMs,
+            elapsedMs: 0,
+          }
+          timerRecord.nextStartIndex = Math.min(slotIndex + 1, timerRecord.slots.length - 1)
+          nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, timerRecord)
+        } else {
+          const slotIndex = findNextVGraphAgentFinishSlot(timerRecord)
+          const currentTimerState = timerRecord.slots[slotIndex]
+          const metadataElapsedMs = Number(runtimeEvent?.result?.metadata?.elapsedMs)
+          const startMs = Number(currentTimerState?.startMs)
+          const elapsedMs = Number.isFinite(metadataElapsedMs)
+            ? Math.max(0, metadataElapsedMs)
+            : Math.max(0, runtimeEventTimestampMs - (Number.isFinite(startMs) ? startMs : runtimeEventTimestampMs))
+
+          timerRecord.slots[slotIndex] = {
+            active: false,
+            startMs: Number.isFinite(startMs) ? startMs : Math.max(0, runtimeEventTimestampMs - elapsedMs),
+            elapsedMs,
+          }
+          nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, timerRecord)
+        }
+
+        syncNextVGraphAgentTicker()
+      }
+
+      applyNextVGraphRuntimeVisuals()
+    }
+
     const isEffectful = runtimeEvent?.toolMetadata?.effectful === true
     if (currentNode && toolName && isEffectful) {
       markNextVGraphEffectEdgeActive(currentNode, 'tool', toolName)
@@ -3088,7 +4880,7 @@ function handleNextVGraphRuntimeEvent(runtimeEvent) {
 }
 
 // Builds a smooth SVG path string through an array of {x, y} points.
-function buildSmoothPath(points) {
+export function buildSmoothPath(points) {
   if (!points || points.length < 2) return ''
   if (points.length === 2) {
     return `M ${points[0].x} ${points[0].y} L ${points[1].x} ${points[1].y}`
@@ -3104,7 +4896,7 @@ function buildSmoothPath(points) {
   return d
 }
 
-function buildNextVGraphLayout(graphNodes, options = {}) {
+export function buildNextVGraphLayout(graphNodes, options = {}) {
   const entrypointPath = String(options.entrypointPath ?? '')
   const externalNodeIds = options.externalNodeIds instanceof Set ? options.externalNodeIds : new Set()
   const graphEdges = Array.isArray(options.graphEdges) ? options.graphEdges : []
@@ -3347,7 +5139,81 @@ function buildNextVGraphLayout(graphNodes, options = {}) {
   return { width, height, positions, containers, fileCount, nodeGroupById, edgeBendpoints }
 }
 
-function renderNextVGraph(data = {}, options = {}) {
+
+// --- Imports (auto-generated by gen-es-modules.js) ---
+import {
+  nextVGraphState,
+  nextVWorkspaceDirInput,
+  nextVEntrypointInput,
+  nextVEventsOutput,
+  nextVGraphOutput,
+  nextVConsoleOutput
+} from './state.js'
+import {
+  isNextVMode,
+  normalizeNextVGraphDirection,
+  setNextVGraphDirection,
+  setNextVControlOverlayEnabled,
+  isNextVControlOverlayEnabled,
+  setNextVControlBranchesVisible,
+  isNextVControlBranchesVisible,
+  getControlOverlayClassName,
+  appendPanelLogRow,
+  clearNextVGraphOutput
+} from './03_ui_controls.js'
+import {
+  openFloatingGraphCodePanel
+} from './04_floating_panels.js'
+import {
+  getNextVGraphViewport,
+  getNextVGraphPadding,
+  clampNextVGraphZoom,
+  getNextVGraphWheelZoomStep,
+  applyNextVGraphZoom,
+  positionNextVGraphPopover,
+  centerNextVGraphViewport,
+  captureNextVGraphViewportState,
+  scheduleNextVGraphViewportRestore,
+  zoomNextVGraph,
+  resetNextVGraphZoom,
+  getNextVGraphFitZoom,
+  renderNextVGraphMessage,
+  getTransitionClassName,
+  getControlProvenanceClass,
+  buildNextVControlGraphArtifacts,
+  formatTransitionClassification,
+  getNextVGraphHandlerLabel,
+  getNextVGraphHandlerLabelLines,
+  splitNextVGraphHandlerLabelLines,
+  buildNextVGraphTransitionLookup,
+  appendTransitionChip
+} from './05_graph_viewport.js'
+import {
+  syncNextVGraphAgentTicker,
+  getNextVGraphEdgeKey,
+  flushNextVGraphPendingTimerPulses,
+  collectNextVGraphExternalNodeCandidates,
+  getEffectOutputClassification,
+  collectNextVGraphEffects,
+  getNextVGraphNodeVisual,
+  applyNextVGraphRuntimeVisuals,
+  buildSmoothPath,
+  buildNextVGraphLayout
+} from './06_graph_runtime.js'
+import {
+  normalizeRelativePath,
+  normalizeNextVWorkspaceDir,
+  normalizeGraphSourcePathForEditor
+} from './08_path_utils.js'
+import {
+  pathBasename
+} from './10_file_tree.js'
+import {
+  setStatus,
+  appendScriptLogRow
+} from './13_layout.js'
+
+export function renderNextVGraph(data = {}, options = {}) {
   const { preserveViewport = false, viewportState = null } = options
   if (!nextVGraphOutput) return
   const layoutDirection = normalizeNextVGraphDirection(nextVGraphState.layoutDirection)
@@ -3470,6 +5336,8 @@ function renderNextVGraph(data = {}, options = {}) {
   nextVGraphState.nodeElements = new Map()
   nextVGraphState.edgeElements = new Map()
   nextVGraphState.stepLabelElements = new Map()
+  nextVGraphState.handlerLabelLineElements = new Map()
+  nextVGraphState.agentTimerLabelElements = new Map()
 
   const nodeById = new Map(graphNodes.map((node) => [node.id, node]))
   const nodeClickHandlers = new Map()
@@ -3492,6 +5360,9 @@ function renderNextVGraph(data = {}, options = {}) {
         ? String(effectMeta?.sourceEvent ?? '')
         : String(nodeObj.eventType ?? nodeObj.id)
     const transition = transitionByEvent.get(transitionEventType)
+    const transitionTryBoundaries = Array.isArray(transition?.tryBoundaries)
+      ? transition.tryBoundaries
+      : []
     const effectClassification = effectMeta?.type === 'output' ? getEffectOutputClassification(effectMeta.channel) : 'side_effect'
     const transitionClass = isControlBranchNode
       ? getControlOverlayClassName(nodeObj?.provenance)
@@ -3536,6 +5407,12 @@ function renderNextVGraph(data = {}, options = {}) {
 
     titleWrap.appendChild(eventName)
     titleWrap.appendChild(badge)
+    if (isHandlerNode && transitionTryBoundaries.length > 0) {
+      const tryBadge = document.createElement('span')
+      tryBadge.className = 'nextv-graph-chip try-boundary'
+      tryBadge.textContent = `try ${transitionTryBoundaries.length}`
+      titleWrap.appendChild(tryBadge)
+    }
     header.appendChild(titleWrap)
     header.appendChild(closeBtn)
     card.appendChild(header)
@@ -3559,6 +5436,7 @@ function renderNextVGraph(data = {}, options = {}) {
       const tools = Array.isArray(transition.tools) ? transition.tools.filter(Boolean) : []
       const outputs = Array.isArray(transition.outputs) ? transition.outputs : []
       const warnings = Array.isArray(transition.warnings) ? transition.warnings : []
+      const tryBoundaries = transitionTryBoundaries
 
       if (tools.length > 0) {
         addLine(`tools: ${tools.map((tool) => tool.name || 'dynamic').join(', ')}`)
@@ -3573,10 +5451,25 @@ function renderNextVGraph(data = {}, options = {}) {
           addLine(`warning: ${String(warning.message ?? warning.code ?? 'unknown warning')}`, 'warning')
         }
       }
+
+      if (tryBoundaries.length > 0) {
+        addLine(`try boundaries: ${tryBoundaries.length}`)
+        for (const boundary of tryBoundaries) {
+          const operation = String(boundary?.operation ?? 'call')
+          const target = String(boundary?.target ?? '').trim()
+          const boundaryText = target
+            ? `try: ${operation} -> ${target}`
+            : `try: ${operation}`
+          addLine(boundaryText)
+        }
+      }
     }
 
     if (isControlBranchNode) {
       addLine(`provenance: ${getControlProvenanceClass(nodeObj?.provenance)}`)
+      if (nodeObj?.provenance === 'operational') {
+        addLine('control kind: operational envelope branch')
+      }
       if (Number.isFinite(Number(nodeObj?.line))) {
         addLine(`line: ${Number(nodeObj.line)}`)
       }
@@ -3760,11 +5653,12 @@ function renderNextVGraph(data = {}, options = {}) {
   const mixedCount = transitions.filter((transition) => transition?.classification === 'mixed').length
   const boundedControlCount = visibleControlGraphEdges.filter((edge) => edge.provenance === 'bounded').length
   const unboundedControlCount = visibleControlGraphEdges.filter((edge) => edge.provenance === 'unbounded').length
+  const operationalControlCount = visibleControlGraphEdges.filter((edge) => edge.provenance === 'operational').length
   const effectCount = effectNodes.length
   const handlerCount = nodes.filter((n) => n.kind === 'handler').length
   const timerCount = rawTimerNodes.length
   const entrypointLabel = pathBasename(entrypointPath) || 'entrypoint'
-  meta.textContent = `${entrypointLabel} • ${handlerCount} handlers • ${edges.length} edges${timerCount ? ` • ${timerCount} timers` : ''}${effectCount ? ` • ${effectCount} effects` : ''}${visibleControlGraphEdges.length ? ` • ${visibleControlGraphEdges.length} control` : ''}${cycles.length ? ` • ${cycleLabel}` : ''}${mixedCount ? ` • ${mixedCount} mixed` : ''}${boundedControlCount ? ` • ${boundedControlCount} bounded-control` : ''}${unboundedControlCount ? ` • ${unboundedControlCount} unbounded-control` : ''}`
+  meta.textContent = `${entrypointLabel} • ${handlerCount} handlers • ${edges.length} edges${timerCount ? ` • ${timerCount} timers` : ''}${effectCount ? ` • ${effectCount} effects` : ''}${visibleControlGraphEdges.length ? ` • ${visibleControlGraphEdges.length} control` : ''}${cycles.length ? ` • ${cycleLabel}` : ''}${mixedCount ? ` • ${mixedCount} mixed` : ''}${boundedControlCount ? ` • ${boundedControlCount} bounded-control` : ''}${unboundedControlCount ? ` • ${unboundedControlCount} unbounded-control` : ''}${operationalControlCount ? ` • ${operationalControlCount} operational-control` : ''}`
   toolbar.appendChild(meta)
 
   if (transitions.length > 0) {
@@ -3783,6 +5677,7 @@ function renderNextVGraph(data = {}, options = {}) {
     controlLegend.className = 'nextv-graph-legend'
     appendTransitionChip(controlLegend, 'control bounded', 'control-bounded')
     appendTransitionChip(controlLegend, 'control unbounded', 'control-unbounded')
+    appendTransitionChip(controlLegend, 'control operational', 'control-operational')
     appendTransitionChip(controlLegend, 'control mixed', 'control-mixed')
     appendTransitionChip(controlLegend, 'control unknown', 'control-unknown')
     wrap.appendChild(controlLegend)
@@ -4057,17 +5952,18 @@ function renderNextVGraph(data = {}, options = {}) {
       return String(edge.from ?? '').trim()
     }
 
-    // Place label near the arrowhead: at parameter t along the final segment, offset to the side.
-    const appendEdgeLabelAt = (ax, ay, bx, by, t = 0.78) => {
+    // Place label near the center of the edge segment, offset to the side.
+    const appendEdgeLabelAt = (ax, ay, bx, by, t = 0.5) => {
       const labelText = getSubscriptionEdgeLabelText()
       if (!labelText) return
-      const lx = ax + (bx - ax) * t
-      const ly = ay + (by - ay) * t
+      const clampedT = Math.max(0.2, Math.min(0.8, Number(t) || 0.5))
+      const lx = ax + (bx - ax) * clampedT
+      const ly = ay + (by - ay) * clampedT
       // Perpendicular offset so label doesn't sit on the line.
       const len = Math.hypot(bx - ax, by - ay) || 1
       const nx = -(by - ay) / len
       const ny = (bx - ax) / len
-      const offset = 11
+      const offset = Math.max(9, Math.min(15, len * 0.15))
       const edgeLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text')
       edgeLabel.setAttribute('class', 'nextv-graph-edge-label subscription')
       edgeLabel.setAttribute('x', String(Math.round(lx + nx * offset)))
@@ -4134,8 +6030,8 @@ function renderNextVGraph(data = {}, options = {}) {
         pathEl.appendChild(title)
         nextVGraphState.edgeElements.set(edgeKey, pathEl)
         svg.appendChild(pathEl)
-        // Label on the second half of the curve, near the arrowhead.
-        appendEdgeLabelAt(waypoint.x, waypoint.y, ex, ey, 0.55)
+        // Label near the geometric center of the collapsed edge route.
+        appendEdgeLabelAt(sx, sy, ex, ey, 0.5)
         continue
       }
     }
@@ -4157,10 +6053,16 @@ function renderNextVGraph(data = {}, options = {}) {
       nextVGraphState.edgeElements.set(edgeKey, pathEl)
       svg.appendChild(pathEl)
 
-      // Label near the arrowhead: use the segment from the second-to-last to the last bendpoint.
-      const lastIdx = bendpoints.length - 1
-      const secondLastIdx = Math.max(0, lastIdx - 1)
-      appendEdgeLabelAt(bendpoints[secondLastIdx].x, bendpoints[secondLastIdx].y, bendpoints[lastIdx].x, bendpoints[lastIdx].y)
+      // Label near the middle of the routed path for better readability.
+      const midStartIdx = Math.max(0, Math.floor((bendpoints.length - 2) / 2))
+      const midEndIdx = Math.min(bendpoints.length - 1, midStartIdx + 1)
+      appendEdgeLabelAt(
+        bendpoints[midStartIdx].x,
+        bendpoints[midStartIdx].y,
+        bendpoints[midEndIdx].x,
+        bendpoints[midEndIdx].y,
+        0.5,
+      )
       continue
     }
 
@@ -4188,7 +6090,7 @@ function renderNextVGraph(data = {}, options = {}) {
     line.appendChild(title)
     nextVGraphState.edgeElements.set(edgeKey, line)
     svg.appendChild(line)
-    appendEdgeLabelAt(x1, y1, x2, y2)
+    appendEdgeLabelAt(x1, y1, x2, y2, 0.5)
   }
 
   for (const nodeObj of graphNodes) {
@@ -4219,6 +6121,13 @@ function renderNextVGraph(data = {}, options = {}) {
         : '' // event and timer nodes carry no classification color
 
     const hasWarnings = isHandlerNode && Array.isArray(transition?.warnings) && transition.warnings.length > 0
+    const hasAgentCalls = isHandlerNode && (
+      (Array.isArray(transition?.agents) && transition.agents.length > 0)
+      || getTransitionClassName(transition?.classification) === 'llm'
+    )
+    const parallelAgentCount = isHandlerNode && Array.isArray(transition?.agents) ? transition.agents.length : 0
+    const hasParallelAgents = isHandlerNode && transition?.hasParallelAgents === true && parallelAgentCount > 1
+    const hasParallelSingle = isHandlerNode && transition?.hasParallelAgents === true && parallelAgentCount <= 1
     const isExternal = isEventNode && externalCandidates.has(nodeId)
     const isDeclaredExternal = isEventNode && nextVGraphState.declaredExternalNodes.has(nodeId)
     const nodeContractWarnings = isEventNode ? (nextVGraphState.contractWarningNodes.get(nodeId) ?? []) : []
@@ -4241,6 +6150,9 @@ function renderNextVGraph(data = {}, options = {}) {
       isHandlerNode ? 'handler-node' : '',
       isTimerNode ? 'timer-node' : '',
       isControlBranchNode ? 'control-branch-node' : '',
+      hasAgentCalls ? 'agent-node' : '',
+      hasParallelAgents ? 'parallel-agent' : '',
+      hasParallelSingle ? 'parallel-agent-single' : '',
       isExternal ? 'external' : '',
       isDeclaredExternal ? 'declared-external' : '',
       hasContractWarnings ? 'contract-warning' : '',
@@ -4258,7 +6170,7 @@ function renderNextVGraph(data = {}, options = {}) {
           ? getNextVGraphHandlerLabel(nodeObj, transition)
           : (nodeObj.eventType ?? nodeId)
     const labelLines = isHandlerNode
-      ? splitNextVGraphHandlerLabelLines(label, { maxLineLength: 20, maxLines: 3 })
+      ? getNextVGraphHandlerLabelLines(nodeObj, transition)
       : [label]
     const visual = getNextVGraphNodeVisual(nodeObj, isEffectNode ? String(effectMeta?.label ?? '') : '')
     const titleParts = [label]
@@ -4274,8 +6186,19 @@ function renderNextVGraph(data = {}, options = {}) {
     if (transition?.classification && isHandlerNode) titleParts.push(`type=${formatTransitionClassification(transition.classification)}`)
     if (emittedEvents.length > 0) titleParts.push(`emits=${emittedEvents.join(', ')}`)
     if (emittedEffects.length > 0) titleParts.push(`effects=${emittedEffects.join(', ')}`)
+    if (hasParallelAgents && Array.isArray(transition?.agents) && transition.agents.length > 0) titleParts.push(`parallel=${transition.agents.join(', ')}`)
     if (Array.isArray(transition?.outputs) && transition.outputs.length > 0) titleParts.push(`outputs=${transition.outputs.join(', ')}`)
     if (Array.isArray(transition?.tools) && transition.tools.length > 0) titleParts.push(`tools=${transition.tools.map((tool) => tool.name || 'dynamic').join(', ')}`)
+    if (Array.isArray(transition?.tryBoundaries) && transition.tryBoundaries.length > 0) {
+      const tryBoundarySummary = transition.tryBoundaries
+        .map((boundary) => {
+          const operation = String(boundary?.operation ?? 'call')
+          const target = String(boundary?.target ?? '').trim()
+          return target ? `${operation}->${target}` : operation
+        })
+        .join(', ')
+      titleParts.push(`try=${tryBoundarySummary}`)
+    }
     if (hasWarnings) titleParts.push(`warnings=${transition.warnings.map((warning) => warning.code).join(', ')}`)
     title.textContent = titleParts.join(' | ')
     group.appendChild(title)
@@ -4303,17 +6226,20 @@ function renderNextVGraph(data = {}, options = {}) {
     text.setAttribute('x', String(pos.x))
     text.setAttribute('y', String(pos.y))
     text.setAttribute('dominant-baseline', 'middle')
-    if (isHandlerNode && labelLines.length > 1) {
+    if (isHandlerNode) {
       text.textContent = ''
       const lineHeight = 12
       const startDy = -((labelLines.length - 1) * lineHeight) / 2
+      const tspans = []
       for (let idx = 0; idx < labelLines.length; idx++) {
         const tspan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan')
         tspan.setAttribute('x', String(pos.x))
         tspan.setAttribute('dy', String(idx === 0 ? startDy : lineHeight))
         tspan.textContent = String(labelLines[idx] ?? '')
         text.appendChild(tspan)
+        tspans.push(tspan)
       }
+      nextVGraphState.handlerLabelLineElements.set(nodeId, tspans)
     } else {
       text.textContent = label
     }
@@ -4329,18 +6255,34 @@ function renderNextVGraph(data = {}, options = {}) {
     }
 
     if (isHandlerNode && hasWarnings) {
+      const wx = Math.round(pos.x + visual.width / 2)
+      const wy = Math.round(pos.y - visual.height / 2)
+      const warningCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+      warningCircle.setAttribute('cx', String(wx))
+      warningCircle.setAttribute('cy', String(wy))
+      warningCircle.setAttribute('r', '8')
+      warningCircle.setAttribute('class', 'nextv-graph-node-warning-bg')
+      group.appendChild(warningCircle)
       const warningTag = document.createElementNS('http://www.w3.org/2000/svg', 'text')
-      warningTag.setAttribute('x', String(pos.x + visual.badgeOffsetX))
-      warningTag.setAttribute('y', String(pos.y + visual.badgeOffsetY))
+      warningTag.setAttribute('x', String(wx))
+      warningTag.setAttribute('y', String(wy))
       warningTag.setAttribute('class', 'nextv-graph-node-warning')
       warningTag.textContent = '!'
       group.appendChild(warningTag)
     }
 
     if (isEventNode && hasContractWarnings) {
+      const cx = Math.round(pos.x - visual.width / 2)
+      const cy = Math.round(pos.y - visual.height / 2)
+      const contractCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+      contractCircle.setAttribute('cx', String(cx))
+      contractCircle.setAttribute('cy', String(cy))
+      contractCircle.setAttribute('r', '8')
+      contractCircle.setAttribute('class', 'nextv-graph-node-contract-warning-bg')
+      group.appendChild(contractCircle)
       const contractTag = document.createElementNS('http://www.w3.org/2000/svg', 'text')
-      contractTag.setAttribute('x', String(pos.x - visual.badgeOffsetX))
-      contractTag.setAttribute('y', String(pos.y + visual.badgeOffsetY))
+      contractTag.setAttribute('x', String(cx))
+      contractTag.setAttribute('y', String(cy))
       contractTag.setAttribute('class', 'nextv-graph-node-contract-warning')
       contractTag.textContent = '!'
       group.appendChild(contractTag)
@@ -4355,6 +6297,10 @@ function renderNextVGraph(data = {}, options = {}) {
       stepTag.textContent = ''
       group.appendChild(stepTag)
       nextVGraphState.stepLabelElements.set(nodeId, stepTag)
+
+      if (hasAgentCalls) {
+        nextVGraphState.agentTimerLabelElements.set(nodeId, null)
+      }
     }
 
     // Register node element by ID for runtime visual updates.
@@ -4403,6 +6349,7 @@ function renderNextVGraph(data = {}, options = {}) {
   applyNextVGraphZoom()
   setSelectedGraphNode(nextVGraphState.selectedNodeId)
   applyNextVGraphRuntimeVisuals()
+  syncNextVGraphAgentTicker()
   flushNextVGraphPendingTimerPulses()
   window.requestAnimationFrame(() => {
     if (!preserveViewport) {
@@ -4415,7 +6362,7 @@ function renderNextVGraph(data = {}, options = {}) {
   })
 }
 
-async function refreshNextVGraph(options = {}) {
+export async function refreshNextVGraph(options = {}) {
   const { silent = false, preserveViewport = false, viewportStateOverride = null } = options
   if (!nextVGraphOutput) return
 
@@ -4462,7 +6409,7 @@ async function refreshNextVGraph(options = {}) {
   }
 }
 
-function appendNextVLogRow(line, cls = '') {
+export function appendNextVLogRow(line, cls = '') {
   if (!isNextVMode()) {
     appendScriptLogRow(line, cls)
     return
@@ -4475,14 +6422,56 @@ function appendNextVLogRow(line, cls = '') {
 
   if (cls === 'content') {
     appendPanelLogRow(nextVConsoleOutput, line, cls)
-    appendPanelLogRow(nextVEventsOutput, line, 'result')
     return
   }
 
   appendPanelLogRow(nextVEventsOutput, line, cls)
 }
 
-function extractErrorLineNumber(raw) {
+export function appendNextVDebugRow(label, debugPayload) {
+  if (!isNextVMode()) return
+  const panel = nextVEventsOutput
+  if (!panel) return
+
+  const rowId = 'nextv-debug-' + Math.random().toString(36).slice(2)
+  
+  // Create toggle button
+  const toggleBtn = document.createElement('button')
+  toggleBtn.type = 'button'
+  toggleBtn.className = 'nextv-debug-toggle'
+  toggleBtn.textContent = '▶'
+  toggleBtn.title = 'show'
+  toggleBtn.setAttribute('aria-label', 'show')
+  
+  // Create row with label
+  const row = document.createElement('div')
+  row.className = 'script-log-row result'
+  row.appendChild(toggleBtn)
+  row.appendChild(document.createTextNode(' ' + label))
+  panel.appendChild(row)
+  
+  // Create debug payload element
+  const debugEl = document.createElement('pre')
+  debugEl.id = rowId
+  debugEl.className = 'nextv-debug-payload'
+  debugEl.hidden = true
+  debugEl.textContent = debugPayload
+  panel.appendChild(debugEl)
+  
+  // Attach click handler
+  toggleBtn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const isExpanded = !debugEl.hidden
+    debugEl.hidden = isExpanded
+    toggleBtn.textContent = isExpanded ? '▶' : '▼'
+    toggleBtn.title = isExpanded ? 'show' : 'hide'
+    toggleBtn.setAttribute('aria-label', isExpanded ? 'show' : 'hide')
+  })
+  
+  panel.scrollTop = panel.scrollHeight
+}
+
+export function extractErrorLineNumber(raw) {
   const text = String(raw ?? '')
   if (!text) return 0
 
@@ -4504,11 +6493,11 @@ function extractErrorLineNumber(raw) {
   return 0
 }
 
-function normalizeErrorSourcePath(raw) {
+export function normalizeErrorSourcePath(raw) {
   return String(raw ?? '').trim().replace(/\\/g, '/')
 }
 
-function extractErrorSourcePath(raw) {
+export function extractErrorSourcePath(raw) {
   const text = String(raw ?? '')
   if (!text) return ''
 
@@ -4527,25 +6516,26 @@ function extractErrorSourcePath(raw) {
   return ''
 }
 
-function formatErrorMessageWithSource(message, line, sourcePath) {
+export function formatErrorMessageWithSource(message, line, sourcePath) {
   const text = String(message ?? 'runtime error').trim() || 'runtime error'
   const lineNumber = Number(line)
   const normalizedSourcePath = normalizeErrorSourcePath(sourcePath)
+  const fileLabel = normalizedSourcePath ? pathBasename(normalizedSourcePath) : ''
   const hasLine = Number.isFinite(lineNumber) && lineNumber > 0
 
   if (normalizedSourcePath && /\bfile\s*=\s*[^\s]+/i.test(text)) {
     return text
   }
-  if (!normalizedSourcePath && !hasLine) {
+  if (!fileLabel && !hasLine) {
     return text
   }
-  if (!normalizedSourcePath && (/\bline\s*=\s*\d+\b/i.test(text) || /\bline\s+\d+\b/i.test(text) || /\bat\s+line\s+\d+\b/i.test(text))) {
+  if (!fileLabel && (/\bline\s*=\s*\d+\b/i.test(text) || /\bline\s+\d+\b/i.test(text) || /\bat\s+line\s+\d+\b/i.test(text))) {
     return text
   }
 
   const parts = []
-  if (normalizedSourcePath) {
-    parts.push(`file=${normalizedSourcePath}`)
+  if (fileLabel) {
+    parts.push(`file=${fileLabel}`)
   }
   if (hasLine) {
     parts.push(`line=${lineNumber}`)
@@ -4554,7 +6544,7 @@ function formatErrorMessageWithSource(message, line, sourcePath) {
   return `${parts.join(' ')} ${text}`
 }
 
-function getErrorMessageAndSource(payloadLike, fallbackMessage = 'runtime error') {
+export function getErrorMessageAndSource(payloadLike, fallbackMessage = 'runtime error') {
   if (payloadLike == null) {
     return { message: fallbackMessage, line: 0, sourcePath: '' }
   }
@@ -4593,12 +6583,19 @@ function getErrorMessageAndSource(payloadLike, fallbackMessage = 'runtime error'
   return { message, line, sourcePath }
 }
 
-function appendNextVErrorLog(payloadLike, prefix = '[nextv:error]') {
+export function appendNextVErrorLog(payloadLike, prefix = '[nextv:error]') {
   const { message, line, sourcePath } = getErrorMessageAndSource(payloadLike)
   appendNextVLogRow(`${prefix} ${formatErrorMessageWithSource(message, line, sourcePath)}`, 'error')
 }
 
-function normalizeRelativePath(pathValue) {
+
+// --- Imports (auto-generated by gen-es-modules.js) ---
+import {
+  nextVWorkspaceDirInput,
+  workspace
+} from './state.js'
+
+export function normalizeRelativePath(pathValue) {
   return String(pathValue ?? '')
     .trim()
     .replace(/\\/g, '/')
@@ -4608,13 +6605,13 @@ function normalizeRelativePath(pathValue) {
     .replace(/\/+$/, '')
 }
 
-function normalizeNextVWorkspaceDir(pathValue) {
+export function normalizeNextVWorkspaceDir(pathValue) {
   const normalized = normalizeRelativePath(pathValue)
   if (!normalized || normalized === '.') return ''
   return normalized
 }
 
-function resolveNextVPath(pathValue) {
+export function resolveNextVPath(pathValue) {
   const pathPart = normalizeRelativePath(pathValue)
   if (!pathPart) return ''
 
@@ -4626,7 +6623,18 @@ function resolveNextVPath(pathValue) {
   return `${workspaceDir}/${pathPart}`
 }
 
-function normalizePathSegments(pathValue) {
+export function canonicalizeFloatingPanelPath(pathValue) {
+  const normalized = normalizeRelativePath(pathValue)
+  if (!normalized) return ''
+
+  const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
+  if (!workspaceDir) return normalized
+  if (normalized === workspaceDir || normalized.startsWith(`${workspaceDir}/`)) return normalized
+  if (normalized.startsWith('workspaces-local/') || normalized.startsWith('workspaces/')) return normalized
+  return `${workspaceDir}/${normalized}`
+}
+
+export function normalizePathSegments(pathValue) {
   const normalized = normalizeRelativePath(pathValue)
   if (!normalized) return ''
 
@@ -4642,17 +6650,17 @@ function normalizePathSegments(pathValue) {
   return parts.join('/')
 }
 
-function pathDirname(pathValue) {
+export function pathDirname(pathValue) {
   const normalized = normalizeRelativePath(pathValue)
   if (!normalized || !normalized.includes('/')) return ''
   return normalized.slice(0, normalized.lastIndexOf('/'))
 }
 
-function joinRelativePath(basePath, childPath) {
+export function joinRelativePath(basePath, childPath) {
   return normalizePathSegments([basePath, childPath].filter(Boolean).join('/'))
 }
 
-function toNextVRelativePath(workspacePath) {
+export function toNextVRelativePath(workspacePath) {
   const normalizedPath = normalizeRelativePath(workspacePath)
   const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
   if (!normalizedPath) return ''
@@ -4661,7 +6669,7 @@ function toNextVRelativePath(workspacePath) {
   return normalizedPath.slice(workspaceDir.length + 1)
 }
 
-function normalizeGraphSourcePathForEditor(pathValue) {
+export function normalizeGraphSourcePathForEditor(pathValue) {
   const normalized = normalizeRelativePath(pathValue)
   if (!normalized) return ''
 
@@ -4686,14 +6694,141 @@ function normalizeGraphSourcePathForEditor(pathValue) {
   return normalized
 }
 
-function updateOpenFileLabel(filePath = '') {
+// --- Imports (auto-generated by gen-es-modules.js) ---
+import {
+  DEFAULT_EDITOR_GRID_SPLIT_PERCENT,
+  MIN_EDITOR_GRID_SPLIT_PERCENT,
+  _setActiveEditorGridResize,
+  _setActivePaneId,
+  _setActiveScriptLine,
+  _setDeleteConfirmTickerId,
+  _setDeleteConfirmTimeoutId,
+  _setPendingDeleteConfirmResolver,
+  activeEditorGridResize,
+  activePaneId,
+  activeScriptLine,
+  deleteConfirmTickerId,
+  deleteConfirmTimeoutId,
+  dirtyEditsCache,
+  editorGridCenterHandle,
+  editorGridSplitState,
+  editorLayoutGridBtn,
+  editorLayoutSplitBtn,
+  editorLayoutState,
+  editorPaneDescriptors,
+  editorPaneStateById,
+  editorPanesGrid,
+  fileTree,
+  filetreeDeleteConfirm,
+  filetreeDeleteDesc,
+  filetreeDeleteTimer,
+  inputPanelState,
+  nextVAutoSaveInput,
+  nextVAttachWsUrlInput,
+  nextVEditorTabSizeInput,
+  nextVEntrypointInput,
+  nextVFileState,
+  nextVGraphState,
+  nextVPanelState,
+  nextVRuntimeTargetInput,
+  nextVRuntimeTargetState,
+  nextVViewState,
+  nextVWorkspaceDirInput,
+  openFileTabs,
+  paneAssignments,
+  pendingDeleteConfirmResolver,
+  scriptCache,
+  scriptOpenFileLabel,
+  storageKeys,
+  tracePanelState,
+  workspace
+} from './state.js'
+import {
+  isNextVMode,
+  normalizeNextVGraphDirection,
+  normalizeNextVRuntimeTarget,
+  getNextVRuntimeTarget,
+  setNextVPrimaryView
+} from './03_ui_controls.js'
+import {
+  areEditorPathsEquivalent,
+  syncFloatingPanelsFromEditorBuffer,
+  openFloatingGraphCodePanel
+} from './04_floating_panels.js'
+import {
+  appendNextVErrorLog
+} from './07_graph_render.js'
+import {
+  normalizeRelativePath,
+  normalizeNextVWorkspaceDir,
+  resolveNextVPath,
+  pathDirname,
+  toNextVRelativePath
+} from './08_path_utils.js'
+import {
+  pathBasename
+} from './10_file_tree.js'
+import {
+  setStatus,
+  appendScriptLogRow,
+  syncScriptBadgeState,
+  clearScriptView,
+  normalizeNewlines,
+  syncScriptMirrorScroll
+} from './13_layout.js'
+
+export function updateOpenFileLabel(filePath = '') {
   if (!scriptOpenFileLabel) return
   const normalized = normalizeRelativePath(filePath)
   scriptOpenFileLabel.textContent = normalized || 'no file open'
   scriptOpenFileLabel.title = normalized || 'no file open'
 }
 
-function ensureOpenFileTab(filePath) {
+const NEXTV_EDITOR_TAB_SIZE_OPTIONS = new Set([2, 4, 8])
+
+export function normalizeNextVEditorTabSize(value) {
+  const parsed = Number(value)
+  if (NEXTV_EDITOR_TAB_SIZE_OPTIONS.has(parsed)) return parsed
+  return 4
+}
+
+export function getCurrentNextVEditorTabSize() {
+  return normalizeNextVEditorTabSize(
+    nextVEditorTabSizeInput?.value
+      ?? localStorage.getItem(storageKeys.nextVEditorTabSize)
+      ?? '4'
+  )
+}
+
+export function applyNextVEditorTabSize(tabSize, options = {}) {
+  const { persist = true } = options
+  const normalized = normalizeNextVEditorTabSize(tabSize)
+
+  if (nextVEditorTabSizeInput) {
+    nextVEditorTabSizeInput.value = String(normalized)
+  }
+
+  for (const descriptor of editorPaneDescriptors.values()) {
+    const textarea = descriptor?.textarea
+    if (!textarea) continue
+    textarea.style.tabSize = String(normalized)
+    textarea.style.MozTabSize = String(normalized)
+  }
+
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVEditorTabSize, String(normalized))
+  }
+
+  return normalized
+}
+
+export function setNextVEditorTabSize(value) {
+  const normalized = applyNextVEditorTabSize(value)
+  persistNextVConfig()
+  return normalized
+}
+
+export function ensureOpenFileTab(filePath) {
   const normalized = normalizeRelativePath(filePath)
   if (!normalized) return
   if (!nextVFileState.openTabs.includes(normalized)) {
@@ -4701,13 +6836,13 @@ function ensureOpenFileTab(filePath) {
   }
 }
 
-function removeOpenFileTab(filePath) {
+export function removeOpenFileTab(filePath) {
   const normalized = normalizeRelativePath(filePath)
   if (!normalized) return
   nextVFileState.openTabs = nextVFileState.openTabs.filter((path) => path !== normalized)
 }
 
-async function closeOpenFileTab(filePath) {
+export async function closeOpenFileTab(filePath) {
   const normalized = normalizeRelativePath(filePath)
   if (!normalized) return
 
@@ -4751,7 +6886,7 @@ async function closeOpenFileTab(filePath) {
   renderOpenFileTabs()
 }
 
-function renderOpenFileTabs() {
+export function renderOpenFileTabs() {
   if (!openFileTabs) return
   openFileTabs.innerHTML = ''
 
@@ -4831,9 +6966,33 @@ function renderOpenFileTabs() {
   }
 
   openFileTabs.appendChild(fragment)
+
+  // Drop zone: drag a tab here to open it in a floating panel in graph view
+  const dropZone = document.createElement('div')
+  dropZone.className = 'open-file-tab-graph-drop'
+  dropZone.title = 'Drop a tab here to open in graph view'
+  dropZone.textContent = '⬡ graph'
+  dropZone.addEventListener('dragover', (e) => {
+    if (!e.dataTransfer.types.includes('text/plain')) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'link'
+    dropZone.classList.add('drag-over')
+  })
+  dropZone.addEventListener('dragleave', () => {
+    dropZone.classList.remove('drag-over')
+  })
+  dropZone.addEventListener('drop', async (e) => {
+    e.preventDefault()
+    dropZone.classList.remove('drag-over')
+    const filePath = e.dataTransfer.getData('text/plain')
+    if (!filePath) return
+    setNextVPrimaryView('graph')
+    await openFloatingGraphCodePanel({ filePath })
+  })
+  openFileTabs.appendChild(dropZone)
 }
 
-function persistNextVOpenFile(filePath = '') {
+export function persistNextVOpenFile(filePath = '') {
   const normalized = normalizeRelativePath(filePath)
   nextVFileState.openFilePath = normalized
   if (normalized) ensureOpenFileTab(normalized)
@@ -4843,17 +7002,17 @@ function persistNextVOpenFile(filePath = '') {
   renderOpenFileTabs()
 }
 
-function getStoredNextVOpenFile() {
+export function getStoredNextVOpenFile() {
   return normalizeRelativePath(localStorage.getItem(storageKeys.nextVOpenFile) ?? '')
 }
 
-function clearNextVAutoSaveTimer() {
+export function clearNextVAutoSaveTimer() {
   if (!nextVFileState.autoSaveTimer) return
   window.clearTimeout(nextVFileState.autoSaveTimer)
   nextVFileState.autoSaveTimer = null
 }
 
-function rememberExpandedPath(filePath) {
+export function rememberExpandedPath(filePath) {
   const normalized = normalizeRelativePath(filePath)
   if (!normalized) return
   const segments = normalized.split('/')
@@ -4864,7 +7023,7 @@ function rememberExpandedPath(filePath) {
   }
 }
 
-function getTreeNodeIcon(node, expanded = false) {
+export function getTreeNodeIcon(node, expanded = false) {
   if (node?.type === 'dir') return expanded ? '▾' : '▸'
 
   const ext = String(node?.ext ?? '').toLowerCase()
@@ -4886,7 +7045,7 @@ const ctxMenu = {
   targetType: null, // 'file' | 'dir' | 'root'
 }
 
-function initFileTreeCtxMenu() {
+export function initFileTreeCtxMenu() {
   ctxMenu.el = document.getElementById('filetree-ctx-menu')
   document.addEventListener('click', hideFileTreeCtxMenu)
   document.addEventListener('keydown', (e) => {
@@ -4899,7 +7058,7 @@ function initFileTreeCtxMenu() {
   })
 }
 
-function showFileTreeCtxMenu(event, path, type) {
+export function showFileTreeCtxMenu(event, path, type) {
   if (!ctxMenu.el) return
   event.preventDefault()
   event.stopPropagation()
@@ -4922,44 +7081,44 @@ function showFileTreeCtxMenu(event, path, type) {
   ctxMenu.el.focus?.()
 }
 
-function hideFileTreeCtxMenu() {
+export function hideFileTreeCtxMenu() {
   if (ctxMenu.el) ctxMenu.el.style.display = 'none'
   ctxMenu.targetPath = null
   ctxMenu.targetType = null
 }
 
-function clearDeleteConfirmTimers() {
+export function clearDeleteConfirmTimers() {
   if (deleteConfirmTimeoutId != null) {
     window.clearTimeout(deleteConfirmTimeoutId)
-    deleteConfirmTimeoutId = null
+    _setDeleteConfirmTimeoutId(null)
   }
   if (deleteConfirmTickerId != null) {
     window.clearInterval(deleteConfirmTickerId)
-    deleteConfirmTickerId = null
+    _setDeleteConfirmTickerId(null)
   }
 }
 
-function hideDeleteConfirmModal() {
+export function hideDeleteConfirmModal() {
   clearDeleteConfirmTimers()
   if (filetreeDeleteConfirm) {
     filetreeDeleteConfirm.style.display = 'none'
   }
 }
 
-function resolvePendingDeleteConfirm(confirmed) {
+export function resolvePendingDeleteConfirm(confirmed) {
   const resolver = pendingDeleteConfirmResolver
-  pendingDeleteConfirmResolver = null
+  _setPendingDeleteConfirmResolver(null)
   hideDeleteConfirmModal()
   if (resolver) resolver(Boolean(confirmed))
 }
 
-function updateDeleteConfirmTimer(endAtMs) {
+export function updateDeleteConfirmTimer(endAtMs) {
   if (!filetreeDeleteTimer) return
   const remainingMs = Math.max(0, endAtMs - Date.now())
   filetreeDeleteTimer.textContent = (remainingMs / 1000).toFixed(1)
 }
 
-function buildDeleteConfirmDescription(type, targetPath) {
+export function buildDeleteConfirmDescription(type, targetPath) {
   const pathText = String(targetPath ?? '').trim() || '(unknown path)'
   if (type === 'dir') {
     return `Delete folder "${pathText}" and all contents?`
@@ -4967,7 +7126,7 @@ function buildDeleteConfirmDescription(type, targetPath) {
   return `Delete file "${pathText}"?`
 }
 
-function requestTimedDeleteConfirm(type, targetPath) {
+export function requestTimedDeleteConfirm(type, targetPath) {
   const canUseModal = Boolean(filetreeDeleteConfirm && filetreeDeleteDesc && filetreeDeleteTimer)
   if (!canUseModal) {
     return Promise.resolve(window.confirm(buildDeleteConfirmDescription(type, targetPath)))
@@ -4988,23 +7147,23 @@ function requestTimedDeleteConfirm(type, targetPath) {
   }
 
   return new Promise((resolve) => {
-    pendingDeleteConfirmResolver = resolve
-    deleteConfirmTickerId = window.setInterval(() => {
+    _setPendingDeleteConfirmResolver(resolve)
+    _setDeleteConfirmTickerId(window.setInterval(() => {
       updateDeleteConfirmTimer(endAtMs)
-    }, 100)
-    deleteConfirmTimeoutId = window.setTimeout(() => {
+    }, 100))
+    _setDeleteConfirmTimeoutId(window.setTimeout(() => {
       resolvePendingDeleteConfirm(false)
       setStatus('delete cancelled (timeout)', 'responding')
-    }, timeoutMs)
+    }, timeoutMs))
   })
 }
 
-function onDeleteConfirmApprove() {
+export function onDeleteConfirmApprove() {
   if (!pendingDeleteConfirmResolver) return
   resolvePendingDeleteConfirm(true)
 }
 
-function onDeleteConfirmCancel() {
+export function onDeleteConfirmCancel() {
   if (!pendingDeleteConfirmResolver) {
     hideDeleteConfirmModal()
     return
@@ -5013,7 +7172,7 @@ function onDeleteConfirmCancel() {
   setStatus('delete cancelled')
 }
 
-function getCtxMenuParentPath() {
+export function getCtxMenuParentPath() {
   if (ctxMenu.targetType === 'dir') {
     return normalizeRelativePath(ctxMenu.targetPath)
   }
@@ -5023,19 +7182,19 @@ function getCtxMenuParentPath() {
   return ''
 }
 
-function ctxMenuNewFile() {
+export function ctxMenuNewFile() {
   const parentPath = getCtxMenuParentPath()
   hideFileTreeCtxMenu()
   showInlineNameInput(parentPath, 'file')
 }
 
-function ctxMenuNewFolder() {
+export function ctxMenuNewFolder() {
   const parentPath = getCtxMenuParentPath()
   hideFileTreeCtxMenu()
   showInlineNameInput(parentPath, 'dir')
 }
 
-async function ctxMenuRename() {
+export async function ctxMenuRename() {
   const path = normalizeRelativePath(ctxMenu.targetPath)
   const type = ctxMenu.targetType
   hideFileTreeCtxMenu()
@@ -5064,7 +7223,7 @@ async function ctxMenuRename() {
   }
 }
 
-async function ctxMenuDelete() {
+export async function ctxMenuDelete() {
   const path = ctxMenu.targetPath
   const type = ctxMenu.targetType
   hideFileTreeCtxMenu()
@@ -5075,7 +7234,7 @@ async function ctxMenuDelete() {
 
 // --- Inline name input ---
 
-function showInlineNameInput(parentFolderPath, kind) {
+export function showInlineNameInput(parentFolderPath, kind) {
   if (parentFolderPath) {
     nextVFileState.expandedDirs.add(parentFolderPath)
     renderWorkspaceTree()
@@ -5141,7 +7300,7 @@ function showInlineNameInput(parentFolderPath, kind) {
 
 // --- Create / Delete operations ---
 
-async function doCreateFile(parentFolderPath, name, fullPath) {
+export async function doCreateFile(parentFolderPath, name, fullPath) {
   try {
     const targetPath = resolveNextVPath(fullPath)
     if (!targetPath) {
@@ -5168,7 +7327,7 @@ async function doCreateFile(parentFolderPath, name, fullPath) {
   }
 }
 
-async function doCreateFolder(parentFolderPath, name, fullPath) {
+export async function doCreateFolder(parentFolderPath, name, fullPath) {
   try {
     const targetPath = resolveNextVPath(fullPath)
     if (!targetPath) {
@@ -5194,7 +7353,7 @@ async function doCreateFolder(parentFolderPath, name, fullPath) {
   }
 }
 
-async function doDeleteFile(filePath) {
+export async function doDeleteFile(filePath) {
   const confirmed = await requestTimedDeleteConfirm('file', filePath)
   if (!confirmed) return
   try {
@@ -5217,7 +7376,7 @@ async function doDeleteFile(filePath) {
   }
 }
 
-async function doDeleteFolder(folderPath) {
+export async function doDeleteFolder(folderPath) {
   const confirmed = await requestTimedDeleteConfirm('dir', folderPath)
   if (!confirmed) return
   try {
@@ -5246,7 +7405,7 @@ async function doDeleteFolder(folderPath) {
   }
 }
 
-function remapPathPrefix(pathValue, fromPrefix, toPrefix) {
+export function remapPathPrefix(pathValue, fromPrefix, toPrefix) {
   const normalizedPath = normalizeRelativePath(pathValue)
   const from = normalizeRelativePath(fromPrefix)
   const to = normalizeRelativePath(toPrefix)
@@ -5256,7 +7415,7 @@ function remapPathPrefix(pathValue, fromPrefix, toPrefix) {
   return `${to}${normalizedPath.slice(from.length)}`
 }
 
-function remapMapKeysByPrefix(mapRef, fromPrefix, toPrefix) {
+export function remapMapKeysByPrefix(mapRef, fromPrefix, toPrefix) {
   const entries = Array.from(mapRef.entries())
   let changed = false
   for (const [key, value] of entries) {
@@ -5269,7 +7428,7 @@ function remapMapKeysByPrefix(mapRef, fromPrefix, toPrefix) {
   return changed
 }
 
-function remapEditorStatePaths(oldPath, newPath) {
+export function remapEditorStatePaths(oldPath, newPath) {
   const oldNormalized = normalizeRelativePath(oldPath)
   const newNormalized = normalizeRelativePath(newPath)
   if (!oldNormalized || !newNormalized) return
@@ -5302,7 +7461,7 @@ function remapEditorStatePaths(oldPath, newPath) {
   syncScriptBadgeState()
 }
 
-async function doRenameFile(filePath, newName) {
+export async function doRenameFile(filePath, newName) {
   try {
     const sourcePath = normalizeRelativePath(filePath)
     if (!sourcePath) {
@@ -5335,7 +7494,7 @@ async function doRenameFile(filePath, newName) {
   }
 }
 
-async function doRenameFolder(folderPath, newName) {
+export async function doRenameFolder(folderPath, newName) {
   try {
     const sourcePath = normalizeRelativePath(folderPath)
     if (!sourcePath) {
@@ -5368,7 +7527,7 @@ async function doRenameFolder(folderPath, newName) {
   }
 }
 
-function renderFileTreeNode(node) {
+export function renderFileTreeNode(node) {
   const wrapper = document.createElement('div')
   wrapper.className = 'file-tree-node'
   wrapper.dataset.nodePath = normalizeRelativePath(node.path)
@@ -5435,7 +7594,7 @@ function renderFileTreeNode(node) {
   return wrapper
 }
 
-function renderWorkspaceTree() {
+export function renderWorkspaceTree() {
   if (!fileTree) return
   fileTree.innerHTML = ''
 
@@ -5463,11 +7622,11 @@ if (fileTree) {
   })
 }
 
-function inferEditorKind() {
+export function inferEditorKind() {
   return 'editor'
 }
 
-async function loadEditorFileContent(filePath, options = {}) {
+export async function loadEditorFileContent(filePath, options = {}) {
   const normalizedPath = normalizeRelativePath(filePath)
   if (!normalizedPath) return null
 
@@ -5481,7 +7640,7 @@ async function loadEditorFileContent(filePath, options = {}) {
   return data
 }
 
-async function loadWorkspaceTree(workspaceDir) {
+export async function loadWorkspaceTree(workspaceDir) {
   const normalizedWorkspaceDir = normalizeNextVWorkspaceDir(workspaceDir)
   const url = `/api/workspace/tree?workspaceDir=${encodeURIComponent(normalizedWorkspaceDir)}`
   const res = await fetch(url)
@@ -5499,7 +7658,7 @@ async function loadWorkspaceTree(workspaceDir) {
   return nextVFileState.tree
 }
 
-async function saveCurrentEditorFile(options = {}) {
+export async function saveCurrentEditorFile(options = {}) {
   const paneId = options.paneId ?? activePaneId
   const state = getPaneState(paneId)
   const silent = options.silent === true
@@ -5517,6 +7676,7 @@ async function saveCurrentEditorFile(options = {}) {
   state.path = savedPath
   state.loadedText = content
   state.dirty = false
+  syncFloatingPanelsFromEditorBuffer(savedPath, content, { markSaved: true })
   dirtyEditsCache.delete(savedPath)
   persistNextVOpenFile(savedPath)
   persistPaneAssignments()
@@ -5533,7 +7693,7 @@ async function saveCurrentEditorFile(options = {}) {
   return true
 }
 
-async function saveEditorFileContent(filePath, content) {
+export async function saveEditorFileContent(filePath, content) {
   const normalizedPath = normalizeRelativePath(filePath)
   if (!normalizedPath) {
     throw new Error('file path required to save')
@@ -5552,11 +7712,18 @@ async function saveEditorFileContent(filePath, content) {
   }
 
   const savedPath = normalizeRelativePath(data.filePath ?? normalizedPath)
+  // Verify write by reading back from the same API surface before reporting success.
+  const verify = await loadEditorFileContent(savedPath, { kind })
+  const verifiedContent = normalizeNewlines(String(verify?.content ?? ''))
+  if (verifiedContent !== payload) {
+    throw new Error(`Save verification failed for ${savedPath}: disk content does not match saved payload.`)
+  }
+
   scriptCache.set(savedPath, payload.split('\n'))
   return { savedPath, bytes: data.bytes ?? 0 }
 }
 
-async function saveAllNextVFiles(options = {}) {
+export async function saveAllNextVFiles(options = {}) {
   const silent = options.silent === true
   const failed = []
   let savedCount = 0
@@ -5599,6 +7766,7 @@ async function saveAllNextVFiles(options = {}) {
         paneState.path = savedPath
         paneState.loadedText = content
         paneState.dirty = false
+        syncFloatingPanelsFromEditorBuffer(savedPath, content, { markSaved: true })
         if (activePaneId === paneIdForTab) persistNextVOpenFile(savedPath)
       }
 
@@ -5633,21 +7801,21 @@ async function saveAllNextVFiles(options = {}) {
 
 // --- Multi-pane editor helpers ---
 
-function getPaneIds() {
+export function getPaneIds() {
   return Array.from(editorLayoutState.paneOrder)
 }
 
-function getPaneState(paneId) {
+export function getPaneState(paneId) {
   const normalizedPaneId = String(paneId ?? editorLayoutState.activePaneId).trim() || editorLayoutState.activePaneId
   return editorPaneStateById.get(normalizedPaneId) ?? editorPaneStateById.get('A')
 }
 
-function getPaneDescriptor(paneId) {
+export function getPaneDescriptor(paneId) {
   const normalizedPaneId = String(paneId ?? editorLayoutState.activePaneId).trim() || editorLayoutState.activePaneId
   return editorPaneDescriptors.get(normalizedPaneId) ?? editorPaneDescriptors.get('A')
 }
 
-function getPaneElements(paneId) {
+export function getPaneElements(paneId) {
   const descriptor = getPaneDescriptor(paneId)
   const normalizedPaneId = String(paneId ?? editorLayoutState.activePaneId).trim() || editorLayoutState.activePaneId
   return {
@@ -5659,7 +7827,7 @@ function getPaneElements(paneId) {
   }
 }
 
-function getPaneEditorShell(paneId) {
+export function getPaneEditorShell(paneId) {
   const { textarea, mirror, gutter, pane } = getPaneElements(paneId)
   return textarea?.closest('.panel-editor-shell')
     || mirror?.closest('.panel-editor-shell')
@@ -5668,47 +7836,48 @@ function getPaneEditorShell(paneId) {
     || null
 }
 
-function updatePaneGutterMetrics(paneId, lineCount) {
+export function updatePaneGutterMetrics(paneId, lineCount) {
   const shell = getPaneEditorShell(paneId)
   if (!shell) return
   const digits = Math.max(4, String(Math.max(1, Number(lineCount) || 1)).length)
   shell.style.setProperty('--editor-gutter-width', `${digits}ch`)
 }
 
-function getPaneTextarea(paneId) {
+export function getPaneTextarea(paneId) {
   return getPaneElements(paneId).textarea
 }
 
-function getPaneMirror(paneId) {
+export function getPaneMirror(paneId) {
   return getPaneElements(paneId).mirror
 }
 
-function getPaneGutter(paneId) {
+export function getPaneGutter(paneId) {
   return getPaneElements(paneId).gutter
 }
 
-function getPaneEl(paneId) {
+export function getPaneEl(paneId) {
   return getPaneElements(paneId).pane
 }
 
-function getPaneTitleEl(paneId) {
+export function getPaneTitleEl(paneId) {
   return getPaneElements(paneId).title
 }
 
-function getPanePath(paneId) {
+export function getPanePath(paneId) {
   return normalizeRelativePath(getPaneState(paneId)?.path)
 }
 
-function findPaneIdByFilePath(filePath) {
+export function findPaneIdByFilePath(filePath) {
   const normalizedFilePath = normalizeRelativePath(filePath)
   if (!normalizedFilePath) return ''
-  for (const paneId of getPaneIds()) {
-    if (getPanePath(paneId) === normalizedFilePath) return paneId
+  for (const paneId of editorLayoutState.allPanes) {
+    const panePath = getPanePath(paneId)
+    if (panePath && areEditorPathsEquivalent(panePath, normalizedFilePath)) return paneId
   }
   return ''
 }
 
-function clearEditorPane(paneId) {
+export function clearEditorPane(paneId) {
   const paneState = getPaneState(paneId)
   const textarea = getPaneTextarea(paneId)
   const previousPath = normalizeRelativePath(paneState.path)
@@ -5722,9 +7891,9 @@ function clearEditorPane(paneId) {
   renderScriptMirrorForPane(paneId, '')
 }
 
-function focusEditorPane(paneId) {
+export function focusEditorPane(paneId) {
   const normalizedPaneId = editorPaneStateById.has(paneId) ? paneId : 'A'
-  activePaneId = normalizedPaneId
+  _setActivePaneId(normalizedPaneId)
   editorLayoutState.activePaneId = normalizedPaneId
   for (const currentPaneId of getPaneIds()) {
     const paneEl = getPaneEl(currentPaneId)
@@ -5732,14 +7901,113 @@ function focusEditorPane(paneId) {
   }
 }
 
-function setEditorLayout(mode) {
+export function clampEditorGridSplitPercent(value) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return DEFAULT_EDITOR_GRID_SPLIT_PERCENT
+  return Math.max(MIN_EDITOR_GRID_SPLIT_PERCENT, Math.min(100 - MIN_EDITOR_GRID_SPLIT_PERCENT, numeric))
+}
+
+export function parseEditorGridSplitPercent(value) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return null
+  return clampEditorGridSplitPercent(numeric)
+}
+
+export function readStoredEditorGridSplit() {
+  try {
+    const raw = localStorage.getItem(storageKeys.nextVEditorGridSplit)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    const xPercent = parseEditorGridSplitPercent(parsed?.xPercent)
+    const yPercent = parseEditorGridSplitPercent(parsed?.yPercent)
+    if (xPercent === null || yPercent === null) return null
+    return { xPercent, yPercent }
+  } catch {
+    return null
+  }
+}
+
+export function persistEditorGridSplit() {
+  try {
+    localStorage.setItem(storageKeys.nextVEditorGridSplit, JSON.stringify(editorGridSplitState))
+  } catch {}
+}
+
+export function applyEditorGridSplit() {
+  if (!editorPanesGrid) return
+  editorPanesGrid.style.setProperty('--editor-grid-split-x', `${editorGridSplitState.xPercent}%`)
+  editorPanesGrid.style.setProperty('--editor-grid-split-y', `${editorGridSplitState.yPercent}%`)
+}
+
+export function setEditorGridSplit(split, options = {}) {
+  editorGridSplitState.xPercent = clampEditorGridSplitPercent(split?.xPercent)
+  editorGridSplitState.yPercent = clampEditorGridSplitPercent(split?.yPercent)
+  applyEditorGridSplit()
+  if (options.persist !== false) {
+    persistEditorGridSplit()
+  }
+}
+
+export function stopEditorGridResize(options = {}) {
+  if (!activeEditorGridResize) return
+  _setActiveEditorGridResize(false)
+  document.body.classList.remove('is-resizing-editor-grid')
+  if (options.persist !== false) {
+    persistEditorGridSplit()
+  }
+}
+
+export function updateEditorGridSplitFromPointer(event) {
+  if (!editorPanesGrid) return
+  const rect = editorPanesGrid.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0) return
+  const xPercent = ((event.clientX - rect.left) / rect.width) * 100
+  const yPercent = ((event.clientY - rect.top) / rect.height) * 100
+  setEditorGridSplit({ xPercent, yPercent }, { persist: false })
+}
+
+export function setupEditorGridCenterHandle() {
+  const storedSplit = readStoredEditorGridSplit()
+  if (storedSplit) {
+    setEditorGridSplit(storedSplit, { persist: false })
+  } else {
+    applyEditorGridSplit()
+  }
+
+  if (!editorGridCenterHandle || editorGridCenterHandle.dataset.bound === '1') return
+  editorGridCenterHandle.dataset.bound = '1'
+
+  editorGridCenterHandle.addEventListener('mousedown', (event) => {
+    if (event.button !== 0) return
+    if (editorLayoutState.layoutMode !== 'grid-2x2') return
+    _setActiveEditorGridResize(true)
+    document.body.classList.add('is-resizing-editor-grid')
+    updateEditorGridSplitFromPointer(event)
+    event.preventDefault()
+  })
+
+  window.addEventListener('mousemove', (event) => {
+    if (!activeEditorGridResize) return
+    updateEditorGridSplitFromPointer(event)
+  })
+
+  window.addEventListener('mouseup', () => {
+    stopEditorGridResize()
+  })
+}
+
+export function setEditorLayout(mode, options = {}) {
   const panesByLayout = {
     'split-2': ['A', 'B'],
     'grid-2x2': ['A', 'B', 'C', 'D'],
   }
+  const persist = options.persist !== false
   const normalizedMode = panesByLayout[mode] ? mode : 'split-2'
   editorLayoutState.layoutMode = normalizedMode
   editorLayoutState.paneOrder = panesByLayout[normalizedMode]
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVEditorLayout, normalizedMode)
+  }
   if (editorPanesGrid) editorPanesGrid.dataset.layout = normalizedMode
   for (const paneId of editorLayoutState.allPanes) {
     const els = editorPaneDescriptors.get(paneId)
@@ -5757,13 +8025,18 @@ function setEditorLayout(mode) {
     editorLayoutGridBtn.classList.toggle('active', isActive)
     editorLayoutGridBtn.setAttribute('aria-pressed', String(isActive))
   }
+  if (normalizedMode === 'grid-2x2') {
+    applyEditorGridSplit()
+  } else {
+    stopEditorGridResize({ persist: false })
+  }
   // If active pane is no longer visible, reset to first pane
   if (!editorLayoutState.paneOrder.includes(editorLayoutState.activePaneId)) {
     focusEditorPane(editorLayoutState.paneOrder[0])
   }
 }
 
-function renderPaneTitles() {
+export function renderPaneTitles() {
   for (const paneId of getPaneIds()) {
     const panePath = getPanePath(paneId)
     const paneTitle = getPaneTitleEl(paneId)
@@ -5773,7 +8046,7 @@ function renderPaneTitles() {
   }
 }
 
-function renderScriptMirrorForPane(paneId, textValue) {
+export function renderScriptMirrorForPane(paneId, textValue) {
   const mirror = getPaneMirror(paneId)
   const gutter = getPaneGutter(paneId)
   const textarea = getPaneTextarea(paneId)
@@ -5816,19 +8089,19 @@ function renderScriptMirrorForPane(paneId, textValue) {
   if (gutter && textarea) gutter.scrollTop = textarea.scrollTop
 }
 
-function onPaneDragOver(event, paneId) {
+export function onPaneDragOver(event, paneId) {
   if (!event.dataTransfer.types.includes('text/plain')) return
   event.preventDefault()
   event.dataTransfer.dropEffect = 'link'
   getPaneEl(paneId)?.classList.add('pane-dragover')
 }
 
-function onPaneDragLeave(event, paneId) {
+export function onPaneDragLeave(event, paneId) {
   if (event.relatedTarget && getPaneEl(paneId)?.contains(event.relatedTarget)) return
   getPaneEl(paneId)?.classList.remove('pane-dragover')
 }
 
-async function onPaneDrop(event, paneId) {
+export async function onPaneDrop(event, paneId) {
   event.preventDefault()
   getPaneEl(paneId)?.classList.remove('pane-dragover')
   const filePath = event.dataTransfer.getData('text/plain')
@@ -5842,27 +8115,70 @@ async function onPaneDrop(event, paneId) {
   }
 }
 
-function persistPaneAssignments() {
+export function persistPaneAssignments() {
   const obj = {}
   for (const [file, pane] of paneAssignments) obj[file] = pane
   try { localStorage.setItem('editor-pane-assignments', JSON.stringify(obj)) } catch {}
 }
 
-function restorePaneAssignments() {
+export function getStoredPaneAssignments(workspaceDir = '') {
+  const normalizedWorkspaceDir = normalizeNextVWorkspaceDir(workspaceDir)
+  const paneToFile = new Map()
   try {
     const raw = localStorage.getItem('editor-pane-assignments')
-    if (!raw) return
+    if (!raw) return []
     const obj = JSON.parse(raw)
-    const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
+    if (!obj || typeof obj !== 'object') return []
     for (const [file, pane] of Object.entries(obj)) {
-      if (editorPaneStateById.has(pane) && (!workspaceDir || file.startsWith(`${workspaceDir}/`))) {
-        openWorkspaceEditorFile(file, { paneId: pane }).catch(() => {})
-      }
+      if (!editorPaneStateById.has(pane)) continue
+      const normalizedFile = normalizeRelativePath(file)
+      if (!normalizedFile) continue
+      if (normalizedWorkspaceDir && !normalizedFile.startsWith(`${normalizedWorkspaceDir}/`)) continue
+      paneToFile.set(pane, normalizedFile)
     }
-  } catch {}
+  } catch {
+    return []
+  }
+
+  return editorLayoutState.allPanes
+    .filter((paneId) => paneToFile.has(paneId))
+    .map((paneId) => ({ paneId, filePath: paneToFile.get(paneId) }))
 }
 
-function scheduleNextVAutoSave() {
+export async function restorePaneAssignments(options = {}) {
+  const workspaceDir = normalizeNextVWorkspaceDir(options.workspaceDir ?? (nextVWorkspaceDirInput?.value ?? ''))
+  const preferredOpenFile = normalizeRelativePath(options.preferredOpenFile ?? '')
+  const entries = getStoredPaneAssignments(workspaceDir)
+  if (entries.length === 0) {
+    return { restoredCount: 0, firstPath: '', focusedPath: '' }
+  }
+
+  let restoredCount = 0
+  let firstPath = ''
+  for (const entry of entries) {
+    try {
+      await openWorkspaceEditorFile(entry.filePath, { paneId: entry.paneId })
+      restoredCount += 1
+      if (!firstPath) firstPath = entry.filePath
+    } catch {
+      // best-effort restore for each pane
+    }
+  }
+
+  let focusedPath = ''
+  if (preferredOpenFile) {
+    const preferredPaneId = paneAssignments.get(preferredOpenFile)
+    if (preferredPaneId) {
+      focusEditorPane(preferredPaneId)
+      persistNextVOpenFile(preferredOpenFile)
+      focusedPath = preferredOpenFile
+    }
+  }
+
+  return { restoredCount, firstPath, focusedPath }
+}
+
+export function scheduleNextVAutoSave() {
   if (!isNextVMode()) return
   if (nextVAutoSaveInput?.checked === false) {
     clearNextVAutoSaveTimer()
@@ -5891,11 +8207,25 @@ function scheduleNextVAutoSave() {
   }, 500)
 }
 
-async function openWorkspaceEditorFile(filePath, options = {}) {
+export async function openWorkspaceEditorFile(filePath, options = {}) {
   let normalizedPath = normalizeRelativePath(filePath)
   if (!normalizedPath) return
 
+  const hasExplicitPaneTarget = Object.prototype.hasOwnProperty.call(options, 'paneId')
   const paneId = options.paneId ?? activePaneId
+
+  const existingPaneForPath = findPaneIdByFilePath(normalizedPath)
+  if (existingPaneForPath && existingPaneForPath !== paneId && !hasExplicitPaneTarget) {
+    const existingState = getPaneState(existingPaneForPath)
+    focusEditorPane(existingPaneForPath)
+    persistNextVOpenFile(existingState.path || normalizedPath)
+    renderPaneTitles()
+    syncScriptBadgeState()
+    renderOpenFileTabs()
+    renderWorkspaceTree()
+    return
+  }
+
   const state = getPaneState(paneId)
   const textarea = getPaneTextarea(paneId)
 
@@ -5929,6 +8259,17 @@ async function openWorkspaceEditorFile(filePath, options = {}) {
 
   const existingPaneId = findPaneIdByFilePath(normalizedPath)
   if (existingPaneId && existingPaneId !== paneId) {
+    if (!hasExplicitPaneTarget) {
+      const existingState = getPaneState(existingPaneId)
+      focusEditorPane(existingPaneId)
+      persistNextVOpenFile(existingState.path || normalizedPath)
+      renderPaneTitles()
+      syncScriptBadgeState()
+      renderOpenFileTabs()
+      renderWorkspaceTree()
+      return
+    }
+
     clearEditorPane(existingPaneId)
     paneAssignments.delete(normalizedPath)
     renderPaneTitles()
@@ -5942,8 +8283,10 @@ async function openWorkspaceEditorFile(filePath, options = {}) {
   state.path = normalizedPath
   state.loadedText = loadedText
   state.dirty = isDirty
+  // Only sync clean floating panels when loading from disk; never overwrite dirty floating panel edits.
+  syncFloatingPanelsFromEditorBuffer(normalizedPath, text, { markSaved: !isDirty, skipIfDirty: !isDirty })
   paneAssignments.set(normalizedPath, paneId)
-  activeScriptLine = null
+  _setActiveScriptLine(null)
   rememberExpandedPath(state.path)
   persistNextVOpenFile(state.path)
   persistPaneAssignments()
@@ -5956,7 +8299,7 @@ async function openWorkspaceEditorFile(filePath, options = {}) {
   renderWorkspaceTree()
 }
 
-function refreshNextVWorkspaceTree() {
+export function refreshNextVWorkspaceTree() {
   const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
   if (!workspaceDir) {
     setStatus('nextv workspace required', 'responding')
@@ -5975,7 +8318,7 @@ function refreshNextVWorkspaceTree() {
     })
 }
 
-function setOpenFileAsNextVEntrypoint() {
+export function setOpenFileAsNextVEntrypoint() {
   const openFilePath = getPanePath(activePaneId)
   if (!openFilePath) {
     setStatus('open a file first', 'responding')
@@ -5988,21 +8331,25 @@ function setOpenFileAsNextVEntrypoint() {
   setStatus(`entrypoint: ${toNextVRelativePath(openFilePath)}`)
 }
 
-function persistNextVConfig() {
+export function persistNextVConfig() {
   const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
   const entrypointPath = normalizeRelativePath(nextVEntrypointInput?.value ?? '')
   const autoSaveEnabled = nextVAutoSaveInput?.checked !== false
   const runtimeTarget = getNextVRuntimeTarget()
+  const attachWsUrl = String(nextVRuntimeTargetState.attachWsUrl ?? '').trim()
   const graphDirection = normalizeNextVGraphDirection(nextVGraphState.layoutDirection)
+  const editorTabSize = getCurrentNextVEditorTabSize()
 
   localStorage.setItem(storageKeys.nextVWorkspaceDir, workspaceDir)
   localStorage.setItem(storageKeys.nextVEntrypoint, entrypointPath)
   localStorage.setItem(storageKeys.nextVAutoSave, autoSaveEnabled ? '1' : '0')
   localStorage.setItem(storageKeys.nextVRuntimeTarget, runtimeTarget)
+  localStorage.setItem(storageKeys.nextVAttachWsUrl, attachWsUrl)
   localStorage.setItem(storageKeys.nextVGraphDirection, graphDirection)
+  localStorage.setItem(storageKeys.nextVEditorTabSize, String(editorTabSize))
 }
 
-function restoreNextVConfig() {
+export function restoreNextVConfig() {
   const workspaceDir = normalizeNextVWorkspaceDir(localStorage.getItem(storageKeys.nextVWorkspaceDir) ?? '')
   const entrypointPath = normalizeRelativePath(localStorage.getItem(storageKeys.nextVEntrypoint) ?? '')
   const storedPrimaryView = localStorage.getItem(storageKeys.nextVPrimaryView)
@@ -6013,16 +8360,22 @@ function restoreNextVConfig() {
   const devTab = ['events', 'trace', 'console'].includes(storedDevTab) ? storedDevTab : 'events'
   const storedInputTab = String(localStorage.getItem(storageKeys.nextVInputTab) ?? '').trim()
   const runtimeTarget = normalizeNextVRuntimeTarget(localStorage.getItem(storageKeys.nextVRuntimeTarget) ?? 'embedded')
+  const attachWsUrl = String(localStorage.getItem(storageKeys.nextVAttachWsUrl) ?? '').trim()
   const devConsoleOpen = localStorage.getItem(storageKeys.nextVDevConsoleOpen) !== '0'
   const graphDirection = normalizeNextVGraphDirection(localStorage.getItem(storageKeys.nextVGraphDirection) ?? 'TB')
   const controlOverlayEnabled = localStorage.getItem(storageKeys.nextVControlOverlay) !== '0'
   const showControlBranches = localStorage.getItem(storageKeys.nextVShowControlBranches) === '1'
+  const storedEditorLayout = String(localStorage.getItem(storageKeys.nextVEditorLayout) ?? '').trim()
+  const editorLayoutMode = storedEditorLayout === 'grid-2x2' ? 'grid-2x2' : 'split-2'
+  const editorTabSize = normalizeNextVEditorTabSize(localStorage.getItem(storageKeys.nextVEditorTabSize) ?? '4')
 
   if (nextVWorkspaceDirInput) nextVWorkspaceDirInput.value = workspaceDir
   if (nextVEntrypointInput) nextVEntrypointInput.value = entrypointPath
   if (nextVAutoSaveInput) nextVAutoSaveInput.checked = autoSaveEnabled
   nextVRuntimeTargetState.target = runtimeTarget
+  nextVRuntimeTargetState.attachWsUrl = attachWsUrl
   if (nextVRuntimeTargetInput) nextVRuntimeTargetInput.value = runtimeTarget
+  if (nextVAttachWsUrlInput) nextVAttachWsUrlInput.value = attachWsUrl
   tracePanelState.currentTab = devTab
   inputPanelState.currentTab = storedInputTab || 'manual'
   nextVViewState.currentView = primaryView
@@ -6030,13 +8383,36 @@ function restoreNextVConfig() {
   nextVGraphState.layoutDirection = graphDirection
   nextVGraphState.controlOverlayEnabled = controlOverlayEnabled
   nextVGraphState.showControlBranches = showControlBranches
+  editorLayoutState.layoutMode = editorLayoutMode
+  editorLayoutState.paneOrder = editorLayoutMode === 'grid-2x2' ? ['A', 'B', 'C', 'D'] : ['A', 'B']
+  applyNextVEditorTabSize(editorTabSize, { persist: false })
 }
 
-function pathBasename(p) {
+
+// --- Imports (auto-generated by gen-es-modules.js) ---
+import {
+  _setIsStateDiffResizing,
+  _setNextVStateFilterQuery,
+  isStateDiffResizing,
+  nextVStateDiffFeed,
+  nextVStateDiffPanel,
+  nextVStateDiffSplitter,
+  nextVStateFilterInput,
+  nextVStateFilterQuery,
+  nextVStateSectionOpenByKey,
+  nextVStateSnapshotPane,
+  storageKeys,
+  workspace
+} from './state.js'
+import {
+  isNextVMode
+} from './03_ui_controls.js'
+
+export function pathBasename(p) {
   return String(p ?? '').replace(/\\/g, '/').split('/').pop() || String(p ?? '')
 }
 
-function formatNextVStartLine(entrypointPath, runtimeStatePath, baselineStatePath) {
+export function formatNextVStartLine(entrypointPath, runtimeStatePath, baselineStatePath) {
   const entry = pathBasename(entrypointPath) || '(unknown)'
   const runtimeRaw = String(runtimeStatePath ?? '').trim()
   const runtime = runtimeRaw === 'in-memory' ? 'in-memory' : (pathBasename(runtimeRaw) || '(in-memory)')
@@ -6047,7 +8423,7 @@ function formatNextVStartLine(entrypointPath, runtimeStatePath, baselineStatePat
   return `[nextv:start] entrypoint=${entry} runtime=${runtime} baseline=${pathBasename(baseline)}`
 }
 
-function formatWorkspaceConfigStatus(config = {}) {
+export function formatWorkspaceConfigStatus(config = {}) {
   const agentsStatus = String(config.agents ?? 'missing')
   const toolsStatus = String(config.tools ?? 'missing')
   const nextvStatus = String(config.nextv ?? 'missing')
@@ -6059,7 +8435,7 @@ function formatWorkspaceConfigStatus(config = {}) {
   return `[nextv:workspace-config] agents=${agentsSource}(${agentsStatus}) tools=${toolsSource}(${toolsStatus}) nextv=${nextvSource}(${nextvStatus}) operators=${operatorsSource}(${operatorsStatus})`
 }
 
-function formatCapabilityStatus(summary = {}, effects = {}) {
+export function formatCapabilityStatus(summary = {}, effects = {}) {
   const required = Number(summary.required ?? 0)
   const unsupported = Number(summary.unsupportedBindings ?? 0)
   const declaredEffects = Number(effects.declared ?? 0)
@@ -6068,7 +8444,7 @@ function formatCapabilityStatus(summary = {}, effects = {}) {
   return `[nextv:capabilities] required=${required} unsupported=${unsupported} effects=${declaredEffects} effectUnsupported=${unsupportedEffects} policy=${policy}`
 }
 
-function formatHostModulesStatus(hostModules = {}) {
+export function formatHostModulesStatus(hostModules = {}) {
   const toolProviders = Number(hostModules.toolProviders ?? 0)
   const ingressConnectors = Number(hostModules.ingressConnectors ?? 0)
   const effectRealizers = Number(hostModules.effectRealizers ?? 0)
@@ -6076,7 +8452,7 @@ function formatHostModulesStatus(hostModules = {}) {
   return `[nextv:host-modules] tools=${toolProviders} ingress=${ingressConnectors} effects=${effectRealizers} workspace=${workspaceDir}`
 }
 
-function toPrettyJson(value) {
+export function toPrettyJson(value) {
   if (value === undefined) return '(none)'
   try {
     return JSON.stringify(value, null, 2)
@@ -6085,11 +8461,11 @@ function toPrettyJson(value) {
   }
 }
 
-function isObjectRecord(value) {
+export function isObjectRecord(value) {
   return value != null && typeof value === 'object' && !Array.isArray(value)
 }
 
-function safeJsonByteSize(value) {
+export function safeJsonByteSize(value) {
   try {
     const encoded = JSON.stringify(value)
     return typeof encoded === 'string' ? encoded.length : 0
@@ -6098,7 +8474,7 @@ function safeJsonByteSize(value) {
   }
 }
 
-function formatPayloadByteSize(bytes) {
+export function formatPayloadByteSize(bytes) {
   const value = Number(bytes)
   if (!Number.isFinite(value) || value <= 0) return '0B'
   if (value < 1024) return `${Math.round(value)}B`
@@ -6106,7 +8482,25 @@ function formatPayloadByteSize(bytes) {
   return `${(value / (1024 * 1024)).toFixed(1)}mb`
 }
 
-function summarizeToolCallArgs(args) {
+export function getToolCallDetail(toolName, args) {
+  const positional = Array.isArray(args?.positional) ? args.positional : []
+  const named = isObjectRecord(args?.named) ? args.named : {}
+  if (toolName === 'agent' || toolName === 'model') {
+    const label = String(named.agent ?? named.model ?? positional[0] ?? '').trim()
+    return label ? `name=${label}` : ''
+  }
+  if (toolName === 'file') {
+    const label = String(named.path ?? positional[0] ?? '').trim()
+    return label ? `path=${label}` : ''
+  }
+  if (toolName === 'tool') {
+    const label = String(named.name ?? positional[0] ?? '').trim()
+    return label ? `name=${label}` : ''
+  }
+  return ''
+}
+
+export function summarizeToolCallArgs(args) {
   const positional = Array.isArray(args?.positional) ? args.positional : []
   const named = isObjectRecord(args?.named) ? args.named : {}
   const positionalCount = positional.length
@@ -6116,7 +8510,7 @@ function summarizeToolCallArgs(args) {
   return `args=${totalCount} (${positionalCount}p/${namedCount}n) size=${sizeLabel}`
 }
 
-function summarizeToolResultPayload(result) {
+export function summarizeToolResultPayload(result) {
   let shape = 'result=unknown'
   if (result === null) {
     shape = 'result=null'
@@ -6134,7 +8528,7 @@ function summarizeToolResultPayload(result) {
   return `${shape} size=${sizeLabel}`
 }
 
-function summarizeExecutionAgentCalls(result) {
+export function summarizeExecutionAgentCalls(result) {
   const agentCalls = Array.isArray(result?.agentCalls) ? result.agentCalls : []
   if (agentCalls.length === 0) return 'agentCalls=0'
 
@@ -6174,7 +8568,7 @@ function summarizeExecutionAgentCalls(result) {
   return `agentCalls=${agentCalls.length} tokens=${promptLabel}/${completionLabel}/${totalLabel}`
 }
 
-function summarizeExecutionAgentCallDetails(result) {
+export function summarizeExecutionAgentCallDetails(result) {
   const agentCalls = Array.isArray(result?.agentCalls) ? result.agentCalls : []
   if (agentCalls.length === 0) return ''
 
@@ -6210,7 +8604,7 @@ function summarizeExecutionAgentCallDetails(result) {
   return `[nextv:agent_tokens] ${parts.join(', ')}`
 }
 
-function flattenStatePaths(value, basePath = '', out = new Map()) {
+export function flattenStatePaths(value, basePath = '', out = new Map()) {
   if (Array.isArray(value)) {
     if (value.length === 0) {
       out.set(basePath || '[]', value)
@@ -6241,7 +8635,7 @@ function flattenStatePaths(value, basePath = '', out = new Map()) {
   return out
 }
 
-function buildStateDiff(previousState, nextState) {
+export function buildStateDiff(previousState, nextState) {
   const previousMap = flattenStatePaths(previousState)
   const nextMap = flattenStatePaths(nextState)
   const pathSet = new Set([...previousMap.keys(), ...nextMap.keys()])
@@ -6269,7 +8663,7 @@ function buildStateDiff(previousState, nextState) {
   return changes
 }
 
-function formatStateDiff(changes) {
+export function formatStateDiff(changes) {
   if (!Array.isArray(changes) || changes.length === 0) {
     return 'No state changes captured for this step.'
   }
@@ -6285,11 +8679,11 @@ function formatStateDiff(changes) {
   }).join('\n')
 }
 
-function normalizeNextVStateFilterQuery(value) {
+export function normalizeNextVStateFilterQuery(value) {
   return String(value ?? '').trim().toLowerCase()
 }
 
-function formatStateSectionMeta(value) {
+export function formatStateSectionMeta(value) {
   if (Array.isArray(value)) return `${value.length} items`
   if (isObjectRecord(value)) return `${Object.keys(value).length} keys`
   if (typeof value === 'string') return `${value.length} chars`
@@ -6297,11 +8691,11 @@ function formatStateSectionMeta(value) {
   return typeof value
 }
 
-function isNextVStateTreeContainer(value) {
+export function isNextVStateTreeContainer(value) {
   return Array.isArray(value) || isObjectRecord(value)
 }
 
-function formatNextVStateLeafPreview(value) {
+export function formatNextVStateLeafPreview(value) {
   if (typeof value === 'string') {
     const compact = value.length > 120 ? `${value.slice(0, 117)}...` : value
     return JSON.stringify(compact)
@@ -6312,7 +8706,7 @@ function formatNextVStateLeafPreview(value) {
   return toPrettyJson(value)
 }
 
-function createNextVStateTreeNode(label, value, options = {}) {
+export function createNextVStateTreeNode(label, value, options = {}) {
   const { depth = 0 } = options
   const node = document.createElement('details')
   node.className = 'nextv-state-tree-node'
@@ -6362,12 +8756,12 @@ function createNextVStateTreeNode(label, value, options = {}) {
   return node
 }
 
-function matchesNextVStateFilter(element, query) {
+export function matchesNextVStateFilter(element, query) {
   if (!query) return true
   return String(element?.dataset?.searchText ?? '').includes(query)
 }
 
-function applyNextVStateSearchFilter() {
+export function applyNextVStateSearchFilter() {
   const query = nextVStateFilterQuery
 
   if (nextVStateDiffFeed) {
@@ -6393,9 +8787,9 @@ function applyNextVStateSearchFilter() {
   }
 }
 
-function setNextVStateFilter(value, options = {}) {
+export function setNextVStateFilter(value, options = {}) {
   const { persist = true } = options
-  nextVStateFilterQuery = normalizeNextVStateFilterQuery(value)
+  _setNextVStateFilterQuery(normalizeNextVStateFilterQuery(value))
   if (nextVStateFilterInput && nextVStateFilterInput.value !== value) {
     nextVStateFilterInput.value = String(value ?? '')
   }
@@ -6405,7 +8799,7 @@ function setNextVStateFilter(value, options = {}) {
   }
 }
 
-function initNextVStatePanelTools() {
+export function initNextVStatePanelTools() {
   const stored = localStorage.getItem(storageKeys.nextVStateFilter) ?? ''
   setNextVStateFilter(stored, { persist: false })
 
@@ -6416,7 +8810,7 @@ function initNextVStatePanelTools() {
   })
 }
 
-function setNextVStateCollapseAll(collapsed) {
+export function setNextVStateCollapseAll(collapsed) {
   const shouldOpen = collapsed !== true
 
   if (nextVStateDiffFeed) {
@@ -6444,28 +8838,28 @@ function setNextVStateCollapseAll(collapsed) {
   }
 }
 
-function clearNextVStateDiff() {
+export function clearNextVStateDiff() {
   if (nextVStateDiffFeed) nextVStateDiffFeed.innerHTML = ''
 }
 
-function clampNextVStateDiffWidth(value) {
+export function clampNextVStateDiffWidth(value) {
   const numeric = Number(value)
   const maxWidth = Math.max(300, Math.min(820, Math.round(window.innerWidth * 0.7)))
   if (!Number.isFinite(numeric)) return 260
   return Math.max(220, Math.min(maxWidth, Math.round(numeric)))
 }
 
-function persistNextVStateDiffWidth(width) {
+export function persistNextVStateDiffWidth(width) {
   localStorage.setItem(storageKeys.nextVStateDiffWidth, String(clampNextVStateDiffWidth(width)))
 }
 
-function getStoredNextVStateDiffWidth() {
+export function getStoredNextVStateDiffWidth() {
   const stored = Number(localStorage.getItem(storageKeys.nextVStateDiffWidth))
   if (!Number.isFinite(stored)) return 260
   return clampNextVStateDiffWidth(stored)
 }
 
-function toggleNextVStateDiff() {
+export function toggleNextVStateDiff() {
   const panel = nextVStateDiffPanel
   const splitterEl = nextVStateDiffSplitter
   const btn = document.getElementById('toggle-nextv-state-diff-btn')
@@ -6484,7 +8878,7 @@ function toggleNextVStateDiff() {
   localStorage.setItem(storageKeys.nextVStateDiffOpen, collapsed ? '0' : '1')
 }
 
-function initNextVStateDiffPanel() {
+export function initNextVStateDiffPanel() {
   const stored = localStorage.getItem(storageKeys.nextVStateDiffOpen)
   const shouldOpen = stored === '1'
   const panel = nextVStateDiffPanel
@@ -6501,8 +8895,8 @@ function initNextVStateDiffPanel() {
   }
 }
 
-function setupNextVStateDiffSplitter() {
-  if (!nextVStateDiffSplitter || !nextVStateDiffPanel || !nextVGraphShell) return
+export function setupNextVStateDiffSplitter() {
+  if (!nextVStateDiffSplitter || !nextVStateDiffPanel) return
 
   const applyStateDiffWidth = (pixels) => {
     const clamped = clampNextVStateDiffWidth(pixels)
@@ -6512,7 +8906,7 @@ function setupNextVStateDiffSplitter() {
 
   nextVStateDiffSplitter.addEventListener('mousedown', (event) => {
     if (!isNextVMode() || nextVStateDiffPanel.classList.contains('collapsed')) return
-    isStateDiffResizing = true
+    _setIsStateDiffResizing(true)
     document.body.classList.add('is-resizing-statediff')
     event.preventDefault()
   })
@@ -6525,19 +8919,150 @@ function setupNextVStateDiffSplitter() {
 
   window.addEventListener('mouseup', () => {
     if (!isStateDiffResizing) return
-    isStateDiffResizing = false
+    _setIsStateDiffResizing(false)
     document.body.classList.remove('is-resizing-statediff')
   })
 }
 
-function initNextVUserIOPanel() {
+
+// --- Imports (auto-generated by gen-es-modules.js) ---
+import {
+  _setIsUserIOResizing,
+  _setNextVEventSource,
+  _setNextVHasLiveRuntimeEvents,
+  _setNextVLastKnownState,
+  _setNextVRuntimeRunning,
+  _setTraceRowCounter,
+  isUserIOResizing,
+  nextVEventSource,
+  nextVHasLiveRuntimeEvents,
+  nextVLastKnownState,
+  nextVRuntimeRunning,
+  nextVStateDiffFeed,
+  nextVStateSectionOpenByKey,
+  nextVStateSnapshotPane,
+  nextVUserIOSplitter,
+  scriptEditorPanel,
+  storageKeys,
+  traceDetail,
+  traceList,
+  tracePanelState,
+  traceRowCounter,
+  userIOPanelState
+} from './state.js'
+import {
+  normalizeUserOutputChannel,
+  appendUserOutputMessage,
+  appendUserOutputVoice,
+  openVisualOutputWindow,
+  parseMaybeJson
+} from './02_user_output.js'
+import {
+  isNextVMode,
+  clampNextVUserIOWidth,
+  persistNextVUserIOWidth,
+  setUserIOPanelOpen,
+  setNextVRunControls
+} from './03_ui_controls.js'
+import {
+  appendNextVLogRow,
+  appendNextVDebugRow
+} from './07_graph_render.js'
+import {
+  toPrettyJson,
+  isObjectRecord,
+  summarizeToolCallArgs,
+  getToolCallDetail,
+  summarizeToolResultPayload,
+  buildStateDiff,
+  formatStateDiff,
+  normalizeNextVStateFilterQuery,
+  formatStateSectionMeta,
+  isNextVStateTreeContainer,
+  createNextVStateTreeNode,
+  applyNextVStateSearchFilter
+} from './10_file_tree.js'
+import {
+  setStatus,
+  appendErrorRow,
+  escapeHtml
+} from './13_layout.js'
+
+const NEXTV_EVENT_DEDUPE_TTL_MS = 8000
+const nextVRenderedEventKeys = new Map()
+
+function normalizeEventPart(value) {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function buildCanonicalEventDedupeKey(event) {
+  if (!event || typeof event !== 'object') return ''
+  const type = String(event.type ?? '')
+  const timestamp = String(event.timestamp ?? '')
+  const tool = String(event.tool ?? '')
+  const agent = String(event.agent ?? '')
+  const line = String(event.line ?? '')
+  const statement = String(event.statement ?? '')
+  const sourcePath = String(event.sourcePath ?? '')
+  const sourceLine = String(event.sourceLine ?? '')
+  const args = normalizeEventPart(event.args)
+  const result = normalizeEventPart(event.result)
+  const content = normalizeEventPart(event.content)
+  const value = normalizeEventPart(event.value)
+  const metadata = normalizeEventPart(event.metadata)
+  return [
+    type,
+    timestamp,
+    tool,
+    agent,
+    line,
+    statement,
+    sourcePath,
+    sourceLine,
+    args,
+    result,
+    content,
+    value,
+    metadata,
+  ].join('|')
+}
+
+function shouldRenderCanonicalEvent(event) {
+  const key = buildCanonicalEventDedupeKey(event)
+  if (!key) return true
+  const now = Date.now()
+  const lastSeenAt = nextVRenderedEventKeys.get(key)
+  if (Number.isFinite(lastSeenAt) && (now - lastSeenAt) < NEXTV_EVENT_DEDUPE_TTL_MS) {
+    return false
+  }
+  nextVRenderedEventKeys.set(key, now)
+
+  if (nextVRenderedEventKeys.size > 5000) {
+    for (const [seenKey, seenAt] of nextVRenderedEventKeys.entries()) {
+      if ((now - seenAt) >= NEXTV_EVENT_DEDUPE_TTL_MS) {
+        nextVRenderedEventKeys.delete(seenKey)
+      }
+    }
+  }
+  return true
+}
+
+export function initNextVUserIOPanel() {
   const stored = localStorage.getItem(storageKeys.nextVUserIOOpen)
   const shouldOpen = stored === '1'
   setUserIOPanelOpen(shouldOpen, { persist: false })
 }
 
-function setupNextVUserIOSplitter() {
-  if (!nextVUserIOSplitter || !scriptEditorPanel || !nextVGraphShell) return
+export function setupNextVUserIOSplitter() {
+  if (!nextVUserIOSplitter || !scriptEditorPanel) return
 
   const applyUserIOWidth = (pixels) => {
     const clamped = clampNextVUserIOWidth(pixels)
@@ -6547,25 +9072,27 @@ function setupNextVUserIOSplitter() {
 
   nextVUserIOSplitter.addEventListener('mousedown', (event) => {
     if (!isNextVMode() || !userIOPanelState.open) return
-    isUserIOResizing = true
+    _setIsUserIOResizing(true)
     document.body.classList.add('is-resizing-userio')
     event.preventDefault()
   })
 
   window.addEventListener('mousemove', (event) => {
     if (!isUserIOResizing) return
-    const shellRect = nextVGraphShell.getBoundingClientRect()
+    const shell = scriptEditorPanel.parentElement
+    if (!shell) return
+    const shellRect = shell.getBoundingClientRect()
     applyUserIOWidth(shellRect.right - event.clientX)
   })
 
   window.addEventListener('mouseup', () => {
     if (!isUserIOResizing) return
-    isUserIOResizing = false
+    _setIsUserIOResizing(false)
     document.body.classList.remove('is-resizing-userio')
   })
 }
 
-function appendNextVStateDiffEntry(signalType, changes) {
+export function appendNextVStateDiffEntry(signalType, changes) {
   if (!nextVStateDiffFeed) return
   if (!Array.isArray(changes) || changes.length === 0) return
 
@@ -6633,7 +9160,7 @@ function appendNextVStateDiffEntry(signalType, changes) {
   nextVStateDiffFeed.scrollTop = nextVStateDiffFeed.scrollHeight
 }
 
-function buildTraceRow(event, previousState) {
+export function buildTraceRow(event, previousState) {
   if (!event || typeof event !== 'object') return null
 
   const isStepTrace = event.type === 'trace' && String(event.phase ?? '') === 'after'
@@ -6646,7 +9173,8 @@ function buildTraceRow(event, previousState) {
   const statement = String(event.statement ?? '').trim()
   const stateAfter = event?.snapshot?.state
   const stateDiff = stateAfter !== undefined ? buildStateDiff(previousState, stateAfter) : []
-  const rowId = `trace-${++traceRowCounter}`
+  _setTraceRowCounter(traceRowCounter + 1)
+  const rowId = `trace-${traceRowCounter}`
 
   return {
     id: rowId,
@@ -6667,7 +9195,7 @@ function buildTraceRow(event, previousState) {
   }
 }
 
-function renderTraceDetail() {
+export function renderTraceDetail() {
   if (!traceDetail) return
   const selected = tracePanelState.rows.find((row) => row.id === tracePanelState.selectedId)
   if (!selected) {
@@ -6700,7 +9228,7 @@ function renderTraceDetail() {
   `
 }
 
-function renderTraceList() {
+export function renderTraceList() {
   if (!traceList) return
   traceList.innerHTML = ''
 
@@ -6731,7 +9259,7 @@ function renderTraceList() {
   renderTraceDetail()
 }
 
-function appendTraceRows(events) {
+export function appendTraceRows(events) {
   if (!Array.isArray(events) || events.length === 0) return
 
   let previousState = tracePanelState.rows.length > 0
@@ -6758,7 +9286,7 @@ function appendTraceRows(events) {
   }
 }
 
-function clearTracePanel(options = {}) {
+export function clearTracePanel(options = {}) {
   const { silent = false } = options
   tracePanelState.rows = []
   tracePanelState.selectedId = ''
@@ -6768,11 +9296,12 @@ function clearTracePanel(options = {}) {
   }
 }
 
-function renderCanonicalNextVEvents(events) {
+export function renderCanonicalNextVEvents(events) {
   if (!Array.isArray(events) || events.length === 0) return
 
   for (const event of events) {
     if (!event || typeof event !== 'object') continue
+    if (!shouldRenderCanonicalEvent(event)) continue
 
     if (event.type === 'output') {
       const format = String(event.format ?? 'text')
@@ -6817,23 +9346,63 @@ function renderCanonicalNextVEvents(events) {
         appendUserOutputMessage(`[interaction] ${promptText}`, outputChannel)
         appendNextVLogRow('[nextv:interaction] request received (host policy decides follow-up)', 'step')
       }
-      appendNextVLogRow(`[nextv:output] format=${format} content=${String(event.content ?? '')}`, 'content')
       continue
     }
 
     if (event.type === 'tool_call') {
+      const toolName = String(event.tool ?? '')
+      if (toolName === 'agent' || toolName === 'model') {
+        continue
+      }
+      const detail = getToolCallDetail(toolName, event.args)
+      const detailSuffix = detail ? ` ${detail}` : ''
       appendNextVLogRow(
-        `[nextv:tool_call] tool=${String(event.tool ?? '')} ${summarizeToolCallArgs(event.args)}`,
+        `[nextv:tool_call] tool=${toolName}${detailSuffix} ${summarizeToolCallArgs(event.args)}`,
         'step'
       )
+      if (event.args != null) {
+        appendNextVDebugRow('[nextv:tool_call:args]', toPrettyJson(event.args))
+      }
+      continue
+    }
+
+    if (event.type === 'agent_call') {
+      const agentName = String(event.agent ?? '').trim() || 'unknown'
+      appendNextVLogRow(`[nextv:agent_call] agent=${agentName}`, 'step')
+      if (event.args && typeof event.args === 'object') {
+        appendNextVDebugRow('[nextv:agent_call:args]', toPrettyJson(event.args))
+      }
+      continue
+    }
+
+    if (event.type === 'agent_result') {
+      const agentName = String(event.agent ?? '').trim() || 'unknown'
+      const elapsedMs = Number(event?.metadata?.elapsedMs)
+      const elapsedLabel = Number.isFinite(elapsedMs) ? ` elapsedMs=${Math.max(0, Math.round(elapsedMs))}` : ''
+      appendNextVLogRow(`[nextv:agent_result] agent=${agentName}${elapsedLabel}`, 'result')
+
+      const requestDebug = event?.metadata?.request ?? null
+      const wirePayload = requestDebug && typeof requestDebug === 'object'
+        ? (requestDebug.wirePayload ?? requestDebug)
+        : null
+      if (wirePayload) {
+        appendNextVDebugRow('[nextv:agent_request:wire]', toPrettyJson(wirePayload))
+      }
       continue
     }
 
     if (event.type === 'tool_result') {
+      const toolName = String(event.tool ?? '')
+      if (toolName === 'agent' || toolName === 'model') {
+        continue
+      }
       appendNextVLogRow(
-        `[nextv:tool_result] tool=${String(event.tool ?? '')} ${summarizeToolResultPayload(event.result)}`,
+        `[nextv:tool_result] tool=${toolName} ${summarizeToolResultPayload(event.result)}`,
         'result'
       )
+      if (event.result != null) {
+        appendNextVDebugRow('[nextv:tool_result:detail]', toPrettyJson(event.result))
+      }
       continue
     }
 
@@ -6849,11 +9418,13 @@ function renderCanonicalNextVEvents(events) {
   }
 }
 
-function renderNextVSnapshot(snapshot, options = {}) {
+export function renderNextVSnapshot(snapshot, options = {}) {
   if (!snapshot || typeof snapshot !== 'object') return
-  const { log = false } = options
-  nextVRuntimeRunning = snapshot.running === true
-  setNextVRunControls()
+  const { log = false, skipControlUpdate = false } = options
+  _setNextVRuntimeRunning(snapshot.running === true)
+  if (!skipControlUpdate) {
+    setNextVRunControls()
+  }
 
   if (log) {
     appendNextVLogRow(`[nextv:snapshot] running=${nextVRuntimeRunning} executions=${Number(snapshot.executionCount ?? 0)} pending=${Number(snapshot.pendingEvents ?? 0)}`, 'result')
@@ -6932,19 +9503,383 @@ function renderNextVSnapshot(snapshot, options = {}) {
 
     applyNextVStateSearchFilter()
   }
-  nextVLastKnownState = nextState
+  _setNextVLastKnownState(nextState)
 }
 
-function closeNextVStream() {
+export function closeNextVStream() {
   if (!nextVEventSource) return
   nextVEventSource.close()
-  nextVEventSource = null
-  nextVHasLiveRuntimeEvents = false
+  _setNextVEventSource(null)
+  _setNextVHasLiveRuntimeEvents(false)
+  nextVRenderedEventKeys.clear()
 }
 
-function openNextVStream() {
+
+// --- Imports (auto-generated by gen-es-modules.js) ---
+import {
+  MIN_LEFT_PANEL_SECTION_HEIGHT,
+  _setActiveVerticalResize,
+  _setIsFileTreeResizing,
+  _setIsRemoteControlMode,
+  _setIsRemoteMode,
+  _setIsRemoteRuntimeConnected,
+  _setIsResizing,
+  _setNextVEventSource,
+  _setNextVHasLiveRuntimeEvents,
+  _setNextVLastKnownState,
+  _setNextVManagedProcessRunning,
+  _setNextVRuntimeRunning,
+  _setNextVCandidatePromotable,
+  _setNextVExecutionGroups,
+  _setNextVExecutionCounter,
+  _setNextVEventsLiveMode,
+  _setNextVEventsPausedBuffer,
+  _setRemoteTransport,
+  activeVerticalResize,
+  fileTreePane,
+  fileTreeSplitter,
+  isBusy,
+  isFileTreeResizing,
+  isRemoteControlMode,
+  isRemoteMode,
+  isRemoteRuntimeConnected,
+  isResizing,
+  logsSection,
+  nextVEntrypointInput,
+  nextVEventSource,
+  nextVEventSourceInput,
+  nextVEventTypeInput,
+  nextVEventValueInput,
+  nextVCallModeInput,
+  nextVCallTargetKindInput,
+  nextVCallTargetAgentInput,
+  nextVCallTargetInput,
+  nextVCallValidateInput,
+  nextVCallRetryInput,
+  nextVCallInstructionsInput,
+  nextVCallPromptInput,
+  nextVCallReturnsInput,
+  nextVCallDecideInput,
+  nextVCallTargetConfigLabel,
+  nextVCallTargetConfigOutput,
+  nextVCallResolvedLabel,
+  nextVCallResolvedOutput,
+  nextVCallGeneratedCode,
+  nextVCallResultTabRaw,
+  nextVCallResultTabActual,
+  nextVCallResultTabParsed,
+  nextVCallResultTabValidation,
+  nextVCallResultTabTry,
+  nextVCallResultTabMetadata,
+  nextVCallResultRaw,
+  nextVCallResultActual,
+  nextVCallResultParsed,
+  nextVCallResultValidation,
+  nextVCallResultTry,
+  nextVCallResultMetadata,
+  nextVCallInspectorPanel,
+  nextVGraphState,
+  nextVHasLiveRuntimeEvents,
+  nextVImageCount,
+  nextVImageDropzone,
+  nextVImageInput,
+  nextVImageList,
+  nextVIngressNameInput,
+  nextVIngressValueInput,
+  nextVInputImageState,
+  nextVLastKnownState,
+  nextVManagedProcessRunning,
+  nextVPanelState,
+  nextVRuntimeRunning,
+  nextVCandidatePromotable,
+  nextVCandidateStatusRow,
+  nextVCandidateStatusBadge,
+  nextVCandidateIssueCount,
+  activePaneId,
+  nextVAttachSessionState,
+  nextVRuntimeTargetState,
+  nextVWorkspaceDirInput,
+  nextVExecutionGroups,
+  nextVExecutionCounter,
+  nextVEventsLiveMode,
+  nextVEventsPausedBuffer,
+  nextVEventsOutput,
+  outputSection,
+  remoteRuntimeEntrypointPath,
+  remoteRuntimeWorkspaceDir,
+  remoteTransport,
+  scriptSection,
+  scriptVSplit1,
+  scriptVSplit2,
+  splitter,
+  storageKeys,
+  workspace
+} from './state.js'
+import {
+  isNextVMode,
+  setNextVImagesOpen,
+  buildNextVApiPath,
+  getNextVAttachWsUrl,
+  isNextVAttachStartOverrideEnabled,
+  syncNextVAttachSessionUi,
+  getSelectedNextVInputChannel,
+  setNextVMode,
+  updateRemoteRuntimeIdentity,
+  updateRemoteModeBadge,
+  setNextVRunControls,
+  toggleNextVCallInspectorPanel,
+  clearNextVEventsOutput,
+  clearNextVConsoleOutput
+} from './03_ui_controls.js'
+import {
+  buildExecutionGroup,
+  renderExecutionGroups,
+  setNextVEventsLiveMode
+} from './02_user_output.js'
+import {
+  reconcileNextVGraphAgentTimersFromExecution,
+  resolveNextVGraphHandlerNodeForSource,
+  resetNextVGraphRuntimeState,
+  beginNextVGraphExecutionTrail,
+  flashNextVGraphExternalEvent,
+  flashNextVGraphSignalDispatch,
+  flashNextVGraphEventValue,
+  flashNextVGraphTimerPulse,
+  fadeNextVGraphActiveHighlights,
+  applyNextVGraphRuntimeVisuals,
+  updateNextVGraphRuntimeStep,
+  inferNextVGraphFallbackHandler,
+  handleNextVGraphRuntimeEvent,
+  finalizeNextVGraphActiveAgentTimers,
+  extractExecutionAgentElapsedMs
+} from './06_graph_runtime.js'
+import {
+  refreshNextVGraph,
+  appendNextVLogRow,
+  getErrorMessageAndSource,
+  appendNextVErrorLog
+} from './07_graph_render.js'
+import {
+  normalizeRelativePath,
+  normalizeNextVWorkspaceDir
+} from './08_path_utils.js'
+import {
+  persistNextVConfig
+} from './09_editor.js'
+import {
+  getPaneTextarea
+} from './09_editor.js'
+import {
+  pathBasename,
+  formatNextVStartLine,
+  formatWorkspaceConfigStatus,
+  formatCapabilityStatus,
+  formatHostModulesStatus,
+  summarizeExecutionAgentCalls,
+  summarizeExecutionAgentCallDetails,
+  buildStateDiff,
+  clearNextVStateDiff
+} from './10_file_tree.js'
+import {
+  appendNextVStateDiffEntry,
+  appendTraceRows,
+  clearTracePanel,
+  renderCanonicalNextVEvents,
+  renderNextVSnapshot,
+  closeNextVStream
+} from './11_state_panels.js'
+import {
+  setStatus,
+  appendErrorRow,
+  ensureNextVEntrypointVisible,
+  saveNextVEntrypoint,
+  openNextVWorkspace
+} from './13_layout.js'
+
+let bufferedRuntimeEventsForExecution = []
+
+function toExecutionEventKey(event) {
+  if (!event || typeof event !== 'object') return ''
+  const type = String(event.type ?? '').trim()
+  const timestamp = String(event.timestamp ?? '').trim()
+  const tool = String(event.tool ?? '').trim()
+  const agent = String(event.agent ?? '').trim()
+  const sourcePath = String(event.sourcePath ?? '').trim()
+  const sourceLine = Number.isFinite(Number(event.sourceLine)) ? String(Number(event.sourceLine)) : ''
+  const line = Number.isFinite(Number(event.line)) ? String(Number(event.line)) : ''
+  return [type, timestamp, tool, agent, sourcePath, sourceLine, line].join('|')
+}
+
+function mergeExecutionEventsWithLiveRuntimeEvents(executionEvents, runtimeEvents) {
+  const left = Array.isArray(executionEvents) ? executionEvents : []
+  const right = Array.isArray(runtimeEvents) ? runtimeEvents : []
+  if (right.length === 0) return left
+  if (left.length === 0) return right
+
+  const merged = []
+  const seen = new Set()
+
+  for (const event of [...left, ...right]) {
+    const key = toExecutionEventKey(event)
+    if (key && seen.has(key)) continue
+    if (key) seen.add(key)
+    merged.push(event)
+  }
+
+  return merged
+}
+
+function buildNextVAttachApiPath(pathname) {
+  const params = new URLSearchParams()
+  params.set('runtimeTarget', 'attach')
+  const attachWsUrl = getNextVAttachWsUrl()
+  if (attachWsUrl) {
+    params.set('attachWsUrl', attachWsUrl)
+  }
+  return `${pathname}?${params.toString()}`
+}
+
+function normalizeEntrypointForWorkspace(entrypointPathRaw, workspaceDirRaw) {
+  const entrypointPath = normalizeRelativePath(entrypointPathRaw)
+  if (!entrypointPath) return ''
+
+  const workspaceDir = normalizeNextVWorkspaceDir(workspaceDirRaw)
+  if (!workspaceDir) return entrypointPath
+  if (entrypointPath === workspaceDir) return ''
+  if (entrypointPath.startsWith(`${workspaceDir}/`)) {
+    return entrypointPath.slice(workspaceDir.length + 1)
+  }
+  return entrypointPath
+}
+
+function readToolErrorMessageFromRuntimeEvent(runtimeEvent) {
+  if (!runtimeEvent || typeof runtimeEvent !== 'object') return ''
+  if (String(runtimeEvent?.type ?? '').trim() !== 'tool_result') return ''
+
+  const toolName = String(runtimeEvent?.tool ?? '').trim()
+  const result = runtimeEvent?.result
+  if (!result || typeof result !== 'object') return ''
+
+  const explicitError = typeof result.error === 'string'
+    ? result.error
+    : (result?.error && typeof result.error === 'object' && typeof result.error.message === 'string'
+      ? result.error.message
+      : '')
+  const explicitMessage = typeof result.message === 'string' ? result.message : ''
+  const didFail = result.ok === false || Boolean(explicitError) || Boolean(explicitMessage)
+  if (!didFail) return ''
+
+  const message = explicitError || explicitMessage || 'tool call failed'
+  return toolName ? `tool("${toolName}") failed: ${message}` : message
+}
+
+export async function attachNextVRuntime() {
+  if (nextVRuntimeTargetState.target !== 'attach') {
+    setStatus('select attach WS runtime target first', 'responding')
+    return
+  }
+
+  const attachWsUrl = getNextVAttachWsUrl()
+  if (!attachWsUrl) {
+    nextVAttachSessionState.lastError = 'attach ws url is required'
+    syncNextVAttachSessionUi()
+    setStatus('attach ws url required', 'responding')
+    return
+  }
+
+  nextVAttachSessionState.connecting = true
+  nextVAttachSessionState.attached = false
+  nextVAttachSessionState.lastError = ''
+  syncNextVAttachSessionUi()
+  setStatus('attaching to remote runtime...')
+
+  try {
+    const res = await fetch(buildNextVAttachApiPath('/api/nextv/snapshot'))
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'attach failed')
+    }
+
+    const remoteWorkspaceDir = String(
+      data?.remoteRuntimeWorkspaceDir
+      ?? data?.workspaceDir
+      ?? data?.remoteConnection?.workspaceDir
+      ?? data?.snapshot?.workspaceDir
+      ?? ''
+    ).trim()
+    const remoteEntrypointPathRaw = String(
+      data?.remoteRuntimeEntrypointPath
+      ?? data?.entrypointPath
+      ?? data?.remoteConnection?.entrypointPath
+      ?? data?.snapshot?.entrypointPath
+      ?? ''
+    ).trim()
+    if (nextVWorkspaceDirInput && remoteWorkspaceDir) {
+      nextVWorkspaceDirInput.value = remoteWorkspaceDir === '.' ? '' : remoteWorkspaceDir
+    }
+    if (nextVEntrypointInput && remoteEntrypointPathRaw) {
+      const normalizedEntrypoint = normalizeEntrypointForWorkspace(remoteEntrypointPathRaw, remoteWorkspaceDir)
+      nextVEntrypointInput.value = normalizedEntrypoint
+      saveNextVEntrypoint()
+    }
+
+    // Hydrate tree/editor/graph automatically from attached runtime identity.
+    updateRemoteRuntimeIdentity(data)
+    if (remoteWorkspaceDir && isNextVMode()) {
+      try {
+        await openNextVWorkspace()
+      } catch (workspaceErr) {
+        appendNextVErrorLog(workspaceErr, '[nextv:attach:workspace:auto-open:error]')
+      }
+    }
+
+    await refreshNextVCallInspectorAgents({ quiet: true })
+
+    nextVAttachSessionState.attached = true
+    nextVAttachSessionState.connecting = false
+    nextVAttachSessionState.lastError = ''
+    syncNextVAttachSessionUi()
+    await syncNextVRuntimeState()
+    setStatus('attached to remote runtime')
+  } catch (err) {
+    nextVAttachSessionState.connecting = false
+    nextVAttachSessionState.attached = false
+    nextVAttachSessionState.lastError = String(err?.message ?? err)
+    syncNextVAttachSessionUi()
+    _setIsRemoteMode(true)
+    _setIsRemoteControlMode(true)
+    _setRemoteTransport('ws')
+    _setIsRemoteRuntimeConnected(false)
+    _setNextVRuntimeRunning(false)
+    updateRemoteRuntimeIdentity(null, { clear: true })
+    updateRemoteModeBadge()
+    closeNextVStream()
+    setNextVRunControls()
+    setStatus('attach failed', 'responding')
+  }
+}
+
+export function detachNextVRuntime() {
+  nextVAttachSessionState.connecting = false
+  nextVAttachSessionState.attached = false
+  nextVAttachSessionState.lastError = ''
+  syncNextVAttachSessionUi()
+  _setIsRemoteMode(true)
+  _setIsRemoteControlMode(true)
+  _setRemoteTransport('ws')
+  _setIsRemoteRuntimeConnected(false)
+  _setNextVRuntimeRunning(false)
+  _setNextVManagedProcessRunning(false)
+  updateRemoteRuntimeIdentity(null, { clear: true })
+  updateRemoteModeBadge()
   closeNextVStream()
-  nextVEventSource = new EventSource(buildNextVApiPath('/api/nextv/stream'))
+  setNextVRunControls()
+  setStatus('detached from remote runtime')
+}
+
+export function openNextVStream() {
+  closeNextVStream()
+  _setNextVEventSource(new EventSource(buildNextVApiPath('/api/nextv/stream')))
 
   nextVEventSource.addEventListener('nextv_stream_open', () => {
     // no-op
@@ -6962,10 +9897,11 @@ function openNextVStream() {
   nextVEventSource.addEventListener('nextv_started', (evt) => {
     try {
       const payload = JSON.parse(evt.data)
-      nextVHasLiveRuntimeEvents = false
+      bufferedRuntimeEventsForExecution = []
+      _setNextVHasLiveRuntimeEvents(false)
       resetNextVGraphRuntimeState({ keepExternalNodes: false })
       applyNextVGraphRuntimeVisuals()
-      nextVLastKnownState = null
+      _setNextVLastKnownState(null)
       clearNextVStateDiff()
       // Surface startup init in the graph immediately, even before the first queued external event.
       flashNextVGraphSignalDispatch('init')
@@ -6996,10 +9932,23 @@ function openNextVStream() {
       const runtimeEvent = payload?.runtimeEvent
       if (!runtimeEvent || typeof runtimeEvent !== 'object') return
 
-      nextVHasLiveRuntimeEvents = true
+      bufferedRuntimeEventsForExecution.push(runtimeEvent)
+      if (bufferedRuntimeEventsForExecution.length > 500) {
+        bufferedRuntimeEventsForExecution = bufferedRuntimeEventsForExecution.slice(-500)
+      }
+
+      _setNextVHasLiveRuntimeEvents(true)
       handleNextVGraphRuntimeEvent(runtimeEvent)
       renderCanonicalNextVEvents([runtimeEvent])
       appendTraceRows([runtimeEvent])
+        applyNextVGraphRuntimeVisuals()
+
+      const toolFailureMessage = readToolErrorMessageFromRuntimeEvent(runtimeEvent)
+      if (toolFailureMessage) {
+        appendNextVErrorLog({ message: toolFailureMessage }, '[nextv:tool_error]')
+        setStatus('nextv tool error', 'responding')
+      }
+
       if (payload?.snapshot) renderNextVSnapshot(payload.snapshot)
     } catch {
       // ignore malformed stream payload
@@ -7011,40 +9960,124 @@ function openNextVStream() {
       const payload = JSON.parse(evt.data)
       const eventType = String(payload?.event?.type ?? '')
       const source = String(payload?.event?.source ?? '')
+      const executionEvents = Array.isArray(payload?.events) ? payload.events : []
+      const mergedExecutionEvents = mergeExecutionEventsWithLiveRuntimeEvents(
+        executionEvents,
+        bufferedRuntimeEventsForExecution,
+      )
       const shouldRenderFromExecution = !nextVHasLiveRuntimeEvents
+      const shouldUseTimerExecutionSupplement = false
+      
+      // Prefer live runtime events. Fall back to execution event replay only when live events were not observed.
+      const runtimeEventsForGraph = shouldRenderFromExecution
+        ? mergedExecutionEvents
+        : []
+      
+      const eventsForGraphProcessing = runtimeEventsForGraph
+
       if (eventType) {
         nextVGraphState.runtimeExternalNodes.add(eventType)
       }
-      if (shouldRenderFromExecution && Array.isArray(payload?.events)) {
-        for (const runtimeEvent of payload.events) {
-          handleNextVGraphRuntimeEvent(runtimeEvent)
-        }
+      
+      for (const runtimeEvent of eventsForGraphProcessing) {
+        handleNextVGraphRuntimeEvent(runtimeEvent)
       }
-      if (shouldRenderFromExecution) {
-        renderCanonicalNextVEvents(payload?.events)
-        appendTraceRows(payload?.events)
+      
+      if (runtimeEventsForGraph.length > 0) {
+        renderCanonicalNextVEvents(runtimeEventsForGraph)
+        appendTraceRows(runtimeEventsForGraph)
       }
-      if (eventType && nextVGraphState.runtimeSequence === 0) {
-        const fallbackHandlerId = inferNextVGraphFallbackHandler(eventType) || `handler:${eventType}`
+
+      const fallbackHandlerId = eventType
+        ? (inferNextVGraphFallbackHandler(eventType) || `handler:${eventType}`)
+        : ''
+      if (fallbackHandlerId && !nextVGraphState.runtimeLastDispatchedNode) {
         updateNextVGraphRuntimeStep(fallbackHandlerId)
         nextVGraphState.runtimeLastDispatchedNode = fallbackHandlerId
-        // Mark both the queued event node and the inferred active handler node.
         nextVGraphState.runtimeActiveNodes.add(eventType)
         nextVGraphState.runtimeActiveNodes.add(fallbackHandlerId)
       }
+
+      const hasExecutionAgentCalls = Array.isArray(payload?.result?.agentCalls) && payload.result.agentCalls.length > 0
+      const shouldUseExecutionTimerFallback = shouldRenderFromExecution
+        && runtimeEventsForGraph.length === 0
+        && hasExecutionAgentCalls
+      if (shouldRenderFromExecution || shouldUseExecutionTimerFallback) {
+        const fallbackNode = String(nextVGraphState.runtimeLastDispatchedNode ?? '').trim() || fallbackHandlerId
+        const agentCalls = Array.isArray(payload?.result?.agentCalls) ? payload.result.agentCalls : []
+        const callsByNode = new Map()
+        for (const call of agentCalls) {
+          const callSourcePath = String(call?.sourcePath ?? '').trim()
+          const callSourceLineRaw = Number(call?.sourceLine)
+          const callSourceLine = Number.isFinite(callSourceLineRaw)
+            ? callSourceLineRaw
+            : Number(call?.line)
+          const resolvedNodeId = resolveNextVGraphHandlerNodeForSource(callSourcePath, callSourceLine, fallbackNode)
+          const nodeId = String(resolvedNodeId ?? '').trim() || fallbackNode
+          if (!nodeId) continue
+          if (!callsByNode.has(nodeId)) {
+            callsByNode.set(nodeId, [])
+          }
+          callsByNode.get(nodeId).push(call)
+        }
+
+        if (callsByNode.size > 0) {
+          for (const [nodeId, calls] of callsByNode.entries()) {
+            reconcileNextVGraphAgentTimersFromExecution(nodeId, { agentCalls: calls })
+            nextVGraphState.runtimeLastDispatchedNode = nodeId
+          }
+        } else if (fallbackNode) {
+          reconcileNextVGraphAgentTimersFromExecution(fallbackNode, payload?.result)
+        }
+        const fallbackFinalizedCount = finalizeNextVGraphActiveAgentTimers({ elapsedMs: extractExecutionAgentElapsedMs(payload?.result) })
+        if (fallbackFinalizedCount > 0) {
+          appendNextVLogRow(`[nextv:agent_timer] fallback finalizer closed ${fallbackFinalizedCount} active timer${fallbackFinalizedCount === 1 ? '' : 's'}`, 'step')
+        }
+      }
+
+      for (const runtimeEvent of runtimeEventsForGraph) {
+        const toolFailureMessage = readToolErrorMessageFromRuntimeEvent(runtimeEvent)
+        if (!toolFailureMessage) continue
+        appendNextVErrorLog({ message: toolFailureMessage }, '[nextv:tool_error]')
+        setStatus('nextv tool error', 'responding')
+      }
+
       applyNextVGraphRuntimeVisuals()
       fadeNextVGraphActiveHighlights(760)
-      const executionSummary = summarizeExecutionAgentCalls(payload?.result)
-      appendNextVLogRow(`[nextv:execution] type=${eventType} source=${source} steps=${Number(payload?.result?.steps ?? 0)} ${executionSummary}`, 'result')
-      const executionDetails = summarizeExecutionAgentCallDetails(payload?.result)
-      if (executionDetails) {
-        appendNextVLogRow(executionDetails, 'result')
+
+      // Build and render execution group (newest-first)
+      nextVExecutionCounter += 1
+      const group = buildExecutionGroup({
+        ...payload,
+        events: mergedExecutionEvents,
+      }, nextVExecutionCounter)
+
+      if (nextVEventsLiveMode) {
+        // Live mode: prepend to groups and render
+        const updated = [group, ...nextVExecutionGroups]
+        const capped = updated.slice(0, 50)
+        _setNextVExecutionGroups(capped)
+        renderExecutionGroups()
+      } else {
+        // Paused mode: buffer the group
+        const buffered = [group, ...nextVEventsPausedBuffer]
+        const cappedBuffer = buffered.slice(0, 50)
+        _setNextVEventsPausedBuffer(cappedBuffer)
+
+        // Update badge
+        const badge = document.getElementById('nextv-events-buffer-count')
+        if (badge) {
+          badge.textContent = `${cappedBuffer.length} new`
+          badge.hidden = false
+        }
       }
+
       const diffBefore = nextVLastKnownState ?? {}
       const diffAfter = payload?.snapshot?.state ?? {}
       appendNextVStateDiffEntry(eventType, buildStateDiff(diffBefore, diffAfter))
       renderNextVSnapshot(payload.snapshot)
-      nextVHasLiveRuntimeEvents = false
+      bufferedRuntimeEventsForExecution = []
+      _setNextVHasLiveRuntimeEvents(false)
       setStatus('nextv execution complete')
     } catch {
       // ignore malformed stream payload
@@ -7056,10 +10089,13 @@ function openNextVStream() {
       const payload = JSON.parse(evt.data)
       const eventType = String(payload?.event?.type ?? '')
       const source = String(payload?.event?.source ?? '')
+      const rawValue = payload?.event?.value
+      const valueStr = rawValue == null ? '' : (typeof rawValue === 'string' ? rawValue : JSON.stringify(rawValue))
+      const valueSuffix = valueStr ? ` value=${valueStr.length > 80 ? valueStr.slice(0, 80) + '\u2026' : valueStr}` : ''
       beginNextVGraphExecutionTrail()
       flashNextVGraphExternalEvent(eventType)
       flashNextVGraphEventValue(eventType, payload?.event?.value, { nodeId: eventType })
-      appendNextVLogRow(`[nextv:event] queued type=${eventType} source=${source}`, 'step')
+      appendNextVLogRow(`[nextv:event] queued type=${eventType} source=${source}${valueSuffix}`, 'step')
     } catch {
       // ignore malformed stream payload
     }
@@ -7080,6 +10116,51 @@ function openNextVStream() {
   nextVEventSource.addEventListener('nextv_error', (evt) => {
     try {
       const payload = JSON.parse(evt.data)
+      const errorEvents = Array.isArray(payload?.events) ? payload.events : []
+      if (errorEvents.length > 0) {
+        for (const runtimeEvent of errorEvents) {
+          handleNextVGraphRuntimeEvent(runtimeEvent)
+        }
+        renderCanonicalNextVEvents(errorEvents)
+        appendTraceRows(errorEvents)
+      }
+
+      const sourceLabelFallback = String(payload?.sourcePath ?? '').trim()
+      const lineFallback = Number.isFinite(Number(payload?.sourceLine))
+        ? Number(payload.sourceLine)
+        : Number(payload?.line)
+      const fallbackHandlerId = sourceLabelFallback
+        ? resolveNextVGraphHandlerNodeForSource(sourceLabelFallback, lineFallback, String(nextVGraphState.runtimeLastDispatchedNode ?? '').trim())
+        : String(nextVGraphState.runtimeLastDispatchedNode ?? '').trim()
+      const errorAgentCalls = Array.isArray(payload?.result?.agentCalls) ? payload.result.agentCalls : []
+      if (errorAgentCalls.length > 0) {
+        const callsByNode = new Map()
+        for (const call of errorAgentCalls) {
+          const callSourcePath = String(call?.sourcePath ?? '').trim()
+          const callSourceLineRaw = Number(call?.sourceLine)
+          const callSourceLine = Number.isFinite(callSourceLineRaw)
+            ? callSourceLineRaw
+            : Number(call?.line)
+          const resolvedNodeId = resolveNextVGraphHandlerNodeForSource(callSourcePath, callSourceLine, fallbackHandlerId)
+          const nodeId = String(resolvedNodeId ?? '').trim() || fallbackHandlerId
+          if (!nodeId) continue
+          if (!callsByNode.has(nodeId)) {
+            callsByNode.set(nodeId, [])
+          }
+          callsByNode.get(nodeId).push(call)
+        }
+        if (callsByNode.size > 0) {
+          for (const [nodeId, calls] of callsByNode.entries()) {
+            reconcileNextVGraphAgentTimersFromExecution(nodeId, { agentCalls: calls })
+            nextVGraphState.runtimeLastDispatchedNode = nodeId
+          }
+        } else if (fallbackHandlerId) {
+          reconcileNextVGraphAgentTimersFromExecution(fallbackHandlerId, { agentCalls: errorAgentCalls })
+        }
+      }
+
+      finalizeNextVGraphActiveAgentTimers()
+      applyNextVGraphRuntimeVisuals()
       appendNextVErrorLog(payload)
       if (payload?.snapshot) renderNextVSnapshot(payload.snapshot)
       const { line, sourcePath } = getErrorMessageAndSource(payload)
@@ -7104,18 +10185,18 @@ function openNextVStream() {
       if (payload?.snapshot) renderNextVSnapshot(payload.snapshot)
       resetNextVGraphRuntimeState({ keepExternalNodes: true })
       applyNextVGraphRuntimeVisuals()
-      nextVRuntimeRunning = false
+      _setNextVRuntimeRunning(false)
       setNextVRunControls()
       appendNextVLogRow('[nextv:stop] runtime stopped', 'step')
       setStatus('nextv runtime stopped')
     } catch {
-      nextVRuntimeRunning = false
+      _setNextVRuntimeRunning(false)
       setNextVRunControls()
     }
   })
 }
 
-async function refreshNextVSnapshot() {
+export async function refreshNextVSnapshot() {
   try {
     const res = await fetch(buildNextVApiPath('/api/nextv/snapshot'))
     const data = await res.json().catch(() => ({}))
@@ -7134,17 +10215,36 @@ async function refreshNextVSnapshot() {
   }
 }
 
-async function syncNextVRuntimeState() {
+export async function syncNextVRuntimeState() {
+  if (nextVRuntimeTargetState.target === 'attach' && nextVAttachSessionState.attached !== true) {
+    _setIsRemoteMode(true)
+    _setIsRemoteControlMode(true)
+    _setRemoteTransport('ws')
+    _setIsRemoteRuntimeConnected(false)
+    _setNextVRuntimeRunning(false)
+    updateRemoteRuntimeIdentity(null, { clear: true })
+    updateRemoteModeBadge()
+    closeNextVStream()
+    setNextVRunControls()
+    syncNextVAttachSessionUi()
+    return
+  }
+
   try {
     const res = await fetch(buildNextVApiPath('/api/nextv/snapshot'))
     const data = await res.json().catch(() => ({}))
 
-    isRemoteMode = data?.remoteMode === true
-    isRemoteControlMode = data?.remoteControl === true
-    remoteTransport = String(data?.remoteTransport ?? (isRemoteControlMode ? 'ws' : (isRemoteMode ? 'mqtt' : 'local')))
-    isRemoteRuntimeConnected = isRemoteControlMode
-      ? (data?.remoteConnection?.connected === true)
-      : true
+    _setIsRemoteMode(data?.remoteMode === true)
+    _setIsRemoteControlMode(data?.remoteControl === true)
+    _setRemoteTransport(String(data?.remoteTransport ?? (isRemoteControlMode ? 'ws' : (isRemoteMode ? 'mqtt' : 'local'))))
+    const attachConnected = nextVRuntimeTargetState.target === 'attach' && nextVAttachSessionState.attached === true
+    _setIsRemoteRuntimeConnected(
+      attachConnected
+        ? true
+        : (isRemoteControlMode
+          ? (data?.remoteConnection?.connected === true)
+          : true),
+    )
     if (isRemoteMode) {
       updateRemoteRuntimeIdentity(data)
     } else {
@@ -7152,25 +10252,43 @@ async function syncNextVRuntimeState() {
     }
 
     if (!res.ok) {
-      nextVRuntimeRunning = false
+      _setNextVRuntimeRunning(false)
       updateRemoteModeBadge()
       closeNextVStream()
       setNextVRunControls()
       return
     }
     updateRemoteModeBadge()
-    renderNextVSnapshot(data.snapshot)
+    renderNextVSnapshot(data.snapshot, { skipControlUpdate: true })
     if (isRemoteMode || data?.snapshot?.running === true) {
       openNextVStream()
     } else {
       closeNextVStream()
     }
-    nextVRuntimeRunning = data?.running === true
+    const resolvedRunning = (
+      data?.running === true
+      || data?.snapshot?.running === true
+      || data?.remoteConnection?.remoteActive === true
+    )
+    _setNextVRuntimeRunning(resolvedRunning)
+    if (nextVRuntimeRunning) {
+      _setNextVManagedProcessRunning(true)
+      appendNextVLogRow('[nextv:reconnect] reattached to running workflow', 'step')
+      setStatus('reconnected to running workflow')
+    }
+    if (nextVRuntimeTargetState.target === 'attach') {
+      nextVAttachSessionState.lastError = ''
+      syncNextVAttachSessionUi()
+    }
     setNextVRunControls()
-  } catch {
-    nextVRuntimeRunning = false
+  } catch (err) {
+    _setNextVRuntimeRunning(false)
     if (isRemoteControlMode) {
-      isRemoteRuntimeConnected = false
+      _setIsRemoteRuntimeConnected(false)
+    }
+    if (nextVRuntimeTargetState.target === 'attach') {
+      nextVAttachSessionState.lastError = String(err?.message ?? 'remote runtime websocket is not connected')
+      syncNextVAttachSessionUi()
     }
     updateRemoteModeBadge()
     closeNextVStream()
@@ -7178,9 +10296,9 @@ async function syncNextVRuntimeState() {
   }
 }
 
-async function runNextVRuntime() {
+export async function runNextVRuntime() {
   const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
-  const entrypointPath = normalizeRelativePath(nextVEntrypointInput?.value ?? '')
+  const entrypointPath = normalizeEntrypointForWorkspace(nextVEntrypointInput?.value ?? '', workspaceDir)
   if (!entrypointPath) {
     setStatus('nextv entrypoint required', 'responding')
     return
@@ -7203,7 +10321,7 @@ async function runNextVRuntime() {
       throw new Error(data.error ?? 'failed to start runtime process')
     }
 
-    nextVManagedProcessRunning = true
+    _setNextVManagedProcessRunning(true)
     setNextVRunControls()
     setStatus('nextv runtime process started; click start to begin workflow')
   } catch (err) {
@@ -7212,7 +10330,7 @@ async function runNextVRuntime() {
   }
 }
 
-async function killNextVRuntime() {
+export async function killNextVRuntime() {
   if (isBusy) return
 
   try {
@@ -7225,8 +10343,8 @@ async function killNextVRuntime() {
       throw new Error(data.error ?? 'failed to kill runtime process')
     }
 
-    nextVManagedProcessRunning = false
-    nextVRuntimeRunning = false
+    _setNextVManagedProcessRunning(false)
+    _setNextVRuntimeRunning(false)
     closeNextVStream()
     setNextVRunControls()
     setStatus('nextv runtime process stopped')
@@ -7236,9 +10354,14 @@ async function killNextVRuntime() {
   }
 }
 
-async function startNextVRuntime() {
-  const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
-  const entrypointPath = normalizeRelativePath(nextVEntrypointInput?.value ?? '')
+export async function startNextVRuntime() {
+  const isAttachLockedToRuntime = nextVRuntimeTargetState.target === 'attach' && !isNextVAttachStartOverrideEnabled()
+  const localWorkspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
+  const localEntrypointPath = normalizeEntrypointForWorkspace(nextVEntrypointInput?.value ?? '', localWorkspaceDir)
+  const runtimeWorkspaceDir = normalizeNextVWorkspaceDir(remoteRuntimeWorkspaceDir ?? '')
+  const runtimeEntrypointPath = normalizeEntrypointForWorkspace(remoteRuntimeEntrypointPath ?? '', runtimeWorkspaceDir)
+  const workspaceDir = isAttachLockedToRuntime ? (runtimeWorkspaceDir || localWorkspaceDir) : localWorkspaceDir
+  const entrypointPath = isAttachLockedToRuntime ? (runtimeEntrypointPath || localEntrypointPath) : localEntrypointPath
   const emitTrace = true
   const emitTraceState = true
   if (!entrypointPath) {
@@ -7256,7 +10379,9 @@ async function startNextVRuntime() {
     clearTracePanel({ silent: true })
     clearNextVEventsOutput()
     clearNextVConsoleOutput()
-    await ensureNextVEntrypointVisible({ logLoaded: true, warnOnDirty: true })
+    if (!isAttachLockedToRuntime) {
+      await ensureNextVEntrypointVisible({ logLoaded: true, warnOnDirty: true })
+    }
     const res = await fetch(buildNextVApiPath('/api/nextv/start'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -7272,7 +10397,7 @@ async function startNextVRuntime() {
       throw new Error(data.error ?? 'failed to start nextv runtime')
     }
 
-    nextVRuntimeRunning = true
+    _setNextVRuntimeRunning(true)
     setNextVRunControls()
     openNextVStream()
     if (!nextVEventSource) {
@@ -7309,7 +10434,7 @@ async function startNextVRuntime() {
     await refreshNextVGraph({ silent: true, preserveViewport: true })
     beginNextVGraphExecutionTrail()
     flashNextVGraphSignalDispatch('init', 1000)
-    nextVLastKnownState = null
+    _setNextVLastKnownState(null)
     clearNextVStateDiff()
     appendNextVStateDiffEntry('init', buildStateDiff({}, data?.snapshot?.state ?? {}))
     renderNextVSnapshot(data.snapshot)
@@ -7320,7 +10445,7 @@ async function startNextVRuntime() {
   }
 }
 
-async function stopNextVRuntime() {
+export async function stopNextVRuntime() {
   try {
     const hadStream = Boolean(nextVEventSource)
     const res = await fetch(buildNextVApiPath('/api/nextv/stop'), {
@@ -7332,10 +10457,10 @@ async function stopNextVRuntime() {
       throw new Error(data.error ?? 'failed to stop nextv runtime')
     }
 
-    nextVRuntimeRunning = false
+    _setNextVRuntimeRunning(false)
     // In external mode, stopping the workflow does not kill the process
     if (nextVRuntimeTargetState.target !== 'external') {
-      nextVManagedProcessRunning = false
+      _setNextVManagedProcessRunning(false)
     }
     setNextVRunControls()
     closeNextVStream()
@@ -7354,7 +10479,132 @@ async function stopNextVRuntime() {
   }
 }
 
-async function sendNextVEvent() {
+export async function reloadNextVRuntimeConfig() {
+  if (!nextVRuntimeRunning) {
+    setStatus('nextv runtime not running', 'responding')
+    return
+  }
+
+  if (isBusy) {
+    setStatus('busy: wait for current task', 'responding')
+    return
+  }
+
+  try {
+    const res = await fetch(buildNextVApiPath('/api/nextv/reload-config'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'failed to reload nextv config')
+    }
+
+    if (data?.workspaceConfig && typeof data.workspaceConfig === 'object') {
+      appendNextVLogRow(`[nextv:config] reloaded`, 'step')
+      appendNextVLogRow(formatWorkspaceConfigStatus(data.workspaceConfig), 'result')
+    }
+    setStatus('nextv config reloaded')
+  } catch (err) {
+    appendNextVErrorLog(err)
+    setStatus('nextv config reload failed', 'responding')
+  }
+}
+
+export async function submitNextVCandidate() {
+  if (!nextVRuntimeRunning) {
+    setStatus('nextv runtime not running', 'responding')
+    return
+  }
+
+  if (isBusy) {
+    setStatus('busy: wait for current task', 'responding')
+    return
+  }
+
+  try {
+    const res = await fetch(buildNextVApiPath('/api/nextv/submit-candidate'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'failed to submit candidate')
+    }
+
+    const candidate = data.candidate ?? {}
+    const status = candidate.status ?? 'unknown'
+    const issues = Array.isArray(candidate.issues) ? candidate.issues : []
+    const isPromotable = status === 'promotable'
+
+    _setNextVCandidatePromotable(isPromotable)
+    if (nextVCandidateStatusRow) nextVCandidateStatusRow.hidden = false
+    if (nextVCandidateStatusBadge) nextVCandidateStatusBadge.textContent = status
+    if (nextVCandidateIssueCount) {
+      nextVCandidateIssueCount.textContent = issues.length > 0 ? `${issues.length} issue${issues.length === 1 ? '' : 's'}` : ''
+    }
+
+    appendNextVLogRow(`[nextv:candidate] ${status}`, isPromotable ? 'step' : 'warn')
+    if (candidate.workspaceConfig && typeof candidate.workspaceConfig === 'object') {
+      appendNextVLogRow(formatWorkspaceConfigStatus(candidate.workspaceConfig), 'result')
+    }
+    if (issues.length > 0) {
+      for (const issue of issues) {
+        appendNextVLogRow(`  issue: ${issue}`, 'warn')
+      }
+    }
+    setNextVRunControls()
+    setStatus(`candidate: ${status}`)
+  } catch (err) {
+    appendNextVErrorLog(err)
+    setStatus('candidate validation failed', 'responding')
+  }
+}
+
+export async function promoteNextVCandidate() {
+  if (!nextVRuntimeRunning) {
+    setStatus('nextv runtime not running', 'responding')
+    return
+  }
+
+  if (!nextVCandidatePromotable) {
+    setStatus('no promotable candidate', 'responding')
+    return
+  }
+
+  if (isBusy) {
+    setStatus('busy: wait for current task', 'responding')
+    return
+  }
+
+  try {
+    const res = await fetch(buildNextVApiPath('/api/nextv/promote-candidate'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'failed to promote candidate')
+    }
+
+    _setNextVCandidatePromotable(false)
+    if (nextVCandidateStatusRow) nextVCandidateStatusRow.hidden = true
+    if (nextVCandidateStatusBadge) nextVCandidateStatusBadge.textContent = ''
+    if (nextVCandidateIssueCount) nextVCandidateIssueCount.textContent = ''
+
+    appendNextVLogRow(`[nextv:candidate] promoted`, 'step')
+    if (data?.workspaceConfig && typeof data.workspaceConfig === 'object') {
+      appendNextVLogRow(formatWorkspaceConfigStatus(data.workspaceConfig), 'result')
+    }
+    setNextVRunControls()
+    setStatus('candidate promoted')
+  } catch (err) {
+    appendNextVErrorLog(err)
+    setStatus('candidate promotion failed', 'responding')
+  }
+}
+
+export async function sendNextVEvent() {
   const value = String(nextVEventValueInput?.value ?? '')
   const selectedChannel = getSelectedNextVInputChannel()
   const eventType = selectedChannel || String(nextVEventTypeInput?.value ?? '').trim()
@@ -7383,7 +10633,9 @@ async function sendNextVEvent() {
     }
 
     if (!nextVEventSource) {
-      appendNextVLogRow(`[nextv:event] queued type=${eventType} source=${source}`, 'step')
+      const valueSnippet = value ? (value.length > 80 ? value.slice(0, 80) + '\u2026' : value) : ''
+      const valueSuffix = valueSnippet ? ` value=${valueSnippet}` : ''
+      appendNextVLogRow(`[nextv:event] queued type=${eventType} source=${source}${valueSuffix}`, 'step')
       renderNextVSnapshot(data.snapshot)
     }
     if (attachedImages.length > 0) {
@@ -7398,7 +10650,7 @@ async function sendNextVEvent() {
   }
 }
 
-async function sendNextVIngress() {
+export async function sendNextVIngress() {
   const name = String(nextVIngressNameInput?.value ?? '').trim()
   const value = String(nextVIngressValueInput?.value ?? '')
 
@@ -7431,7 +10683,770 @@ async function sendNextVIngress() {
   }
 }
 
-function updateNextVEventImageUI() {
+export async function executeNextVCallInspector() {
+  const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
+  const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  const modeRaw = String(nextVCallModeInput?.value ?? 'call').trim().toLowerCase()
+  const mode = modeRaw === 'try' ? 'try' : 'call'
+  await refreshNextVCallInspectorAgents({ quiet: true })
+  const target = getNextVCallInspectorTargetValue(targetKind)
+  const instructions = String(nextVCallInstructionsInput?.value ?? '')
+  const prompt = String(nextVCallPromptInput?.value ?? '')
+  const returnsText = String(nextVCallReturnsInput?.value ?? '').trim()
+  const decideText = String(nextVCallDecideInput?.value ?? '').trim()
+  const validateRaw = String(nextVCallValidateInput?.value ?? 'coerce').trim().toLowerCase()
+  const validate = ['strict', 'coerce', 'none'].includes(validateRaw) ? validateRaw : 'coerce'
+  const retryRaw = Number(nextVCallRetryInput?.value)
+  const retryCount = Number.isInteger(retryRaw) ? Math.max(0, Math.min(8, retryRaw)) : 0
+
+  if (!target) {
+    setStatus('call inspector target is required', 'responding')
+    return
+  }
+  if (!prompt.trim()) {
+    setStatus('call inspector prompt is required', 'responding')
+    return
+  }
+  if (returnsText && decideText) {
+    setStatus('use either returns or decide, not both', 'responding')
+    return
+  }
+
+  const requestBody = {
+    workspaceDir: normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? ''),
+    targetKind,
+    mode,
+    instructions,
+    prompt,
+    validate,
+    retry_on_contract_violation: retryCount,
+  }
+  if (targetKind === 'agent') {
+    requestBody.agent = target
+  } else {
+    requestBody.model = target
+  }
+
+  if (returnsText) {
+    try {
+      requestBody.returns = JSON.parse(returnsText)
+    } catch {
+      setStatus('returns contract must be valid JSON', 'responding')
+      return
+    }
+  }
+  if (decideText) {
+    requestBody.decide = decideText
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean)
+  }
+
+  renderNextVCallInspectorResolvedCall({ status: 'resolving runtime invocation...' })
+  renderNextVCallInspectorResult({ status: 'running call inspector request...' })
+  setStatus('executing call inspector...', 'responding')
+
+  try {
+    const res = await fetch(buildNextVApiPath('/api/nextv/call-inspector/execute'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'call inspector execution failed')
+    }
+
+    renderNextVCallInspectorResolvedCall(data?.resolvedCall ?? { status: 'resolved call unavailable' })
+    renderNextVCallInspectorResult(data)
+
+    const targetLabel = targetKind === 'agent'
+      ? `agent=${requestBody.agent}`
+      : `model=${requestBody.model}`
+    appendNextVLogRow(`[nextv:call-inspector] executed ${targetLabel}`, 'step')
+    setStatus('call inspector completed')
+  } catch (err) {
+    appendNextVErrorLog(err)
+    renderNextVCallInspectorResolvedCall({ error: 'execution failed before resolved call was available' })
+    renderNextVCallInspectorResult({ error: String(err?.message ?? err) })
+    setStatus('call inspector failed', 'responding')
+  }
+}
+
+function stringifyInspectorPane(value) {
+  if (value == null) return 'null'
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function persistNextVCallInspectorInputs() {
+  const targetKind = String(nextVCallTargetKindInput?.value ?? '').trim()
+  if (targetKind) localStorage.setItem(storageKeys.nextVCallInspectorTargetKind, targetKind)
+
+  const modeRaw = String(nextVCallModeInput?.value ?? '').trim().toLowerCase()
+  const mode = modeRaw === 'try' ? 'try' : 'call'
+  localStorage.setItem(storageKeys.nextVCallInspectorMode, mode)
+
+  const targetAgent = String(nextVCallTargetAgentInput?.value ?? '').trim()
+  if (targetAgent) localStorage.setItem(storageKeys.nextVCallInspectorTargetAgent, targetAgent)
+
+  const targetModel = String(nextVCallTargetInput?.value ?? '').trim()
+  if (targetModel) localStorage.setItem(storageKeys.nextVCallInspectorTargetModel, targetModel)
+
+  const validate = String(nextVCallValidateInput?.value ?? '').trim()
+  if (validate) localStorage.setItem(storageKeys.nextVCallInspectorValidate, validate)
+
+  const retry = String(nextVCallRetryInput?.value ?? '').trim()
+  if (retry !== '') localStorage.setItem(storageKeys.nextVCallInspectorRetry, retry)
+
+  localStorage.setItem(storageKeys.nextVCallInspectorInstructions, String(nextVCallInstructionsInput?.value ?? ''))
+  localStorage.setItem(storageKeys.nextVCallInspectorPrompt, String(nextVCallPromptInput?.value ?? ''))
+  localStorage.setItem(storageKeys.nextVCallInspectorReturns, String(nextVCallReturnsInput?.value ?? ''))
+  localStorage.setItem(storageKeys.nextVCallInspectorDecide, String(nextVCallDecideInput?.value ?? ''))
+}
+
+function restoreNextVCallInspectorInputs() {
+  const targetKind = String(localStorage.getItem(storageKeys.nextVCallInspectorTargetKind) ?? '').trim()
+  if (targetKind && nextVCallTargetKindInput) nextVCallTargetKindInput.value = targetKind
+
+  const storedMode = String(localStorage.getItem(storageKeys.nextVCallInspectorMode) ?? '').trim().toLowerCase()
+  if (nextVCallModeInput) {
+    nextVCallModeInput.value = storedMode === 'try' ? 'try' : 'call'
+  }
+
+  const validate = String(localStorage.getItem(storageKeys.nextVCallInspectorValidate) ?? '').trim()
+  if (validate && nextVCallValidateInput) nextVCallValidateInput.value = validate
+
+  const retry = String(localStorage.getItem(storageKeys.nextVCallInspectorRetry) ?? '').trim()
+  if (retry !== '' && nextVCallRetryInput) nextVCallRetryInput.value = retry
+
+  const instructions = localStorage.getItem(storageKeys.nextVCallInspectorInstructions)
+  if (instructions !== null && nextVCallInstructionsInput) nextVCallInstructionsInput.value = instructions
+
+  const prompt = localStorage.getItem(storageKeys.nextVCallInspectorPrompt)
+  if (prompt !== null && nextVCallPromptInput) nextVCallPromptInput.value = prompt
+
+  const returns = localStorage.getItem(storageKeys.nextVCallInspectorReturns)
+  if (returns !== null && nextVCallReturnsInput) nextVCallReturnsInput.value = returns
+
+  const decide = localStorage.getItem(storageKeys.nextVCallInspectorDecide)
+  if (decide !== null && nextVCallDecideInput) nextVCallDecideInput.value = decide
+}
+
+const nextVCallInspectorProjectConfig = {
+  agentsByName: {},
+  modelsByName: {},
+  transportProvidersByName: {},
+}
+
+function setNextVCallInspectorProjectConfig(payload = {}) {
+  const agentsByName = payload?.agentsByName
+  const modelsByName = payload?.modelsByName
+  const transportProvidersByName = payload?.transportProvidersByName
+
+  nextVCallInspectorProjectConfig.agentsByName = agentsByName && typeof agentsByName === 'object' && !Array.isArray(agentsByName)
+    ? agentsByName
+    : {}
+  nextVCallInspectorProjectConfig.modelsByName = modelsByName && typeof modelsByName === 'object' && !Array.isArray(modelsByName)
+    ? modelsByName
+    : {}
+  nextVCallInspectorProjectConfig.transportProvidersByName = transportProvidersByName && typeof transportProvidersByName === 'object' && !Array.isArray(transportProvidersByName)
+    ? transportProvidersByName
+    : {}
+}
+
+function renderNextVCallInspectorTargetConfig() {
+  if (!nextVCallTargetConfigOutput || !nextVCallTargetConfigLabel) return
+
+  const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
+  const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  const targetName = getNextVCallInspectorTargetValue(targetKind)
+
+  if (!targetName) {
+    nextVCallTargetConfigLabel.textContent = 'project config'
+    nextVCallTargetConfigOutput.textContent = '(select a configured target)'
+    return
+  }
+
+  if (targetKind === 'agent') {
+    const profile = nextVCallInspectorProjectConfig.agentsByName[targetName]
+    nextVCallTargetConfigLabel.textContent = `project config · agent.${targetName}`
+    if (!profile || typeof profile !== 'object') {
+      nextVCallTargetConfigOutput.textContent = stringifyInspectorPane({ status: 'agent not found in workspace config' })
+      return
+    }
+
+    const modelName = String(profile?.model ?? profile?.modelId ?? '').trim()
+    const model = modelName ? nextVCallInspectorProjectConfig.modelsByName[modelName] : null
+    const transportName = String(model?.transport ?? '').trim()
+    const provider = transportName
+      ? String(nextVCallInspectorProjectConfig.transportProvidersByName[transportName] ?? '').trim()
+      : ''
+
+    nextVCallTargetConfigOutput.textContent = stringifyInspectorPane({
+      agent: profile,
+      model: model
+        ? {
+            name: modelName,
+            ...model,
+            transportProvider: provider || undefined,
+          }
+        : (modelName
+          ? {
+              name: modelName,
+              status: 'model referenced by agent not found in workspace config',
+            }
+          : {
+              status: 'agent does not declare a model',
+            }),
+    })
+    return
+  }
+
+  const model = nextVCallInspectorProjectConfig.modelsByName[targetName]
+  const transportName = String(model?.transport ?? '').trim()
+  const provider = transportName
+    ? String(nextVCallInspectorProjectConfig.transportProvidersByName[transportName] ?? '').trim()
+    : ''
+  nextVCallTargetConfigLabel.textContent = `project config · model.${targetName}`
+  nextVCallTargetConfigOutput.textContent = stringifyInspectorPane(model
+    ? {
+        ...model,
+        transportProvider: provider || undefined,
+      }
+    : { status: 'model not found in workspace config' })
+}
+
+function renderNextVCallInspectorResolvedCall(resolvedCall = null) {
+  if (!nextVCallResolvedOutput || !nextVCallResolvedLabel) return
+
+  nextVCallResolvedLabel.textContent = 'resolved call · final model-facing request'
+  if (!resolvedCall) {
+    nextVCallResolvedOutput.textContent = '(run call to inspect resolved invocation)'
+    return
+  }
+
+  const compact = {
+    ...resolvedCall,
+    finalRequest: resolvedCall?.finalRequest ?? {
+      model: String(resolvedCall?.resolvedModel ?? '').trim(),
+      messageCount: Number(resolvedCall?.messageCount ?? 0),
+      messages: Array.isArray(resolvedCall?.finalMessages) ? resolvedCall.finalMessages : [],
+    },
+  }
+
+  nextVCallResolvedOutput.textContent = stringifyInspectorPane(compact)
+}
+
+function getNextVCallInspectorTargetValue(targetKind) {
+  const normalizedTargetKind = String(targetKind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  if (normalizedTargetKind === 'agent') {
+    return String(nextVCallTargetAgentInput?.value ?? '').trim()
+  }
+  return String(nextVCallTargetInput?.value ?? '').trim()
+}
+
+function syncNextVCallInspectorTargetMode() {
+  const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
+  const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  const isAgentMode = targetKind === 'agent'
+
+  if (nextVCallTargetAgentInput) {
+    nextVCallTargetAgentInput.hidden = !isAgentMode
+    nextVCallTargetAgentInput.disabled = !isAgentMode
+  }
+  if (nextVCallTargetInput) {
+    nextVCallTargetInput.hidden = isAgentMode
+    nextVCallTargetInput.disabled = isAgentMode
+  }
+}
+
+function setNextVCallInspectorAgentOptions(agentNames, options = {}) {
+  if (!nextVCallTargetAgentInput) return
+  const emptyLabel = String(options?.emptyLabel ?? '(no configured agents)')
+
+  const names = Array.isArray(agentNames) ? agentNames.filter(Boolean).map((value) => String(value).trim()).filter(Boolean) : []
+  const currentValue = String(nextVCallTargetAgentInput.value ?? '').trim()
+  nextVCallTargetAgentInput.innerHTML = ''
+
+  if (names.length === 0) {
+    const emptyOption = document.createElement('option')
+    emptyOption.value = ''
+    emptyOption.textContent = emptyLabel
+    nextVCallTargetAgentInput.appendChild(emptyOption)
+    return
+  }
+
+  for (const name of names) {
+    const option = document.createElement('option')
+    option.value = name
+    option.textContent = name
+    nextVCallTargetAgentInput.appendChild(option)
+  }
+
+  if (currentValue && names.includes(currentValue)) {
+    nextVCallTargetAgentInput.value = currentValue
+  } else {
+    nextVCallTargetAgentInput.value = names[0]
+  }
+}
+
+function setNextVCallInspectorModelOptions(modelNames, options = {}) {
+  if (!nextVCallTargetInput) return
+  const emptyLabel = String(options?.emptyLabel ?? '(no configured models)')
+
+  const names = Array.isArray(modelNames) ? modelNames.filter(Boolean).map((value) => String(value).trim()).filter(Boolean) : []
+  const currentValue = String(nextVCallTargetInput.value ?? '').trim()
+  nextVCallTargetInput.innerHTML = ''
+
+  if (names.length === 0) {
+    const emptyOption = document.createElement('option')
+    emptyOption.value = ''
+    emptyOption.textContent = emptyLabel
+    nextVCallTargetInput.appendChild(emptyOption)
+    return
+  }
+
+  for (const name of names) {
+    const option = document.createElement('option')
+    option.value = name
+    option.textContent = name
+    nextVCallTargetInput.appendChild(option)
+  }
+
+  if (currentValue && names.includes(currentValue)) {
+    nextVCallTargetInput.value = currentValue
+  } else {
+    nextVCallTargetInput.value = names[0]
+  }
+}
+
+export async function refreshNextVCallInspectorAgents(options = {}) {
+  const quiet = options?.quiet === true
+  const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
+  const noAgentsLabel = workspaceDir
+    ? '(no configured agents)'
+    : '(set workspace folder to load agents)'
+  const noModelsLabel = workspaceDir
+    ? '(no configured models)'
+    : '(set workspace folder to load models)'
+
+  try {
+    const query = workspaceDir ? `?workspaceDir=${encodeURIComponent(workspaceDir)}` : ''
+    const res = await fetch(buildNextVApiPath(`/api/nextv/workspace-config${query}`))
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'failed to load workspace config')
+    }
+
+    const configuredAgents = Array.isArray(data?.configuredAgents) ? data.configuredAgents : []
+    const configuredModels = Array.isArray(data?.configuredModels) ? data.configuredModels : []
+    setNextVCallInspectorProjectConfig({
+      agentsByName: data?.configuredAgentProfiles,
+      modelsByName: data?.configuredModelConfigs,
+      transportProvidersByName: data?.configuredTransportProviders,
+    })
+    setNextVCallInspectorAgentOptions(configuredAgents, { emptyLabel: noAgentsLabel })
+    setNextVCallInspectorModelOptions(configuredModels, { emptyLabel: noModelsLabel })
+
+    const storedAgent = String(localStorage.getItem(storageKeys.nextVCallInspectorTargetAgent) ?? '').trim()
+    if (storedAgent && nextVCallTargetAgentInput) {
+      const agentOptions = [...nextVCallTargetAgentInput.options].map((o) => o.value)
+      if (agentOptions.includes(storedAgent)) nextVCallTargetAgentInput.value = storedAgent
+    }
+    const storedModel = String(localStorage.getItem(storageKeys.nextVCallInspectorTargetModel) ?? '').trim()
+    if (storedModel && nextVCallTargetInput) {
+      const modelOptions = [...nextVCallTargetInput.options].map((o) => o.value)
+      if (modelOptions.includes(storedModel)) nextVCallTargetInput.value = storedModel
+    }
+
+    syncNextVCallInspectorTargetMode()
+    renderNextVCallInspectorTargetConfig()
+    renderNextVCallInspectorSnippet()
+  } catch (err) {
+    setNextVCallInspectorProjectConfig({})
+    setNextVCallInspectorAgentOptions([], {
+      emptyLabel: workspaceDir ? '(workspace config unavailable)' : noAgentsLabel,
+    })
+    setNextVCallInspectorModelOptions([], {
+      emptyLabel: workspaceDir ? '(workspace config unavailable)' : noModelsLabel,
+    })
+    syncNextVCallInspectorTargetMode()
+    renderNextVCallInspectorTargetConfig()
+    if (!quiet) {
+      appendNextVErrorLog(err)
+      setStatus('could not load configured agents', 'responding')
+    }
+  }
+}
+
+function ensureNextVCallInspectorOption(selectEl, value) {
+  if (!selectEl) return false
+  const targetValue = String(value ?? '').trim()
+  if (!targetValue) return false
+
+  const existingOption = [...selectEl.options].find((option) => String(option.value ?? '').trim() === targetValue)
+  if (existingOption) {
+    selectEl.value = targetValue
+    return true
+  }
+
+  const option = document.createElement('option')
+  option.value = targetValue
+  option.textContent = targetValue
+  selectEl.appendChild(option)
+  selectEl.value = targetValue
+  return true
+}
+
+function applyNextVCallInspectorPrefill(prefill = {}) {
+  if (!prefill || typeof prefill !== 'object') return
+
+  const instructions = String(prefill.instructions ?? '').trim()
+  if (instructions && nextVCallInstructionsInput) {
+    nextVCallInstructionsInput.value = instructions
+  }
+
+  const prompt = String(prefill.prompt ?? '').trim()
+  if (prompt && nextVCallPromptInput) {
+    nextVCallPromptInput.value = prompt
+  }
+
+  const returnsText = String(prefill.returnsText ?? '').trim()
+  if (returnsText && nextVCallReturnsInput) {
+    nextVCallReturnsInput.value = returnsText
+  }
+
+  let decideText = ''
+  if (Array.isArray(prefill.decide)) {
+    decideText = prefill.decide.map((value) => String(value ?? '').trim()).filter(Boolean).join(', ')
+  } else {
+    decideText = String(prefill.decideText ?? '').trim()
+  }
+  if (decideText && nextVCallDecideInput) {
+    nextVCallDecideInput.value = decideText
+  }
+
+  const validateRaw = String(prefill.validate ?? '').trim().toLowerCase()
+  if (['strict', 'coerce', 'none'].includes(validateRaw) && nextVCallValidateInput) {
+    nextVCallValidateInput.value = validateRaw
+  }
+
+  const retryNumeric = Number(prefill.retry)
+  if (Number.isInteger(retryNumeric) && nextVCallRetryInput) {
+    nextVCallRetryInput.value = String(Math.max(0, Math.min(8, retryNumeric)))
+  }
+}
+
+export async function openNextVCallInspectorForToken(kind, value, options = {}) {
+  const targetKind = String(kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  const targetValue = String(value ?? '').trim()
+
+  if (nextVCallInspectorPanel?.hidden) {
+    toggleNextVCallInspectorPanel()
+  }
+
+  await refreshNextVCallInspectorAgents({ quiet: true })
+
+  if (nextVCallTargetKindInput) {
+    nextVCallTargetKindInput.value = targetKind
+  }
+  syncNextVCallInspectorTargetMode()
+
+  if (targetKind === 'model') {
+    if (targetValue) {
+      ensureNextVCallInspectorOption(nextVCallTargetInput, targetValue)
+    }
+  } else {
+    if (targetValue) {
+      ensureNextVCallInspectorOption(nextVCallTargetAgentInput, targetValue)
+    }
+  }
+
+  applyNextVCallInspectorPrefill(options?.prefill)
+
+  persistNextVCallInspectorInputs()
+  renderNextVCallInspectorTargetConfig()
+  renderNextVCallInspectorSnippet()
+
+  if (options?.focusPrompt !== false && nextVCallPromptInput) {
+    nextVCallPromptInput.focus()
+  }
+
+  setStatus(
+    targetValue
+      ? `call inspector target set to ${targetKind}.${targetValue}`
+      : `call inspector opened for ${targetKind} target`
+  )
+  return true
+}
+
+export function setNextVCallInspectorResultTab(tab) {
+  const rawTab = String(tab ?? '').trim()
+  const normalizedTab = rawTab === 'result'
+    ? 'parsed'
+    : (rawTab === 'retry' ? 'try' : rawTab)
+  const nextTab = ['raw', 'actual', 'parsed', 'validation', 'try', 'metadata'].includes(normalizedTab)
+    ? normalizedTab
+    : 'raw'
+
+  const buttons = {
+    raw: nextVCallResultTabRaw,
+    actual: nextVCallResultTabActual,
+    parsed: nextVCallResultTabParsed,
+    validation: nextVCallResultTabValidation,
+    try: nextVCallResultTabTry,
+    metadata: nextVCallResultTabMetadata,
+  }
+  const panes = {
+    raw: nextVCallResultRaw,
+    actual: nextVCallResultActual,
+    parsed: nextVCallResultParsed,
+    validation: nextVCallResultValidation,
+    try: nextVCallResultTry,
+    metadata: nextVCallResultMetadata,
+  }
+
+  for (const key of Object.keys(buttons)) {
+    const button = buttons[key]
+    const active = key === nextTab
+    if (button) {
+      button.classList.toggle('active', active)
+      button.setAttribute('aria-selected', active ? 'true' : 'false')
+    }
+    const pane = panes[key]
+    if (pane) {
+      pane.hidden = !active
+    }
+  }
+
+  localStorage.setItem(storageKeys.nextVCallInspectorResultTab, nextTab)
+}
+
+function getStoredNextVCallInspectorResultTab() {
+  const storedRaw = String(localStorage.getItem(storageKeys.nextVCallInspectorResultTab) ?? '').trim()
+  const stored = storedRaw === 'result'
+    ? 'parsed'
+    : (storedRaw === 'retry' ? 'try' : storedRaw)
+  return ['raw', 'actual', 'parsed', 'validation', 'try', 'metadata'].includes(stored)
+    ? stored
+    : 'raw'
+}
+
+export function renderNextVCallInspectorResult(data, options = {}) {
+  const response = data && typeof data === 'object' ? data : { value: data }
+  const call = response?.call ?? null
+  const result = response?.result ?? null
+  const metadata = result?.metadata ?? null
+  const modeRaw = String(call?.mode ?? nextVCallModeInput?.value ?? 'call').trim().toLowerCase()
+  const mode = modeRaw === 'try' ? 'try' : 'call'
+  const outputCandidates = [
+    result?.actual,
+    result?.output,
+    result?.outputText,
+    typeof result?.value === 'string' ? result.value : '',
+    typeof result?.violation?.actual === 'string' ? result.violation.actual : '',
+  ]
+  const outputText = outputCandidates
+    .map((value) => String(value ?? '').trim())
+    .find((value) => value.length > 0) ?? ''
+  const parsedValue = Object.prototype.hasOwnProperty.call(result ?? {}, 'parsed')
+    ? result?.parsed
+    : result?.value
+
+  if (nextVCallResultRaw) {
+    nextVCallResultRaw.textContent = stringifyInspectorPane(response)
+  }
+  if (nextVCallResultActual) {
+    nextVCallResultActual.textContent = outputText || '(no output text captured)'
+  }
+  if (nextVCallResultParsed) {
+    const parsedDisplayValue = mode === 'try'
+      ? (parsedValue ?? result)
+      : parsedValue
+    nextVCallResultParsed.textContent = stringifyInspectorPane(parsedDisplayValue)
+  }
+  if (nextVCallResultValidation) {
+    nextVCallResultValidation.textContent = stringifyInspectorPane({
+      hadContractViolation: result?.hadContractViolation === true,
+      violation: result?.violation ?? null,
+      validate: call?.validate ?? null,
+    })
+  }
+  if (nextVCallResultTry) {
+    const finalRequest = response?.resolvedCall?.finalRequest ?? null
+    const finalMessages = Array.isArray(finalRequest?.messages)
+      ? finalRequest.messages
+      : (Array.isArray(metadata?.request?.messages) ? metadata.request.messages : [])
+    const retryGuidanceInjected = finalMessages.length > 0
+      ? /the previous response/i.test(String([...finalMessages].reverse().find((entry) => String(entry?.role ?? '').trim() === 'user')?.content ?? ''))
+      : false
+    nextVCallResultTry.textContent = stringifyInspectorPane({
+      configuredRetries: Number(call?.retry_on_contract_violation ?? 0),
+      attempt: Number(metadata?.request?.attempt ?? 1),
+      retryLimit: Number(metadata?.request?.retryLimit ?? call?.retry_on_contract_violation ?? 0),
+      retryGuidanceInjected,
+      finalMessages,
+      finalRequest,
+    })
+  }
+  if (nextVCallResultMetadata) {
+    nextVCallResultMetadata.textContent = stringifyInspectorPane(metadata)
+  }
+
+  const forceTab = String(options?.forceTab ?? '').trim()
+  setNextVCallInspectorResultTab(forceTab || getStoredNextVCallInspectorResultTab())
+}
+
+export function buildNextVCallInspectorSnippet() {
+  const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
+  const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  const modeRaw = String(nextVCallModeInput?.value ?? 'call').trim().toLowerCase()
+  const mode = modeRaw === 'try' ? 'try' : 'call'
+  const target = getNextVCallInspectorTargetValue(targetKind)
+  const instructions = String(nextVCallInstructionsInput?.value ?? '').trim()
+  const prompt = String(nextVCallPromptInput?.value ?? '').trim()
+  const returnsText = String(nextVCallReturnsInput?.value ?? '').trim()
+  const decideText = String(nextVCallDecideInput?.value ?? '').trim()
+  const validateRaw = String(nextVCallValidateInput?.value ?? 'coerce').trim().toLowerCase()
+  const validate = ['strict', 'coerce', 'none'].includes(validateRaw) ? validateRaw : 'coerce'
+  const retryRaw = Number(nextVCallRetryInput?.value)
+  const retryCount = Number.isInteger(retryRaw) ? Math.max(0, Math.min(8, retryRaw)) : 0
+
+  const lines = []
+  const head = target || (targetKind === 'agent' ? 'router' : 'model-id')
+  lines.push(`result = ${mode === 'try' ? 'try ' : ''}${targetKind}(`)
+  lines.push(`  ${JSON.stringify(head)},`)
+  lines.push(`  ${JSON.stringify(prompt || 'prompt')},`)
+  if (instructions) {
+    lines.push(`  instructions=${JSON.stringify(instructions)},`)
+  }
+  if (returnsText) {
+    lines.push(`  returns=${returnsText},`)
+  }
+  if (decideText) {
+    const decideList = decideText
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .map((value) => JSON.stringify(value))
+      .join(',')
+    lines.push(`  decide=[${decideList}],`)
+  }
+  if (validate !== 'coerce') {
+    lines.push(`  validate=${JSON.stringify(validate)},`)
+  }
+  if (retryCount > 0) {
+    lines.push(`  retry_on_contract_violation=${retryCount},`)
+  }
+  lines.push(')')
+  return lines.join('\n')
+}
+
+export function renderNextVCallInspectorSnippet() {
+  renderNextVCallInspectorTargetConfig()
+  if (!nextVCallGeneratedCode) return
+  nextVCallGeneratedCode.textContent = buildNextVCallInspectorSnippet()
+}
+
+export function insertNextVCallInspectorSnippet() {
+  const textarea = getPaneTextarea(activePaneId)
+  if (!textarea) {
+    setStatus('open an editor pane before inserting code', 'responding')
+    return
+  }
+
+  const snippet = buildNextVCallInspectorSnippet()
+  const start = Number(textarea.selectionStart ?? 0)
+  const end = Number(textarea.selectionEnd ?? start)
+  const original = String(textarea.value ?? '')
+  const prefix = start > 0 && !original.slice(0, start).endsWith('\n') ? '\n' : ''
+  const suffix = end < original.length && !original.slice(end).startsWith('\n') ? '\n' : ''
+  const insertion = `${prefix}${snippet}${suffix}`
+  textarea.value = `${original.slice(0, start)}${insertion}${original.slice(end)}`
+  const caret = start + insertion.length
+  textarea.setSelectionRange(caret, caret)
+  textarea.focus()
+  textarea.dispatchEvent(new Event('input', { bubbles: true }))
+  appendNextVLogRow('[nextv:call-inspector] inserted generated code into active editor pane', 'step')
+  setStatus('call inspector code inserted')
+}
+
+export function initNextVCallInspector() {
+  const controls = [
+    nextVCallModeInput,
+    nextVCallTargetKindInput,
+    nextVCallTargetAgentInput,
+    nextVCallTargetInput,
+    nextVCallValidateInput,
+    nextVCallRetryInput,
+    nextVCallInstructionsInput,
+    nextVCallPromptInput,
+    nextVCallReturnsInput,
+    nextVCallDecideInput,
+  ]
+  for (const control of controls) {
+    if (!control || control.dataset.callInspectorBound === '1') continue
+    control.dataset.callInspectorBound = '1'
+    const rerender = () => {
+      if (control === nextVCallTargetKindInput) {
+        syncNextVCallInspectorTargetMode()
+        if (String(nextVCallTargetKindInput?.value ?? '').trim().toLowerCase() !== 'model') {
+          refreshNextVCallInspectorAgents({ quiet: true })
+        }
+      }
+      persistNextVCallInspectorInputs()
+      renderNextVCallInspectorSnippet()
+    }
+    control.addEventListener('input', rerender)
+    control.addEventListener('change', rerender)
+  }
+
+  if (nextVWorkspaceDirInput && nextVWorkspaceDirInput.dataset.callInspectorWorkspaceBound !== '1') {
+    nextVWorkspaceDirInput.dataset.callInspectorWorkspaceBound = '1'
+    const refresh = () => {
+      refreshNextVCallInspectorAgents({ quiet: true })
+    }
+    nextVWorkspaceDirInput.addEventListener('change', refresh)
+    nextVWorkspaceDirInput.addEventListener('blur', refresh)
+  }
+
+  if (workspace && workspace.dataset.callInspectorRuntimeIdentityBound !== '1') {
+    workspace.dataset.callInspectorRuntimeIdentityBound = '1'
+    workspace.addEventListener('nextv:remote-workspace-identity', () => {
+      refreshNextVCallInspectorAgents({ quiet: true })
+    })
+  }
+
+  const tabButtons = [
+    ['raw', nextVCallResultTabRaw],
+    ['actual', nextVCallResultTabActual],
+    ['parsed', nextVCallResultTabParsed],
+    ['validation', nextVCallResultTabValidation],
+    ['try', nextVCallResultTabTry],
+    ['metadata', nextVCallResultTabMetadata],
+  ]
+  for (const [tabId, button] of tabButtons) {
+    if (!button || button.dataset.callInspectorTabBound === '1') continue
+    button.dataset.callInspectorTabBound = '1'
+    button.addEventListener('click', () => {
+      setNextVCallInspectorResultTab(tabId)
+    })
+  }
+
+  restoreNextVCallInspectorInputs()
+  syncNextVCallInspectorTargetMode()
+  refreshNextVCallInspectorAgents({ quiet: true })
+  renderNextVCallInspectorSnippet()
+  renderNextVCallInspectorResolvedCall(null)
+  renderNextVCallInspectorResult({ status: 'call inspector ready' }, { forceTab: getStoredNextVCallInspectorResultTab() })
+}
+
+export function updateNextVEventImageUI() {
   if (nextVImageCount) {
     const count = nextVInputImageState.entries.length
     nextVImageCount.textContent = `${count} attached`
@@ -7446,7 +11461,7 @@ function updateNextVEventImageUI() {
   setNextVImagesOpen(nextVInputImageState.open, { persist: false })
 }
 
-function readImageFileAsBase64(file) {
+export function readImageFileAsBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onerror = () => reject(new Error(`Could not read ${file.name}`))
@@ -7463,7 +11478,7 @@ function readImageFileAsBase64(file) {
   })
 }
 
-async function addNextVEventImages(filesLike) {
+export async function addNextVEventImages(filesLike) {
   const files = Array.from(filesLike ?? []).filter((file) => String(file?.type ?? '').startsWith('image/'))
   if (files.length === 0) {
     setStatus('no image files selected', 'responding')
@@ -7489,7 +11504,7 @@ async function addNextVEventImages(filesLike) {
   }
 }
 
-function clearNextVEventImages(options = {}) {
+export function clearNextVEventImages(options = {}) {
   nextVInputImageState.entries = []
   if (nextVImageInput) nextVImageInput.value = ''
   updateNextVEventImageUI()
@@ -7498,14 +11513,14 @@ function clearNextVEventImages(options = {}) {
   }
 }
 
-async function handleNextVImageInput(input) {
+export async function handleNextVImageInput(input) {
   const files = input?.files
   if (input) input.value = ''
   if (!files || files.length === 0) return
   await addNextVEventImages(files)
 }
 
-function setupNextVImageDropzone() {
+export function setupNextVImageDropzone() {
   if (!nextVImageDropzone) return
 
   const activate = () => nextVImageDropzone.classList.add('is-dragging')
@@ -7544,18 +11559,18 @@ function setupNextVImageDropzone() {
   })
 }
 
-function setLeftPanelWidth(percent) {
+export function setLeftPanelWidth(percent) {
   const clamped = Math.max(25, Math.min(70, percent))
   document.documentElement.style.setProperty('--left-panel-width', `${clamped}%`)
   localStorage.setItem(storageKeys.leftWidth, String(clamped))
 }
 
-function setupSplitter() {
+export function setupSplitter() {
   if (!splitter || !workspace) return
 
   splitter.addEventListener('mousedown', (event) => {
-    if ((!isScriptMode() && !isNextVMode()) || window.innerWidth <= 760) return
-    isResizing = true
+    if (!isNextVMode() || window.innerWidth <= 760) return
+    _setIsResizing(true)
     document.body.classList.add('is-resizing')
     event.preventDefault()
   })
@@ -7569,12 +11584,12 @@ function setupSplitter() {
 
   window.addEventListener('mouseup', () => {
     if (!isResizing) return
-    isResizing = false
+    _setIsResizing(false)
     document.body.classList.remove('is-resizing')
   })
 }
 
-function setupFileTreeSplitter() {
+export function setupFileTreeSplitter() {
   if (!fileTreeSplitter || !fileTreePane || !scriptSection) return
 
   const applyTreeWidth = (pixels) => {
@@ -7586,7 +11601,7 @@ function setupFileTreeSplitter() {
 
   fileTreeSplitter.addEventListener('mousedown', (event) => {
     if (!isNextVMode()) return
-    isFileTreeResizing = true
+    _setIsFileTreeResizing(true)
     document.body.classList.add('is-resizing-filetree')
     event.preventDefault()
   })
@@ -7599,7 +11614,7 @@ function setupFileTreeSplitter() {
 
   window.addEventListener('mouseup', () => {
     if (!isFileTreeResizing) return
-    isFileTreeResizing = false
+    _setIsFileTreeResizing(false)
     document.body.classList.remove('is-resizing-filetree')
   })
 
@@ -7609,22 +11624,22 @@ function setupFileTreeSplitter() {
   }
 }
 
-function beginVerticalResize(event, topEl, bottomEl) {
+export function beginVerticalResize(event, topEl, bottomEl) {
   if (!topEl || !bottomEl) return
   const topRect = topEl.getBoundingClientRect()
   const bottomRect = bottomEl.getBoundingClientRect()
-  activeVerticalResize = {
+  _setActiveVerticalResize({
     topEl,
     bottomEl,
     startY: event.clientY,
     startTop: topRect.height,
     startBottom: bottomRect.height,
-  }
+  })
   document.body.classList.add('is-vresizing')
   event.preventDefault()
 }
 
-function getLeftPanelSections() {
+export function getLeftPanelSections() {
   if (isNextVMode()) {
     if (!nextVPanelState.devConsoleOpen) {
       return [scriptSection]
@@ -7634,7 +11649,7 @@ function getLeftPanelSections() {
   return [scriptSection, logsSection, outputSection]
 }
 
-function getLeftPanelSplitters() {
+export function getLeftPanelSplitters() {
   if (isNextVMode()) {
     if (!nextVPanelState.devConsoleOpen) {
       return []
@@ -7644,7 +11659,7 @@ function getLeftPanelSplitters() {
   return [scriptVSplit1, scriptVSplit2]
 }
 
-function normalizeSectionRatios(values, expectedLength = getLeftPanelSections().length) {
+export function normalizeSectionRatios(values, expectedLength = getLeftPanelSections().length) {
   if (!Array.isArray(values) || values.length !== expectedLength) return null
   const numeric = values.map((value) => Number(value))
   if (numeric.some((value) => !Number.isFinite(value) || value <= 0)) return null
@@ -7653,7 +11668,7 @@ function normalizeSectionRatios(values, expectedLength = getLeftPanelSections().
   return numeric.map((value) => value / total)
 }
 
-function readStoredLeftPanelHeights() {
+export function readStoredLeftPanelHeights() {
   try {
     const raw = localStorage.getItem(storageKeys.leftHeights)
     if (!raw) return null
@@ -7663,11 +11678,11 @@ function readStoredLeftPanelHeights() {
   }
 }
 
-function getCurrentLeftPanelHeights() {
+export function getCurrentLeftPanelHeights() {
   return getLeftPanelSections().map((section) => section?.getBoundingClientRect().height ?? 0)
 }
 
-function getAvailableLeftPanelSectionHeight() {
+export function getAvailableLeftPanelSectionHeight() {
   const scriptPanel = document.getElementById('script-panel')
   if (!scriptPanel) return 0
 
@@ -7682,18 +11697,18 @@ function getAvailableLeftPanelSectionHeight() {
   return Number.isFinite(available) ? Math.max(0, available) : 0
 }
 
-function getLeftPanelHeightRatios() {
+export function getLeftPanelHeightRatios() {
   const heights = getCurrentLeftPanelHeights()
   return normalizeSectionRatios(heights)
 }
 
-function persistLeftPanelHeights() {
+export function persistLeftPanelHeights() {
   const ratios = getLeftPanelHeightRatios()
   if (!ratios) return
   localStorage.setItem(storageKeys.leftHeights, JSON.stringify(ratios))
 }
 
-function resolveSectionHeights(totalHeight, ratios, minHeight) {
+export function resolveSectionHeights(totalHeight, ratios, minHeight) {
   if (!Number.isFinite(totalHeight) || totalHeight <= 0) return null
   const sectionCount = getLeftPanelSections().length
   if (totalHeight < minHeight * sectionCount) return null
@@ -7735,7 +11750,7 @@ function resolveSectionHeights(totalHeight, ratios, minHeight) {
   return heights
 }
 
-function applyLeftPanelHeights(ratios) {
+export function applyLeftPanelHeights(ratios) {
   const normalized = normalizeSectionRatios(ratios)
   if (!normalized) return false
 
@@ -7750,13 +11765,13 @@ function applyLeftPanelHeights(ratios) {
   return true
 }
 
-function applyStoredLeftPanelHeights() {
+export function applyStoredLeftPanelHeights() {
   const stored = readStoredLeftPanelHeights()
   if (!stored) return false
   return applyLeftPanelHeights(stored)
 }
 
-function setupVerticalSplitters() {
+export function setupVerticalSplitters() {
   const bindSplitter = (splitterEl) => {
     if (!splitterEl) return
     splitterEl.addEventListener('mousedown', (event) => {
@@ -7787,7 +11802,7 @@ function setupVerticalSplitters() {
 
   window.addEventListener('mouseup', () => {
     if (!activeVerticalResize) return
-    activeVerticalResize = null
+    _setActiveVerticalResize(null)
     document.body.classList.remove('is-vresizing')
     persistLeftPanelHeights()
   })
@@ -7798,12 +11813,8 @@ function setupVerticalSplitters() {
   })
 }
 
-function scrollToBottom() {
-  transcript.scrollTop = transcript.scrollHeight
-}
-
 // Insert or append status bar just above footer
-function ensureStatusBar() {
+export function ensureStatusBar() {
   let bar = document.getElementById('status-bar')
   if (!bar) {
     bar = document.createElement('div')
@@ -7813,88 +11824,134 @@ function ensureStatusBar() {
   return bar
 }
 
-function setStatus(text, cls = '') {
+
+// --- Imports (auto-generated by gen-es-modules.js) ---
+import {
+  SCRIPT_FILE_CALL_REGEX,
+  SCRIPT_FILE_REF_REGEX,
+  _setActiveScriptAbortController,
+  _setActiveScriptLine,
+  _setIsBusy,
+  activePaneId,
+  activeScriptAbortController,
+  activeScriptLine,
+  activeScriptRunId,
+  dirtyEditsCache,
+  editorLayoutState,
+  isBusy,
+  nextVAutoSaveInput,
+  nextVEntrypointInput,
+  nextVFileState,
+  nextVWorkspaceDirInput,
+  paneAssignments,
+  scriptCache,
+  scriptDirtyBadge,
+  scriptEditorState,
+  scriptInputs,
+  scriptLogs,
+  scriptOutput,
+  scriptPathInput,
+  scriptView,
+  tracePanelState,
+  userInputText,
+  workspace
+} from './state.js'
+import {
+  updateScriptRunControls,
+  normalizeDeclaredEffectChannels,
+  setDeclaredEffectChannels,
+  sendNextVUserText
+} from './02_user_output.js'
+import {
+  isNextVMode,
+  setActiveScriptRunId,
+  normalizeDeclaredExternalChannels,
+  setDeclaredExternalChannels,
+  setNextVRunControls,
+  clearNextVEventsOutput,
+  clearNextVConsoleOutput
+} from './03_ui_controls.js'
+import {
+  updateFloatingGraphCodePanelMeta,
+  bindFloatingGraphCodePanelEvents
+} from './04_floating_panels.js'
+import {
+  refreshNextVGraph,
+  appendNextVLogRow
+} from './07_graph_render.js'
+import {
+  normalizeRelativePath,
+  normalizeNextVWorkspaceDir,
+  resolveNextVPath,
+  normalizePathSegments,
+  pathDirname,
+  joinRelativePath
+} from './08_path_utils.js'
+import {
+  updateOpenFileLabel,
+  renderOpenFileTabs,
+  getStoredNextVOpenFile,
+  clearNextVAutoSaveTimer,
+  rememberExpandedPath,
+  clearDeleteConfirmTimers,
+  loadWorkspaceTree,
+  saveCurrentEditorFile,
+  saveAllNextVFiles,
+  getPaneIds,
+  getPaneState,
+  getPaneElements,
+  getPaneTextarea,
+  getPaneMirror,
+  getPaneGutter,
+  getPanePath,
+  clearEditorPane,
+  focusEditorPane,
+  setupEditorGridCenterHandle,
+  setEditorLayout,
+  renderPaneTitles,
+  renderScriptMirrorForPane,
+  onPaneDragOver,
+  onPaneDragLeave,
+  onPaneDrop,
+  restorePaneAssignments,
+  scheduleNextVAutoSave,
+  openWorkspaceEditorFile,
+  persistNextVConfig,
+  getCurrentNextVEditorTabSize
+} from './09_editor.js'
+import {
+  pathBasename
+} from './10_file_tree.js'
+import {
+  clearTracePanel,
+  closeNextVStream
+} from './11_state_panels.js'
+import {
+  ensureStatusBar,
+  openNextVCallInspectorForToken
+} from './12_stream.js'
+
+const SCRIPT_CALL_TARGET_REGEX = /\b(agent|model)\s*\(\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/g
+const SCRIPT_TOOL_KIND_REGEX = /\btool\s*\(\s*("agent"|'agent'|"model"|'model')/g
+const SCRIPT_CALL_KIND_WORD_REGEX = /\b(agent|model)\b/g
+
+export function setStatus(text, cls = '') {
   const bar = ensureStatusBar()
   bar.textContent = text
   bar.className = cls
 }
 
 // --- Session init ---
-async function loadSession() {
+export async function loadSession() {
   try {
-    const res = await fetch('/api/session')
-    const data = await res.json()
-    if (data.model) modelInput.value = data.model
-    imageCount.textContent = `${data.imageCount} attached`
+    await fetch('/api/session')
   } catch {
     // best-effort
   }
 }
 
-// --- Transcript rendering ---
-function appendUserTurn(prompt) {
-  const turn = document.createElement('div')
-  turn.className = 'turn'
-  turn.innerHTML = `<div class="turn-role user">you</div><div class="turn-content">${escapeHtml(prompt)}</div>`
-  transcript.appendChild(turn)
-  scrollToBottom()
-  return turn
-}
-
-function appendAssistantTurn() {
-  const turn = document.createElement('div')
-  turn.className = 'turn'
-  const roleEl = document.createElement('div')
-  roleEl.className = 'turn-role assistant'
-  roleEl.textContent = 'assistant'
-  const contentEl = document.createElement('div')
-  contentEl.className = 'turn-content'
-  contentEl.id = 'active-content'
-  turn.appendChild(roleEl)
-  turn.appendChild(contentEl)
-  transcript.appendChild(turn)
-  scrollToBottom()
-  return contentEl
-}
-
-function appendThinkingBlock() {
-  const block = document.createElement('div')
-  block.className = 'thinking-block'
-  block.id = 'active-thinking'
-  const label = document.createElement('div')
-  label.className = 'thinking-label'
-  label.textContent = 'thinking…'
-  const content = document.createElement('div')
-  content.id = 'active-thinking-content'
-  block.appendChild(label)
-  block.appendChild(content)
-  transcript.appendChild(block)
-  scrollToBottom()
-  return content
-}
-
-function appendToolRow(name, args) {
-  const row = document.createElement('div')
-  row.className = 'tool-row'
-  row.id = `tool-${name}-pending`
-  const argsStr = typeof args === 'string' ? args : JSON.stringify(args)
-  row.innerHTML = `<span class="tool-name">${escapeHtml(name)}</span><span class="tool-args">${escapeHtml(argsStr)}</span>`
-  transcript.appendChild(row)
-  scrollToBottom()
-  return row
-}
-
-function fillToolResult(name, result) {
-  const row = document.getElementById(`tool-${name}-pending`)
-  if (row) {
-    const resultEl = document.createElement('span')
-    resultEl.innerHTML = `<span class="tool-result-label">→</span> <span class="tool-result">${escapeHtml(result)}</span>`
-    row.appendChild(resultEl)
-    row.removeAttribute('id')
-  }
-}
-
-function appendConfirmBlock(id, description, container = transcript) {
+export function appendConfirmBlock(id, description, container = scriptLogs) {
+  if (!container) return
   const block = document.createElement('div')
   block.className = 'confirm-block'
   block.id = `confirm-${id}`
@@ -7905,14 +11962,10 @@ function appendConfirmBlock(id, description, container = transcript) {
       <button class="deny-btn" onclick="resolveConfirm('${escapeHtml(id)}', false, this)">deny</button>
     </div>`
   container.appendChild(block)
-  if (container === transcript) {
-    scrollToBottom()
-  } else {
-    container.scrollTop = container.scrollHeight
-  }
+  container.scrollTop = container.scrollHeight
 }
 
-async function submitScriptInputResponse(scriptRunId, value, meta = {}) {
+export async function submitScriptInputResponse(scriptRunId, value, meta = {}) {
   const runId = String(scriptRunId ?? '').trim()
   if (!runId) {
     throw new Error('missing script run id')
@@ -7939,7 +11992,7 @@ async function submitScriptInputResponse(scriptRunId, value, meta = {}) {
   }
 }
 
-function appendInputRequestNotice(payload) {
+export function appendInputRequestNotice(payload) {
   const runId = String(payload?.scriptRunId ?? activeScriptRunId ?? '').trim()
   const promptText = String(payload?.prompt ?? 'Enter value:')
   const variable = String(payload?.variable ?? '').trim()
@@ -7954,15 +12007,28 @@ function appendInputRequestNotice(payload) {
   appendScriptLogRow('[script:input] Send value via POST /api/script/event while the script is waiting on input().', 'result')
 }
 
-function appendErrorRow(message) {
-  const row = document.createElement('div')
-  row.className = 'turn'
-  row.innerHTML = `<div class="turn-role system-msg">error</div><div class="turn-content">${escapeHtml(message)}</div>`
-  transcript.appendChild(row)
-  scrollToBottom()
+export function appendErrorRow(message) {
+  appendScriptLogRow(`[error] ${String(message ?? 'unknown error')}`, 'error')
 }
 
-function appendScriptLogRow(line, cls = '') {
+export async function resolveConfirm(id, allow, btn) {
+  const container = btn?.closest('.confirm-block')
+  container?.querySelectorAll('button')?.forEach((b) => { b.disabled = true })
+  try {
+    await fetch('/api/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, allow }),
+    })
+    const label = container?.querySelector('.confirm-desc')
+    if (label) label.textContent += allow ? ' -> allowed' : ' -> denied'
+    setStatus(allow ? 'confirmation sent: allowed' : 'confirmation sent: denied')
+  } catch (err) {
+    appendErrorRow(`Confirm failed: ${err.message}`)
+  }
+}
+
+export function appendScriptLogRow(line, cls = '') {
   const row = document.createElement('div')
   row.className = `script-log-row${cls ? ` ${cls}` : ''}`
   row.textContent = line
@@ -7970,11 +12036,11 @@ function appendScriptLogRow(line, cls = '') {
   scriptLogs.scrollTop = scriptLogs.scrollHeight
 }
 
-function clearScriptLogs() {
+export function clearScriptLogs() {
   scriptLogs.innerHTML = ''
 }
 
-function clearScriptLogsPanel() {
+export function clearScriptLogsPanel() {
   if (isBusy) {
     const pending = scriptLogs.querySelector('.confirm-block')
     if (pending) {
@@ -7989,21 +12055,21 @@ function clearScriptLogsPanel() {
   setStatus('script logs cleared')
 }
 
-function appendScriptOutputLine(line = '') {
+export function appendScriptOutputLine(line = '') {
   scriptOutput.textContent += `${line}\n`
   scriptOutput.scrollTop = scriptOutput.scrollHeight
 }
 
-function clearScriptOutput() {
+export function clearScriptOutput() {
   scriptOutput.textContent = ''
 }
 
-function clearScriptOutputPanel() {
+export function clearScriptOutputPanel() {
   clearScriptOutput()
   setStatus('script output cleared')
 }
 
-function clearOutputPanel() {
+export function clearOutputPanel() {
   if (!isNextVMode()) {
     clearScriptOutputPanel()
     return
@@ -8029,14 +12095,14 @@ function clearOutputPanel() {
   clearScriptOutputPanel()
 }
 
-function setScriptBadgeState(text, cls = '') {
+export function setScriptBadgeState(text, cls = '') {
   if (!scriptDirtyBadge) return
   scriptDirtyBadge.textContent = text
   scriptDirtyBadge.classList.remove('saved', 'dirty')
   if (cls) scriptDirtyBadge.classList.add(cls)
 }
 
-function syncScriptBadgeState() {
+export function syncScriptBadgeState() {
   const state = getPaneState(activePaneId)
   const content = getScriptEditorText()
   if (!content && !state.path) {
@@ -8050,7 +12116,7 @@ function syncScriptBadgeState() {
   setScriptBadgeState('saved', 'saved')
 }
 
-function cancelScriptRun() {
+export function cancelScriptRun() {
   if (!activeScriptAbortController) {
     setStatus('no active script run', 'responding')
     return
@@ -8061,12 +12127,12 @@ function cancelScriptRun() {
   setStatus('cancelling script…', 'responding')
 }
 
-function clearScriptView() {
+export function clearScriptView() {
   clearNextVAutoSaveTimer()
   for (const paneId of getPaneIds()) {
     clearEditorPane(paneId)
   }
-  activeScriptLine = null
+  _setActiveScriptLine(null)
   nextVFileState.openFilePath = ''
   nextVFileState.openTabs = []
   dirtyEditsCache.clear()
@@ -8078,35 +12144,72 @@ function clearScriptView() {
   renderOpenFileTabs()
 }
 
-function normalizeNewlines(textValue) {
+export function normalizeNewlines(textValue) {
   return String(textValue ?? '').replace(/\r\n/g, '\n')
 }
 
-function getTextareaOffsetAtPoint(textarea, clientX, clientY) {
+function getApproximateTextareaOffsetAtPoint(textarea, clientX, clientY) {
+  if (!textarea) return null
+  const rect = textarea.getBoundingClientRect()
+  if (
+    clientX < rect.left
+    || clientX > rect.right
+    || clientY < rect.top
+    || clientY > rect.bottom
+  ) {
+    return null
+  }
+
+  const text = normalizeNewlines(textarea.value)
+  const lines = text.split('\n')
+  const style = window.getComputedStyle(textarea)
+  const lineHeight = Math.max(1, Number.parseFloat(style.lineHeight) || 20)
+  const fontSize = Math.max(1, Number.parseFloat(style.fontSize) || 13)
+  const charWidth = Math.max(6, fontSize * 0.62)
+  const paddingTop = Number.parseFloat(style.paddingTop) || 0
+  const paddingLeft = Number.parseFloat(style.paddingLeft) || 0
+
+  const contentY = clientY - rect.top + textarea.scrollTop - paddingTop
+  const contentX = clientX - rect.left + textarea.scrollLeft - paddingLeft
+  const lineIndex = Math.max(0, Math.min(lines.length - 1, Math.floor(contentY / lineHeight)))
+  const lineText = lines[lineIndex] ?? ''
+  const column = Math.max(0, Math.min(lineText.length, Math.floor(contentX / charWidth)))
+
+  let offset = 0
+  for (let i = 0; i < lineIndex; i += 1) {
+    offset += (lines[i]?.length ?? 0) + 1
+  }
+  offset += column
+  return Math.max(0, Math.min(text.length, offset))
+}
+
+export function getTextareaOffsetAtPoint(textarea, clientX, clientY) {
   if (typeof document.caretPositionFromPoint === 'function') {
     const pos = document.caretPositionFromPoint(clientX, clientY)
-    return pos && pos.offsetNode === textarea ? pos.offset : null
+    const offset = Number(pos?.offset)
+    if (Number.isFinite(offset)) return offset
   }
   if (typeof document.caretRangeFromPoint === 'function') {
     const range = document.caretRangeFromPoint(clientX, clientY)
-    return range && range.startContainer === textarea ? range.startOffset : null
+    const offset = Number(range?.startOffset)
+    if (Number.isFinite(offset)) return offset
   }
-  return null
+  return getApproximateTextareaOffsetAtPoint(textarea, clientX, clientY)
 }
 
-function bindTextareaFileRefCursor(textarea, getTextFn) {
+export function bindTextareaFileRefCursor(textarea, getTextFn) {
   textarea.addEventListener('mousemove', (ev) => {
     const offset = getTextareaOffsetAtPoint(textarea, ev.clientX, ev.clientY)
     if (offset === null) { textarea.style.cursor = ''; return }
     const text = normalizeNewlines(getTextFn())
     const candidates = [offset, Math.max(0, offset - 1)]
-    const hit = candidates.some(o => findScriptReferenceAtOffset(text, o) !== null)
+    const hit = candidates.some((candidateOffset) => findEditorClickTargetAtOffset(text, candidateOffset) !== null)
     textarea.style.cursor = hit ? 'pointer' : ''
   })
   textarea.addEventListener('mouseleave', () => { textarea.style.cursor = '' })
 }
 
-function inferEditorKindFromContext(lineText, tokenStart, marker) {
+export function inferEditorKindFromContext(lineText, tokenStart, marker) {
   if (marker === '!') return 'instruction'
   if (marker === '?') return 'prompt'
 
@@ -8117,7 +12220,7 @@ function inferEditorKindFromContext(lineText, tokenStart, marker) {
   return 'instruction'
 }
 
-function findScriptReferenceAtOffset(textValue, offset) {
+export function findScriptReferenceAtOffset(textValue, offset) {
   const text = normalizeNewlines(textValue)
   if (!text) return null
 
@@ -8155,7 +12258,343 @@ function findScriptReferenceAtOffset(textValue, offset) {
   return null
 }
 
-function buildScriptMirrorLine(textValue) {
+function decodeCallTargetLiteral(literal) {
+  const rawLiteral = String(literal ?? '').trim()
+  if (!rawLiteral) return ''
+  if (rawLiteral.startsWith('"')) {
+    try {
+      return String(JSON.parse(rawLiteral))
+    } catch {
+      return rawLiteral.slice(1, -1)
+    }
+  }
+  if (rawLiteral.startsWith("'")) {
+    return rawLiteral
+      .slice(1, -1)
+      .replace(/\\'/g, "'")
+      .replace(/\\\\/g, '\\')
+  }
+  return rawLiteral
+}
+
+function extractFirstStringLiteral(value) {
+  const source = String(value ?? '')
+  const match = /(\"([^\"\\]|\\.)*\"|'([^'\\]|\\.)*')/.exec(source)
+  if (!match) return ''
+  return decodeCallTargetLiteral(match[1])
+}
+
+function findMatchingParen(text, openParenIndex) {
+  const source = String(text ?? '')
+  const start = Number(openParenIndex)
+  if (!Number.isInteger(start) || start < 0 || start >= source.length || source[start] !== '(') return -1
+
+  let depth = 0
+  let inSingle = false
+  let inDouble = false
+  let escaped = false
+  for (let i = start; i < source.length; i += 1) {
+    const ch = source[i]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (ch === '\\') {
+      escaped = true
+      continue
+    }
+    if (inSingle) {
+      if (ch === "'") inSingle = false
+      continue
+    }
+    if (inDouble) {
+      if (ch === '"') inDouble = false
+      continue
+    }
+    if (ch === "'") {
+      inSingle = true
+      continue
+    }
+    if (ch === '"') {
+      inDouble = true
+      continue
+    }
+    if (ch === '(') {
+      depth += 1
+      continue
+    }
+    if (ch === ')') {
+      depth -= 1
+      if (depth === 0) return i
+    }
+  }
+
+  return -1
+}
+
+function findCallSegmentAtOffset(textValue, kind, offset) {
+  const text = normalizeNewlines(textValue)
+  const normalizedKind = String(kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  const safeOffset = Math.max(0, Math.min(text.length, Number(offset) || 0))
+
+  const directRegex = /\b(agent|model)\s*\(/g
+  let match
+  while ((match = directRegex.exec(text)) !== null) {
+    const callKind = String(match[1] ?? '').trim().toLowerCase()
+    if (callKind !== normalizedKind) continue
+    const openParenIndex = text.indexOf('(', match.index)
+    if (openParenIndex < 0) continue
+    const closeParenIndex = findMatchingParen(text, openParenIndex)
+    if (closeParenIndex < 0) continue
+    if (safeOffset < match.index || safeOffset > closeParenIndex) continue
+    return text.slice(match.index, closeParenIndex + 1)
+  }
+
+  const toolRegex = /\btool\s*\(/g
+  while ((match = toolRegex.exec(text)) !== null) {
+    const openParenIndex = text.indexOf('(', match.index)
+    if (openParenIndex < 0) continue
+    const closeParenIndex = findMatchingParen(text, openParenIndex)
+    if (closeParenIndex < 0) continue
+    if (safeOffset < match.index || safeOffset > closeParenIndex) continue
+
+    const segment = text.slice(match.index, closeParenIndex + 1)
+    const toolKindMatch = /\btool\s*\(\s*(\"agent\"|'agent'|\"model\"|'model')/s.exec(segment)
+    if (!toolKindMatch) continue
+    const callKind = decodeCallTargetLiteral(toolKindMatch[1]).toLowerCase() === 'model' ? 'model' : 'agent'
+    if (callKind !== normalizedKind) continue
+    return segment
+  }
+
+  return ''
+}
+
+function inferCallInspectorPrefillFromDocument(textValue, kind, offset) {
+  const segment = findCallSegmentAtOffset(textValue, kind, offset)
+  if (!segment) return null
+
+  const prefill = {}
+
+  const directPromptMatch = /^\s*(agent|model)\s*\(\s*(\"([^\"\\]|\\.)*\"|'([^'\\]|\\.)*')\s*,\s*(\"([^\"\\]|\\.)*\"|'([^'\\]|\\.)*')/s.exec(segment)
+  if (directPromptMatch) {
+    const prompt = decodeCallTargetLiteral(directPromptMatch[6])
+    if (prompt) prefill.prompt = prompt
+  }
+
+  const instructionsMatch = /\binstructions\s*[:=]\s*(\"([^\"\\]|\\.)*\"|'([^'\\]|\\.)*')/s.exec(segment)
+  if (instructionsMatch) {
+    prefill.instructions = decodeCallTargetLiteral(instructionsMatch[1])
+  }
+
+  const validateMatch = /\bvalidate\s*[:=]\s*(strict|coerce|none|\"strict\"|\"coerce\"|\"none\"|'strict'|'coerce'|'none')/s.exec(segment)
+  if (validateMatch) {
+    const validate = decodeCallTargetLiteral(validateMatch[1]).toLowerCase()
+    if (['strict', 'coerce', 'none'].includes(validate)) {
+      prefill.validate = validate
+    }
+  }
+
+  const retryMatch = /\bretry_on_contract_violation\s*[:=]\s*(\d+)/s.exec(segment)
+  if (retryMatch) {
+    prefill.retry = Number(retryMatch[1])
+  }
+
+  const decideMatch = /\bdecide\s*[:=]\s*\[([\s\S]*?)\]/s.exec(segment)
+  if (decideMatch) {
+    const decideRaw = decideMatch[1]
+    const options = []
+    const literalRegex = /(\"([^\"\\]|\\.)*\"|'([^'\\]|\\.)*')/g
+    let literal
+    while ((literal = literalRegex.exec(decideRaw)) !== null) {
+      const value = decodeCallTargetLiteral(literal[1])
+      if (value) options.push(value)
+    }
+    if (options.length > 0) {
+      prefill.decide = options
+    }
+  }
+
+  const returnsMatch = /\breturns\s*[:=]\s*(\{[\s\S]*?\}|\[[\s\S]*?\])/s.exec(segment)
+  if (returnsMatch) {
+    prefill.returnsText = String(returnsMatch[1] ?? '').trim()
+  }
+
+  return Object.keys(prefill).length > 0 ? prefill : null
+}
+
+function inferToolCallTargetValue(line, kind, searchStart = 0) {
+  const source = String(line ?? '')
+  const normalizedKind = String(kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  const valuePattern = normalizedKind === 'model'
+    ? /\b(model|name|target|id)\b\s*[:=]\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/
+    : /\b(agent|name|target|id)\b\s*[:=]\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/
+
+  const match = valuePattern.exec(source.slice(Math.max(0, Number(searchStart) || 0)))
+  if (!match) return ''
+  return decodeCallTargetLiteral(match[2])
+}
+
+function inferCallTargetValueFromLine(line, kind, searchStart = 0) {
+  const source = String(line ?? '')
+  const normalizedKind = String(kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  const directPattern = normalizedKind === 'model'
+    ? /\bmodel\s*\(\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/
+    : /\bagent\s*\(\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/
+  const directMatch = directPattern.exec(source.slice(Math.max(0, Number(searchStart) || 0)))
+  if (directMatch) {
+    return decodeCallTargetLiteral(directMatch[1])
+  }
+
+  return inferToolCallTargetValue(source, normalizedKind, searchStart)
+}
+
+function inferCallTargetValueFromDocument(textValue, kind, offset) {
+  const text = normalizeNewlines(textValue)
+  const normalizedKind = String(kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  const safeOffset = Math.max(0, Math.min(text.length, Number(offset) || 0))
+  const sliceStart = Math.max(0, safeOffset - 80)
+  const sliceEnd = Math.min(text.length, safeOffset + 1200)
+  const scope = text.slice(sliceStart, sliceEnd)
+  const localOffset = safeOffset - sliceStart
+
+  const directPattern = normalizedKind === 'model'
+    ? /\bmodel\s*\(\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/s
+    : /\bagent\s*\(\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/s
+  const directMatch = directPattern.exec(scope.slice(Math.max(0, localOffset - 16)))
+  if (directMatch) {
+    return decodeCallTargetLiteral(directMatch[1])
+  }
+
+  const toolPattern = normalizedKind === 'model'
+    ? /\btool\s*\(\s*("model"|'model')[\s\S]{0,800}?\b(model|name|target|id)\b\s*[:=]\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/s
+    : /\btool\s*\(\s*("agent"|'agent')[\s\S]{0,800}?\b(agent|name|target|id)\b\s*[:=]\s*("([^"\\]|\\.)*"|'([^'\\]|\\.)*')/s
+  const toolMatch = toolPattern.exec(scope.slice(Math.max(0, localOffset - 32)))
+  if (toolMatch) {
+    return decodeCallTargetLiteral(toolMatch[3])
+  }
+
+  return ''
+}
+
+function collectCallInspectorTargetsInLine(line) {
+  const text = String(line ?? '')
+  const matches = []
+  SCRIPT_CALL_TARGET_REGEX.lastIndex = 0
+  let match
+  while ((match = SCRIPT_CALL_TARGET_REGEX.exec(text)) !== null) {
+    const kind = String(match[1] ?? '').trim().toLowerCase()
+    const literal = String(match[2] ?? '')
+    const literalIndex = String(match[0] ?? '').indexOf(literal)
+    if (literalIndex < 0) continue
+
+    const start = Number(match.index) + literalIndex
+    const end = start + literal.length
+    matches.push({
+      start,
+      end,
+      text: literal,
+      kind,
+      value: decodeCallTargetLiteral(literal),
+    })
+  }
+
+  SCRIPT_TOOL_KIND_REGEX.lastIndex = 0
+  while ((match = SCRIPT_TOOL_KIND_REGEX.exec(text)) !== null) {
+    const kind = decodeCallTargetLiteral(match[1]).toLowerCase() === 'model' ? 'model' : 'agent'
+    const literal = String(match[1] ?? '')
+    const literalIndex = String(match[0] ?? '').indexOf(literal)
+    if (literalIndex < 0) continue
+
+    const start = Number(match.index) + literalIndex
+    const end = start + literal.length
+    matches.push({
+      start,
+      end,
+      text: literal,
+      kind,
+      value: inferToolCallTargetValue(text, kind, end),
+    })
+  }
+
+  return matches
+}
+
+export function findCallInspectorTargetAtOffset(textValue, offset) {
+  const text = normalizeNewlines(textValue)
+  if (!text) return null
+
+  const safeOffset = Math.max(0, Math.min(text.length, Number(offset) || 0))
+  const lineStart = text.lastIndexOf('\n', Math.max(0, safeOffset - 1)) + 1
+  const nextNewline = text.indexOf('\n', safeOffset)
+  const lineEnd = nextNewline === -1 ? text.length : nextNewline
+  const line = text.slice(lineStart, lineEnd)
+  const lineOffset = safeOffset - lineStart
+
+  const matches = collectCallInspectorTargetsInLine(line)
+  for (const match of matches) {
+    if (lineOffset < match.start || lineOffset > match.end) continue
+    if (match.kind !== 'agent' && match.kind !== 'model') continue
+    return {
+      kind: match.kind,
+      value: String(match.value ?? '').trim(),
+      prefill: inferCallInspectorPrefillFromDocument(text, match.kind, safeOffset),
+    }
+  }
+
+  SCRIPT_CALL_KIND_WORD_REGEX.lastIndex = 0
+  let keywordMatch
+  while ((keywordMatch = SCRIPT_CALL_KIND_WORD_REGEX.exec(line)) !== null) {
+    const start = keywordMatch.index
+    const end = start + String(keywordMatch[0] ?? '').length
+    if (lineOffset < start || lineOffset > end) continue
+    const kind = String(keywordMatch[1] ?? '').trim().toLowerCase()
+    if (kind !== 'agent' && kind !== 'model') continue
+    return {
+      kind,
+      value: inferCallTargetValueFromLine(line, kind, start) || inferCallTargetValueFromDocument(text, kind, safeOffset),
+      prefill: inferCallInspectorPrefillFromDocument(text, kind, safeOffset),
+    }
+  }
+
+  const contextualKindMatch = /\b(agent|model)\b/i.exec(line)
+  if (contextualKindMatch) {
+    const kind = String(contextualKindMatch[1] ?? '').trim().toLowerCase()
+    if (kind === 'agent' || kind === 'model') {
+      const value = inferCallTargetValueFromDocument(text, kind, safeOffset)
+      if (value) {
+        return {
+          kind,
+          value,
+          prefill: inferCallInspectorPrefillFromDocument(text, kind, safeOffset),
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+export function findEditorClickTargetAtOffset(textValue, offset) {
+  const callTarget = findCallInspectorTargetAtOffset(textValue, offset)
+  if (callTarget) {
+    return {
+      type: 'call-target',
+      value: callTarget,
+    }
+  }
+
+  const fileReference = findScriptReferenceAtOffset(textValue, offset)
+  if (fileReference) {
+    return {
+      type: 'file-reference',
+      value: fileReference,
+    }
+  }
+
+  return null
+}
+
+export function buildScriptMirrorLine(textValue) {
   const row = document.createElement('div')
   row.className = 'script-editor-line'
 
@@ -8177,17 +12616,44 @@ function buildScriptMirrorLine(textValue) {
     tokens.push({ start: match.index, end: match.index + match[0].length, text: match[0], filePath: match[1], kind: 'file' })
   }
 
+  const callTargets = collectCallInspectorTargetsInLine(line)
+  for (const target of callTargets) {
+    tokens.push({
+      start: target.start,
+      end: target.end,
+      text: target.text,
+      kind: target.kind,
+      callTarget: target.value,
+    })
+  }
+
+  SCRIPT_CALL_KIND_WORD_REGEX.lastIndex = 0
+  while ((match = SCRIPT_CALL_KIND_WORD_REGEX.exec(line)) !== null) {
+    const kind = String(match[1] ?? '').trim().toLowerCase()
+    if (kind !== 'agent' && kind !== 'model') continue
+    tokens.push({
+      start: match.index,
+      end: match.index + String(match[0] ?? '').length,
+      text: match[0],
+      kind,
+      callTarget: inferCallTargetValueFromLine(line, kind, match.index),
+    })
+  }
+
   tokens.sort((a, b) => a.start - b.start)
 
   let lastIndex = 0
   for (const tok of tokens) {
+    if (tok.start < lastIndex) continue
     if (tok.start > lastIndex) {
       textWrap.appendChild(document.createTextNode(line.slice(lastIndex, tok.start)))
     }
     const token = document.createElement('span')
     token.className = `script-ref-token ${tok.kind}`
     token.textContent = tok.text
-    token.title = `${tok.kind}: ${tok.filePath}`
+    token.title = tok.kind === 'agent' || tok.kind === 'model'
+      ? `${tok.kind}: ${tok.callTarget}`
+      : `${tok.kind}: ${tok.filePath}`
     textWrap.appendChild(token)
     lastIndex = tok.end
   }
@@ -8205,7 +12671,7 @@ function buildScriptMirrorLine(textValue) {
   return row
 }
 
-function syncScriptMirrorScrollForPane(paneId) {
+export function syncScriptMirrorScrollForPane(paneId) {
   const textarea = getPaneTextarea(paneId)
   const mirror = getPaneMirror(paneId)
   const gutter = getPaneGutter(paneId)
@@ -8220,15 +12686,15 @@ function syncScriptMirrorScrollForPane(paneId) {
   }
 }
 
-function syncScriptMirrorScroll() {
+export function syncScriptMirrorScroll() {
   syncScriptMirrorScrollForPane('A')
 }
 
-function renderScriptMirror(textValue = getScriptEditorText()) {
+export function renderScriptMirror(textValue = getScriptEditorText()) {
   renderScriptMirrorForPane('A', textValue)
 }
 
-async function openEditorReference(filePath) {
+export async function openEditorReference(filePath) {
   const targetPath = String(filePath ?? '').trim()
   if (!targetPath) return
 
@@ -8255,18 +12721,49 @@ async function openEditorReference(filePath) {
   }
 }
 
-function getScriptEditorText() {
+export async function openEditorCallInspectorTarget(target) {
+  const kind = String(target?.kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
+  const value = String(target?.value ?? '').trim()
+
+  const opened = await openNextVCallInspectorForToken(kind, value, {
+    focusPrompt: true,
+    prefill: target?.prefill ?? null,
+  })
+  if (!opened) {
+    const label = value ? `${kind}.${value}` : `${kind}`
+    setStatus(`unable to open call inspector target ${label}`, 'responding')
+  }
+}
+
+export async function openEditorClickTargetAtOffset(textValue, offset) {
+  const target = findEditorClickTargetAtOffset(textValue, offset)
+  if (!target) return false
+
+  if (target.type === 'call-target') {
+    await openEditorCallInspectorTarget(target.value)
+    return true
+  }
+
+  if (target.type === 'file-reference') {
+    await openEditorReference(target.value.filePath)
+    return true
+  }
+
+  return false
+}
+
+export function getScriptEditorText() {
   return normalizeNewlines(getPaneTextarea(activePaneId)?.value ?? '')
 }
 
-function renderScriptView(lines, filePath = '') {
+export function renderScriptView(lines, filePath = '') {
   const text = normalizeNewlines(Array.isArray(lines) ? lines.join('\n') : '')
   const paneState = getPaneState('A')
   if (scriptView) scriptView.value = text
   paneState.path = filePath
   paneState.loadedText = text
   paneState.dirty = false
-  activeScriptLine = null
+  _setActiveScriptLine(null)
   updateOpenFileLabel(filePath)
   renderScriptMirror(text)
   if (scriptPathInput && filePath) {
@@ -8275,7 +12772,7 @@ function renderScriptView(lines, filePath = '') {
   syncScriptBadgeState()
 }
 
-function highlightScriptLine(lineNumber) {
+export function highlightScriptLine(lineNumber) {
   const line = Number(lineNumber)
   if (!Number.isFinite(line) || line < 1) return
 
@@ -8293,21 +12790,21 @@ function highlightScriptLine(lineNumber) {
 
   const lineHeight = Number.parseFloat(window.getComputedStyle(scriptView).lineHeight) || 18
   scriptView.scrollTop = Math.max(0, (line - 2) * lineHeight)
-  activeScriptLine = line
+  _setActiveScriptLine(line)
   renderScriptMirror()
 }
 
-function parseScriptStepLine(line) {
+export function parseScriptStepLine(line) {
   const match = String(line ?? '').match(/^\[script:step\]\s+line=(\d+)\b/)
   if (!match) return null
   return Number(match[1])
 }
 
-function isScriptMetaLine(line) {
+export function isScriptMetaLine(line) {
   return /^\[script:/.test(String(line ?? ''))
 }
 
-async function loadScriptContent(filePath) {
+export async function loadScriptContent(filePath) {
   const key = String(filePath ?? '').trim()
   if (!key) return
 
@@ -8330,7 +12827,7 @@ async function loadScriptContent(filePath) {
   renderScriptView(lines, data.filePath ?? key)
 }
 
-async function ensureNextVEntrypointVisible(options = {}) {
+export async function ensureNextVEntrypointVisible(options = {}) {
   if (!isNextVMode()) return
 
   const { logLoaded = false, warnOnDirty = true } = options
@@ -8357,7 +12854,7 @@ async function ensureNextVEntrypointVisible(options = {}) {
   }
 }
 
-async function openNextVWorkspace() {
+export async function openNextVWorkspace() {
   const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
   if (!workspaceDir) {
     setStatus('nextv workspace required', 'responding')
@@ -8401,23 +12898,29 @@ async function openNextVWorkspace() {
       ? storedOpenFile
       : ''
 
-    const openAttempts = []
-    if (preferredOpenFile) openAttempts.push(preferredOpenFile)
-    for (const relPath of candidateEntrypoints) {
-      const fullPath = `${workspaceDir}/${relPath}`
-      if (!openAttempts.includes(fullPath)) {
-        openAttempts.push(fullPath)
-      }
-    }
+    const restoredPanes = await restorePaneAssignments({ workspaceDir, preferredOpenFile })
 
     let openedPath = ''
-    for (const attemptPath of openAttempts) {
-      try {
-        await openWorkspaceEditorFile(attemptPath)
-        openedPath = attemptPath
-        break
-      } catch {
-        // try next candidate
+    if (restoredPanes.restoredCount > 0) {
+      openedPath = restoredPanes.focusedPath || preferredOpenFile || restoredPanes.firstPath
+    } else {
+      const openAttempts = []
+      if (preferredOpenFile) openAttempts.push(preferredOpenFile)
+      for (const relPath of candidateEntrypoints) {
+        const fullPath = `${workspaceDir}/${relPath}`
+        if (!openAttempts.includes(fullPath)) {
+          openAttempts.push(fullPath)
+        }
+      }
+
+      for (const attemptPath of openAttempts) {
+        try {
+          await openWorkspaceEditorFile(attemptPath)
+          openedPath = attemptPath
+          break
+        } catch {
+          // try next candidate
+        }
       }
     }
 
@@ -8454,7 +12957,6 @@ async function openNextVWorkspace() {
   setDeclaredEffectChannels(configDeclaredEffects, { preserveSelection: true })
   setNextVRunControls()
   await refreshNextVGraph({ silent: true })
-  restorePaneAssignments()
   if (loadedEntrypoint) {
     setStatus('workspace opened')
   } else {
@@ -8462,7 +12964,7 @@ async function openNextVWorkspace() {
   }
 }
 
-function escapeHtml(str) {
+export function escapeHtml(str) {
   return String(str ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -8473,7 +12975,7 @@ function escapeHtml(str) {
 // --- SSE stream parser ---
 // Parses complete SSE events from a growing string buffer.
 // Returns {events: [{event, data}], remaining: string}
-function parseSSEBuffer(buffer) {
+export function parseSSEBuffer(buffer) {
   const events = []
   let pos = 0
   while (true) {
@@ -8492,283 +12994,11 @@ function parseSSEBuffer(buffer) {
   return { events, remaining: buffer.slice(pos) }
 }
 
-function tokenizeCommandArgs(rawArgs) {
-  const tokens = []
-  const source = String(rawArgs ?? '')
-  const regex = /"([^"]*)"|'([^']*)'|(\S+)/g
-  let match
-  while ((match = regex.exec(source)) !== null) {
-    tokens.push(match[1] ?? match[2] ?? match[3])
-  }
-  return tokens
-}
-
-function parseScriptChatCommand(prompt) {
-  const text = String(prompt ?? '').trim()
-  if (!text.toLowerCase().startsWith('/script')) return null
-
-  const rest = text.slice('/script'.length).trim()
-  const tokens = tokenizeCommandArgs(rest)
-  if (tokens.length === 0) {
-    return { error: 'Usage: /script <path> [--yes|-y]' }
-  }
-
-  let autoAllow = false
-  const pathTokens = []
-  for (const token of tokens) {
-    const normalized = String(token).toLowerCase()
-    if (normalized === '--yes' || normalized === '-y') {
-      autoAllow = true
-      continue
-    }
-    pathTokens.push(token)
-  }
-
-  const filePath = pathTokens.join(' ').trim()
-  if (!filePath) {
-    return { error: 'Script path required. Usage: /script <path> [--yes|-y]' }
-  }
-
-  return { filePath, autoAllow }
-}
-
-// --- Chat submit ---
-async function handleSubmit(e) {
-  e.preventDefault()
-  const prompt = promptInput.value.trim()
-  if (!prompt) return
-
-  const scriptCommand = parseScriptChatCommand(prompt)
-  if (scriptCommand) {
-    if (scriptCommand.error) {
-      setStatus(scriptCommand.error, 'responding')
-      return
-    }
-    if (isBusy) {
-      setStatus('busy: wait for current task', 'responding')
-      return
-    }
-
-    appendUserTurn(prompt)
-    promptInput.value = ''
-
-    const autoAllowInput = document.getElementById('script-autoallow')
-    const previousAutoAllow = Boolean(autoAllowInput?.checked)
-    if (scriptPathInput) {
-      scriptPathInput.value = scriptCommand.filePath
-    }
-    if (autoAllowInput) {
-      autoAllowInput.checked = scriptCommand.autoAllow
-    }
-
-    try {
-      await runScript()
-    } finally {
-      if (autoAllowInput) {
-        autoAllowInput.checked = previousAutoAllow
-      }
-    }
-    return
-  }
-
-  if (isBusy) return
-
-  isBusy = true
-  setNextVRunControls()
-  sendBtn.disabled = true
-  promptInput.disabled = true
-
-  appendUserTurn(prompt)
-  promptInput.value = ''
-
-  const contentEl = appendAssistantTurn()
-  let thinkingEl = null
-  let buffer = ''
-
-  try {
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt }),
-    })
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'request failed' }))
-      appendErrorRow(err.error ?? 'request failed')
-      return
-    }
-
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const { events, remaining } = parseSSEBuffer(buffer)
-      buffer = remaining
-
-      for (const { event, data } of events) {
-        let payload
-        try { payload = JSON.parse(data) } catch { continue }
-        handleSSEEvent(event, payload, contentEl, (el) => { thinkingEl = el })
-      }
-    }
-  } catch (err) {
-    appendErrorRow(err.message)
-  } finally {
-    isBusy = false
-    setNextVRunControls()
-    sendBtn.disabled = false
-    promptInput.disabled = false
-    promptInput.focus()
-    // Clean up any lingering thinking block
-    const activeThinking = document.getElementById('active-thinking')
-    if (activeThinking) activeThinking.removeAttribute('id')
-    setStatus('idle')
-  }
-}
-
-function handleSSEEvent(event, payload, contentEl, setThinkingEl) {
-  switch (event) {
-    case 'status':
-      setStatus(payload.status ?? '', payload.status ?? '')
-      break
-    case 'thinking_start': {
-      const el = appendThinkingBlock()
-      setThinkingEl(el)
-      break
-    }
-    case 'thinking': {
-      const el = document.getElementById('active-thinking-content')
-      if (el) el.textContent += payload.chunk ?? ''
-      scrollToBottom()
-      break
-    }
-    case 'thinking_end': {
-      const block = document.getElementById('active-thinking')
-      if (block) block.removeAttribute('id')
-      break
-    }
-    case 'content':
-      if (contentEl) {
-        contentEl.textContent += payload.chunk ?? ''
-        scrollToBottom()
-      }
-      break
-    case 'tool_call':
-      appendToolRow(payload.name ?? 'tool', payload.args)
-      break
-    case 'tool_result':
-      fillToolResult(payload.name ?? 'tool', payload.result)
-      maybeRenderToolVisual(payload.name, payload.result)
-      break
-    case 'confirm_request':
-      appendConfirmBlock(payload.id, payload.description)
-      break
-    case 'error':
-      appendErrorRow(payload.message ?? 'unknown error')
-      break
-    case 'done':
-      // handled by finally
-      break
-  }
-}
-
-// --- Tool confirmation ---
-async function resolveConfirm(id, allow, btn) {
-  btn.closest('.confirm-block').querySelectorAll('button').forEach(b => b.disabled = true)
-  try {
-    await fetch('/api/confirm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, allow }),
-    })
-    const label = btn.closest('.confirm-block').querySelector('.confirm-desc')
-    if (label) label.textContent += allow ? ' → allowed' : ' → denied'
-    setStatus(allow ? 'confirmation sent: allowed' : 'confirmation sent: denied')
-  } catch (err) {
-    appendErrorRow(`Confirm failed: ${err.message}`)
-  }
-}
-
-// --- Model ---
-async function setModel() {
-  const model = modelInput.value.trim()
-  if (!model) return
-  try {
-    const res = await fetch('/api/model', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model }),
-    })
-    const data = await res.json()
-    if (data.model) modelInput.value = data.model
-    setStatus(`model: ${data.model ?? model}`)
-  } catch (err) {
-    appendErrorRow(`Model switch failed: ${err.message}`)
-  }
-}
-
-// --- htmx callbacks ---
-function onChatCleared(event) {
-  if (event.detail.successful) {
-    transcript.innerHTML = ''
-    imageCount.textContent = '0 attached'
-    setStatus('chat cleared')
-    return
-  }
-
-  const xhr = event.detail?.xhr
-  if (!xhr || xhr.status !== 409) return
-
-  let payload = {}
-  try {
-    payload = JSON.parse(xhr.responseText || '{}')
-  } catch {
-    payload = {}
-  }
-
-  if (!payload?.requiresDiscard) {
-    setStatus('failed to clear chat', 'responding')
-    return
-  }
-
-  const shouldDiscard = window.confirm('Discard unsaved chat changes and clear session?')
-  if (!shouldDiscard) {
-    setStatus('clear cancelled')
-    return
-  }
-
-  fetch('/api/chat/clear', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ discardUnsaved: true }),
-  })
-    .then((res) => {
-      if (!res.ok) throw new Error('clear failed')
-      transcript.innerHTML = ''
-      imageCount.textContent = '0 attached'
-      setStatus('chat cleared')
-    })
-    .catch((err) => {
-      appendErrorRow(`Clear failed: ${err.message}`)
-      setStatus('failed to clear chat', 'responding')
-    })
-}
-
-function onImagesCleared(event) {
-  if (event.detail.successful) {
-    imageCount.textContent = '0 attached'
-    setStatus('images cleared')
-  }
-}
-
-function isValidScriptInputKey(key) {
+export function isValidScriptInputKey(key) {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(key ?? ''))
 }
 
-function addScriptInputRow(key = '', value = '') {
+export function addScriptInputRow(key = '', value = '') {
   if (!scriptInputs) return
 
   const row = document.createElement('div')
@@ -8804,7 +13034,7 @@ function addScriptInputRow(key = '', value = '') {
   scriptInputs.appendChild(row)
 }
 
-function collectScriptInputVars() {
+export function collectScriptInputVars() {
   if (!scriptInputs) return {}
 
   const vars = {}
@@ -8824,38 +13054,7 @@ function collectScriptInputVars() {
   return vars
 }
 
-// --- Image upload ---
-async function uploadImage(input) {
-  const file = input.files?.[0]
-  if (!file) return
-  input.value = ''
-  const reader = new FileReader()
-  reader.onload = async (e) => {
-    const dataUrl = e.target.result
-    // Strip the data URI prefix: data:<mime>;base64,<data>
-    const base64 = dataUrl.split(',')[1]
-    if (!base64) return appendErrorRow('Could not read image data.')
-    try {
-      const res = await fetch('/api/images/add', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ base64, name: file.name }),
-      })
-      const data = await res.json()
-      if (res.ok) {
-        imageCount.textContent = `${data.imageCount} attached`
-        setStatus(`image added: ${file.name}`)
-      } else {
-        appendErrorRow(data.error ?? 'Image upload failed.')
-      }
-    } catch (err) {
-      appendErrorRow(`Image upload failed: ${err.message}`)
-    }
-  }
-  reader.readAsDataURL(file)
-}
-
-async function loadScriptPreview() {
+export async function loadScriptPreview() {
   const filePath = scriptPathInput.value.trim()
   if (!filePath) {
     setStatus('script path required', 'responding')
@@ -8867,7 +13066,6 @@ async function loadScriptPreview() {
     return
   }
 
-  setScriptMode()
   setStatus('loading script…', 'thinking')
 
   try {
@@ -8881,7 +13079,7 @@ async function loadScriptPreview() {
   }
 }
 
-async function saveScriptBuffer() {
+export async function saveScriptBuffer() {
   if (isNextVMode()) {
     try {
       await saveCurrentEditorFile()
@@ -8944,7 +13142,7 @@ async function saveScriptBuffer() {
   }
 }
 
-async function saveNextVEntrypoint() {
+export async function saveNextVEntrypoint() {
   try {
     const filePath = getPanePath(activePaneId)
     if (!filePath) {
@@ -8961,7 +13159,7 @@ async function saveNextVEntrypoint() {
 }
 
 // --- Script runner ---
-async function runScript(runOptions = {}) {
+export async function runScript(runOptions = {}) {
   const filePath = String(runOptions.filePath ?? scriptPathInput.value.trim())
   let scriptText = String(runOptions.inlineScriptText ?? getScriptEditorText())
   const forceMode = String(runOptions.forceMode ?? '')
@@ -8994,18 +13192,13 @@ async function runScript(runOptions = {}) {
   }
 
   try {
-    isBusy = true
+    _setIsBusy(true)
     setNextVRunControls()
-    sendBtn.disabled = true
-    promptInput.disabled = true
-    activeScriptAbortController = new AbortController()
+    _setActiveScriptAbortController(new AbortController())
     setActiveScriptRunId('')
     updateScriptRunControls()
-    if (!isNextVMode()) {
-      setScriptMode()
-    }
     clearScriptLogs()
-    activeScriptLine = null
+    _setActiveScriptLine(null)
 
     setStatus('running script…', 'thinking')
 
@@ -9108,23 +13301,12 @@ async function runScript(runOptions = {}) {
     }
   } finally {
     setActiveScriptRunId('')
-    activeScriptAbortController = null
+    _setActiveScriptAbortController(null)
     updateScriptRunControls()
-    isBusy = false
+    _setIsBusy(false)
     setNextVRunControls()
-    sendBtn.disabled = false
-    promptInput.disabled = false
-    promptInput.focus()
   }
 }
-
-// --- Keyboard shortcut ---
-promptInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    if (!isBusy) document.getElementById('chat-form').dispatchEvent(new Event('submit', { cancelable: true }))
-  }
-})
 
 if (userInputText) {
   userInputText.addEventListener('keydown', (e) => {
@@ -9135,8 +13317,7 @@ if (userInputText) {
   })
 }
 
-function toggleScriptCommentBlockForPane(paneId) {
-  const textarea = getPaneTextarea(paneId)
+export function toggleCommentInTextarea(textarea) {
   if (!textarea) return
 
   const value = textarea.value
@@ -9179,8 +13360,12 @@ function toggleScriptCommentBlockForPane(paneId) {
   textarea.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-function initEditorPanes() {
-  setEditorLayout(editorLayoutState.layoutMode)
+export function toggleScriptCommentBlockForPane(paneId) {
+  toggleCommentInTextarea(getPaneTextarea(paneId))
+}
+
+export function initEditorPanes() {
+  setEditorLayout(editorLayoutState.layoutMode, { persist: false })
   for (const paneId of editorLayoutState.allPanes) {
     const els = getPaneElements(paneId)
     if (!els) continue
@@ -9196,7 +13381,7 @@ function initEditorPanes() {
   }
 }
 
-function bindEditorPaneEvents(paneId) {
+export function bindEditorPaneEvents(paneId) {
   const textarea = getPaneTextarea(paneId)
   if (!textarea || textarea.dataset.paneBound === '1') return
   textarea.dataset.paneBound = '1'
@@ -9212,6 +13397,8 @@ function bindEditorPaneEvents(paneId) {
     if (e.key !== 'Tab') return
 
     e.preventDefault()
+    const indentWidth = getCurrentNextVEditorTabSize()
+    const indentSpaces = ' '.repeat(indentWidth)
 
     const value = textarea.value
     const start = Number(textarea.selectionStart)
@@ -9242,9 +13429,9 @@ function bindEditorPaneEvents(paneId) {
           if (index === 0 && start > lineStart) removedBeforeCaret = 1
           return line.slice(1)
         }
-        if (line.startsWith('  ')) {
-          if (index === 0 && start > lineStart) removedBeforeCaret = Math.min(2, start - lineStart)
-          return line.slice(2)
+        if (line.startsWith(indentSpaces)) {
+          if (index === 0 && start > lineStart) removedBeforeCaret = Math.min(indentWidth, start - lineStart)
+          return line.slice(indentWidth)
         }
         return line
       })
@@ -9268,7 +13455,7 @@ function bindEditorPaneEvents(paneId) {
   })
 
   textarea.addEventListener('input', () => {
-    activeScriptLine = null
+    _setActiveScriptLine(null)
     const paneState = getPaneState(paneId)
     paneState.dirty = normalizeNewlines(textarea.value) !== paneState.loadedText
     renderScriptMirrorForPane(paneId, textarea.value)
@@ -9295,10 +13482,8 @@ function bindEditorPaneEvents(paneId) {
     const candidateOffsets = [primaryOffset, Math.max(0, primaryOffset - 1)]
 
     for (const offset of candidateOffsets) {
-      const ref = findScriptReferenceAtOffset(text, offset)
-      if (!ref) continue
-      await openEditorReference(ref.filePath)
-      return
+      const opened = await openEditorClickTargetAtOffset(text, offset)
+      if (opened) return
     }
   })
 }
@@ -9306,6 +13491,7 @@ function bindEditorPaneEvents(paneId) {
 for (const paneId of editorLayoutState.allPanes) {
   bindEditorPaneEvents(paneId)
 }
+setupEditorGridCenterHandle()
 initEditorPanes()
 bindFloatingGraphCodePanelEvents()
 updateFloatingGraphCodePanelMeta()
@@ -9361,15 +13547,10 @@ if (nextVAutoSaveInput) {
   })
 }
 
-// Model input: Enter = set
-modelInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') setModel()
-})
-
 document.addEventListener('keydown', (e) => {
   const key = String(e.key ?? '').toLowerCase()
   if (key !== 's' || (!e.ctrlKey && !e.metaKey)) return
-  if (!isScriptMode() && !isNextVMode()) return
+  if (!isNextVMode()) return
   e.preventDefault()
   if (isNextVMode()) {
     if (e.shiftKey) {
@@ -9379,7 +13560,6 @@ document.addEventListener('keydown', (e) => {
     saveNextVEntrypoint()
     return
   }
-  saveScriptBuffer()
 })
 
 window.addEventListener('beforeunload', () => {
@@ -9388,7 +13568,149 @@ window.addEventListener('beforeunload', () => {
 })
 
 // --- Init ---
-function initLayoutState() {
+
+// --- Imports (auto-generated by gen-es-modules.js) ---
+import {
+  storageKeys,
+  editorLayoutState,
+  tracePanelState,
+  nextVViewState,
+  nextVPanelState,
+  inputPanelState,
+  nextVRuntimeTargetState,
+  userOutputFilterState,
+  scriptInputs,
+  nextVWorkspaceDirInput,
+  workspace
+} from './state.js'
+import {
+  updateScriptRunControls,
+  getAvailableUserOutputChannels,
+  normalizeUserOutputChannels,
+  setDeclaredEffectChannels,
+  renderUserOutputChannelFilters,
+  applyUserOutputChannelVisibility,
+  clearUserOutputPanel
+} from './02_user_output.js'
+import {
+  isNextVMode,
+  setActiveScriptRunId,
+  setNextVFileDrawerOpen,
+  setNextVPrimaryView,
+  setNextVDevTab,
+  setNextVDevConsoleOpen,
+  setNextVImagesOpen,
+  setNextVIngressControlsVisible,
+  setNextVRuntimeTarget,
+  setNextVAttachWsUrl,
+  setNextVAttachStartOverrideEnabled,
+  toggleNextVIngressControlsSetting,
+  setDeclaredExternalChannels,
+  setNextVInputTab,
+  setAppMode,
+  setNextVRunControls,
+  setNextVStateDiffTab,
+  setUserIOPanelOpen,
+  toggleNextVDevConsole,
+  initNextVCallInspectorPanelChrome,
+  toggleNextVCallInspectorPanel,
+  toggleNextVFileDrawer,
+  toggleNextVImagesOpen,
+  toggleUserIOPanel
+} from './03_ui_controls.js'
+import {
+  appendNextVErrorLog
+} from './07_graph_render.js'
+import {
+  setNextVEventsLiveMode
+} from './02_user_output.js'
+import {
+  closeFloatingGraphCodePanel,
+  saveFloatingGraphCodePanel
+} from './04_floating_panels.js'
+import {
+  normalizeNextVWorkspaceDir
+} from './08_path_utils.js'
+import {
+  updateOpenFileLabel,
+  initFileTreeCtxMenu,
+  setEditorLayout,
+  setNextVEditorTabSize,
+  restoreNextVConfig,
+  ctxMenuDelete,
+  ctxMenuNewFile,
+  ctxMenuNewFolder,
+  ctxMenuRename,
+  onDeleteConfirmApprove,
+  onDeleteConfirmCancel,
+  refreshNextVWorkspaceTree,
+  saveAllNextVFiles
+} from './09_editor.js'
+import {
+  initNextVStatePanelTools,
+  initNextVStateDiffPanel,
+  setupNextVStateDiffSplitter,
+  clearNextVStateDiff,
+  setNextVStateCollapseAll,
+  toggleNextVStateDiff
+} from './10_file_tree.js'
+import {
+  initNextVUserIOPanel,
+  setupNextVUserIOSplitter,
+  clearTracePanel,
+  renderNextVSnapshot
+} from './11_state_panels.js'
+import {
+  syncNextVRuntimeState,
+  updateNextVEventImageUI,
+  setupNextVImageDropzone,
+  setLeftPanelWidth,
+  setupSplitter,
+  setupFileTreeSplitter,
+  setupVerticalSplitters,
+  startNextVRuntime,
+  stopNextVRuntime,
+  runNextVRuntime,
+  attachNextVRuntime,
+  detachNextVRuntime,
+  sendNextVEvent,
+  sendNextVIngress,
+  clearNextVEventImages,
+  refreshNextVSnapshot,
+  handleNextVImageInput,
+  reloadNextVRuntimeConfig,
+  submitNextVCandidate,
+  promoteNextVCandidate,
+  executeNextVCallInspector,
+  insertNextVCallInspectorSnippet,
+  initNextVCallInspector,
+} from './12_stream.js'
+import {
+  initNextVEditorSurfaceBeta,
+  setNextVEditorSurfaceBetaEnabled,
+  setNextVEditorSurfaceTelemetryVisible,
+} from './15_surface_beta.js'
+import {
+  initNextVTokenClickPlugin,
+} from './16_token_click_plugin.js'
+import {
+  loadSession,
+  clearScriptOutput,
+  clearScriptView,
+  renderScriptMirror,
+  openNextVWorkspace,
+  addScriptInputRow,
+  cancelScriptRun,
+  resolveConfirm,
+  clearOutputPanel,
+  clearScriptLogsPanel,
+  loadScriptPreview,
+  runScript,
+  saveNextVEntrypoint,
+  saveScriptBuffer,
+} from './13_layout.js'
+
+export function initLayoutState() {
   setAppMode('nextv')
 
   const savedWidth = Number(localStorage.getItem(storageKeys.leftWidth))
@@ -9397,6 +13719,8 @@ function initLayoutState() {
   }
 
   restoreNextVConfig()
+  setEditorLayout(editorLayoutState.layoutMode, { persist: false })
+  initNextVEditorSurfaceBeta()
 
   const queryWorkspaceDir = normalizeNextVWorkspaceDir(
     new URLSearchParams(window.location.search).get('workspaceDir') ?? ''
@@ -9417,6 +13741,9 @@ function initLayoutState() {
   const ingressControlsVisible = ingressControlsVisibleStored == null ? true : ingressControlsVisibleStored === '1'
   setNextVIngressControlsVisible(ingressControlsVisible, { persist: false })
   setNextVRuntimeTarget(nextVRuntimeTargetState.target, { persist: false, sync: false })
+  setNextVAttachWsUrl(nextVRuntimeTargetState.attachWsUrl, { persist: false, sync: false })
+  const attachOverrideStored = localStorage.getItem(storageKeys.nextVAttachStartOverride) === '1'
+  setNextVAttachStartOverrideEnabled(attachOverrideStored, { persist: false })
   const drawerStored = localStorage.getItem(storageKeys.nextVTreeDrawerOpen)
   setNextVFileDrawerOpen(drawerStored !== '0', { persist: false })
 
@@ -9453,6 +13780,31 @@ function initLayoutState() {
   }
 }
 
+export function setupNextVEventsScrollListener() {
+  const nextVEventsOutput = document.getElementById('nextv-events-output')
+  if (!nextVEventsOutput) return
+
+  let scrollTimeout = null
+  nextVEventsOutput.addEventListener('scroll', () => {
+    if (scrollTimeout) clearTimeout(scrollTimeout)
+
+    scrollTimeout = setTimeout(() => {
+      // Import state directly at call time
+      import('./state.js').then(({ nextVEventsLiveMode }) => {
+        if (nextVEventsLiveMode === false) return
+
+        const firstGroup = nextVEventsOutput.querySelector('.exec-group')
+        if (!firstGroup) return
+
+        const firstGroupBottom = firstGroup.offsetHeight
+        if (nextVEventsOutput.scrollTop > firstGroupBottom) {
+          setNextVEventsLiveMode(false)
+        }
+      })
+    }, 50)
+  })
+}
+
 setupSplitter()
 setupFileTreeSplitter()
 setupNextVStateDiffSplitter()
@@ -9460,8 +13812,2063 @@ setupNextVUserIOSplitter()
 setupNextVImageDropzone()
 updateNextVEventImageUI()
 setupVerticalSplitters()
+initNextVCallInspectorPanelChrome()
+initNextVCallInspector()
+initNextVTokenClickPlugin()
+setupNextVEventsScrollListener()
 initLayoutState()
 initFileTreeCtxMenu()
 updateScriptRunControls()
 syncNextVRuntimeState()
 loadSession()
+
+// ---------------------------------------------------------------------------
+// Expose onclick handlers to global scope.
+// HTML inline onclick="fn()" requires global access; ES module scope is not
+// global, so we assign each handler explicitly to window here.
+// ---------------------------------------------------------------------------
+Object.assign(window, {
+  // 02_user_output.js
+  clearUserOutputPanel,
+  setNextVEventsLiveMode,
+  // 03_ui_controls.js
+  setNextVPrimaryView,
+  setNextVDevTab,
+  setNextVStateDiffTab,
+  setNextVRuntimeTarget,
+  setNextVAttachWsUrl,
+  setNextVAttachStartOverrideEnabled,
+  attachNextVRuntime,
+  detachNextVRuntime,
+  setUserIOPanelOpen,
+  toggleNextVDevConsole,
+  toggleNextVCallInspectorPanel,
+  toggleNextVFileDrawer,
+  toggleNextVImagesOpen,
+  toggleNextVIngressControlsSetting,
+  toggleUserIOPanel,
+  // 04_floating_panels.js
+  closeFloatingGraphCodePanel,
+  saveFloatingGraphCodePanel,
+  // 09_editor.js
+  ctxMenuDelete,
+  ctxMenuNewFile,
+  ctxMenuNewFolder,
+  ctxMenuRename,
+  onDeleteConfirmApprove,
+  onDeleteConfirmCancel,
+  refreshNextVWorkspaceTree,
+  saveAllNextVFiles,
+  setEditorLayout,
+  setNextVEditorTabSize,
+  setNextVEditorSurfaceBetaEnabled,
+  setNextVEditorSurfaceTelemetryVisible,
+  // 10_file_tree.js
+  clearNextVStateDiff,
+  setNextVStateCollapseAll,
+  toggleNextVStateDiff,
+  // 11_state_panels.js
+  renderNextVSnapshot,
+  // 12_stream.js
+  clearNextVEventImages,
+  handleNextVImageInput,
+  refreshNextVSnapshot,
+  runNextVRuntime,
+  reloadNextVRuntimeConfig,
+  submitNextVCandidate,
+  promoteNextVCandidate,
+  sendNextVEvent,
+  sendNextVIngress,
+  startNextVRuntime,
+  stopNextVRuntime,
+  executeNextVCallInspector,
+  insertNextVCallInspectorSnippet,
+  // 13_layout.js
+  addScriptInputRow,
+  cancelScriptRun,
+  resolveConfirm,
+  clearOutputPanel,
+  clearScriptLogsPanel,
+  loadScriptPreview,
+  openNextVWorkspace,
+  runScript,
+  saveNextVEntrypoint,
+  saveScriptBuffer,
+})
+
+// --- Imports (auto-generated by gen-es-modules.js) ---
+import {
+  storageKeys,
+  nextVEditorSurfaceBetaToggle,
+  nextVEditorSurfaceTelemetryToggle,
+  nextVGraphState,
+} from './state.js'
+import {
+  getPaneEditorShell,
+  getPaneEl,
+  getPaneState,
+  getPaneTextarea,
+} from './09_editor.js'
+import {
+  openEditorClickTargetAtOffset,
+} from './13_layout.js'
+import {
+  Surface,
+  Renderer,
+  DiagnosticsChannel,
+  createMarkdownPlugin,
+  createJsonPlugin,
+  tokenizeJson,
+} from '../editor-core/index.js'
+
+const SURFACE_BETA_EDITOR_PANE_IDS = ['A', 'B', 'C', 'D']
+const SURFACE_BETA_FLOAT_PANE_IDS = ['FLOAT1', 'FLOAT2']
+const SURFACE_BETA_PANE_IDS = [...SURFACE_BETA_EDITOR_PANE_IDS, ...SURFACE_BETA_FLOAT_PANE_IDS]
+let surfaceBetaEnabled = false
+let surfaceTelemetryVisible = true
+const paneBindings = new Map()
+const paneSurfaceSwitchState = new Map()
+const paneSwitchButtons = new Map()
+let surfacePaneSwitchPollTimer = null
+
+const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown', '.mdx'])
+const NERVE_EXTENSIONS = new Set(['.nrv', '.wfs'])
+const JSON_EXTENSIONS = new Set(['.json', '.jsonc', '.json5'])
+
+function escapeHtml(text) {
+  return String(text ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+}
+
+function inferModeFromPath(filePath) {
+  const value = String(filePath ?? '').trim().toLowerCase()
+  if (!value) return ''
+  const lastDot = value.lastIndexOf('.')
+  if (lastDot < 0) return ''
+  const ext = value.slice(lastDot)
+  if (NERVE_EXTENSIONS.has(ext)) return 'nerve'
+  if (MARKDOWN_EXTENSIONS.has(ext)) return 'markdown'
+  if (JSON_EXTENSIONS.has(ext)) return 'json'
+  return ''
+}
+
+function inferModeFromContent(text) {
+  const trimmed = String(text ?? '').trim()
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    return 'json'
+  }
+  return 'markdown'
+}
+
+function parseJsonStringTokenValue(value) {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return String(value ?? '').replace(/^"|"$/g, '')
+  }
+}
+
+function buildLineOffsets(text) {
+  const value = String(text ?? '')
+  const offsets = [0]
+  for (let i = 0; i < value.length; i += 1) {
+    if (value[i] === '\n') {
+      offsets.push(i + 1)
+    }
+  }
+  return offsets
+}
+
+function buildTokenEntries(text) {
+  const lineOffsets = buildLineOffsets(text)
+  return tokenizeJson(text).map((token) => {
+    const lineOffset = lineOffsets[Math.max(0, Number(token.line) - 1)] ?? 0
+    return {
+      token,
+      startOffset: lineOffset + Number(token.start ?? 0),
+      endOffset: lineOffset + Number(token.end ?? 0),
+    }
+  })
+}
+
+function inferJsonObjectPathAtCursor(text, cursorOffset) {
+  const value = String(text ?? '')
+  const cursor = Math.max(0, Math.min(Number.isInteger(cursorOffset) ? cursorOffset : 0, value.length))
+  const entries = buildTokenEntries(value)
+  const stack = []
+  let bestPath = []
+
+  const enterContainer = (type) => {
+    const parent = stack[stack.length - 1]
+    let path = []
+
+    if (parent) {
+      if (parent.type === 'object') {
+        if (typeof parent.pendingKey === 'string' && parent.pendingKey.length > 0) {
+          path = [...parent.path, parent.pendingKey]
+        } else {
+          path = [...parent.path]
+        }
+        parent.pendingKey = null
+        parent.expecting = 'commaOrClose'
+      } else if (parent.type === 'array') {
+        path = [...parent.path, parent.nextIndex]
+        parent.nextIndex += 1
+        parent.expecting = 'commaOrClose'
+      }
+    }
+
+    stack.push({
+      type,
+      path,
+      expecting: type === 'object' ? 'keyOrClose' : 'valueOrClose',
+      pendingKey: null,
+      nextIndex: 0,
+    })
+  }
+
+  const markPrimitiveValueConsumed = () => {
+    const parent = stack[stack.length - 1]
+    if (!parent) return
+    if (parent.type === 'object' && parent.expecting === 'value') {
+      parent.pendingKey = null
+      parent.expecting = 'commaOrClose'
+      return
+    }
+    if (parent.type === 'array' && parent.expecting === 'valueOrClose') {
+      parent.nextIndex += 1
+      parent.expecting = 'commaOrClose'
+    }
+  }
+
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i]
+    if (entry.startOffset > cursor) {
+      break
+    }
+
+    const token = entry.token
+    const top = stack[stack.length - 1]
+    const nextType = entries[i + 1]?.token?.type ?? ''
+
+    if (token.type === 'brace-open') {
+      enterContainer('object')
+    } else if (token.type === 'bracket-open') {
+      enterContainer('array')
+    } else if (token.type === 'brace-close') {
+      if (stack[stack.length - 1]?.type === 'object') {
+        stack.pop()
+      }
+    } else if (token.type === 'bracket-close') {
+      if (stack[stack.length - 1]?.type === 'array') {
+        stack.pop()
+      }
+    } else if (token.type === 'comma') {
+      if (top?.expecting === 'commaOrClose') {
+        top.expecting = top.type === 'object' ? 'keyOrClose' : 'valueOrClose'
+      }
+    } else if (token.type === 'colon') {
+      if (top?.type === 'object' && top.expecting === 'colon') {
+        top.expecting = 'value'
+      }
+    } else if (token.type === 'string') {
+      if (top?.type === 'object' && top.expecting === 'keyOrClose' && nextType === 'colon') {
+        top.pendingKey = parseJsonStringTokenValue(token.value)
+        top.expecting = 'colon'
+      } else {
+        markPrimitiveValueConsumed()
+      }
+    } else if (token.type === 'number' || token.type === 'boolean' || token.type === 'null') {
+      markPrimitiveValueConsumed()
+    }
+
+    const currentObject = [...stack].reverse().find((frame) => frame.type === 'object')
+    if (currentObject) {
+      bestPath = currentObject.path
+    }
+  }
+
+  return Array.isArray(bestPath) ? bestPath : []
+}
+
+function buildJsonObjectKeyEntries(text) {
+  const value = String(text ?? '')
+  const entries = buildTokenEntries(value)
+  const stack = []
+  const keys = []
+
+  const enterContainer = (type) => {
+    const parent = stack[stack.length - 1]
+    let path = []
+
+    if (parent) {
+      if (parent.type === 'object') {
+        if (typeof parent.pendingKey === 'string' && parent.pendingKey.length > 0) {
+          path = [...parent.path, parent.pendingKey]
+        } else {
+          path = [...parent.path]
+        }
+        parent.pendingKey = null
+        parent.expecting = 'commaOrClose'
+      } else if (parent.type === 'array') {
+        path = [...parent.path, parent.nextIndex]
+        parent.nextIndex += 1
+        parent.expecting = 'commaOrClose'
+      }
+    }
+
+    stack.push({
+      type,
+      path,
+      expecting: type === 'object' ? 'keyOrClose' : 'valueOrClose',
+      pendingKey: null,
+      nextIndex: 0,
+    })
+  }
+
+  const markPrimitiveValueConsumed = () => {
+    const parent = stack[stack.length - 1]
+    if (!parent) return
+    if (parent.type === 'object' && parent.expecting === 'value') {
+      parent.pendingKey = null
+      parent.expecting = 'commaOrClose'
+      return
+    }
+    if (parent.type === 'array' && parent.expecting === 'valueOrClose') {
+      parent.nextIndex += 1
+      parent.expecting = 'commaOrClose'
+    }
+  }
+
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i]
+    const token = entry.token
+    const top = stack[stack.length - 1]
+    const nextType = entries[i + 1]?.token?.type ?? ''
+
+    if (token.type === 'brace-open') {
+      enterContainer('object')
+      continue
+    }
+    if (token.type === 'bracket-open') {
+      enterContainer('array')
+      continue
+    }
+    if (token.type === 'brace-close') {
+      if (stack[stack.length - 1]?.type === 'object') {
+        stack.pop()
+      }
+      continue
+    }
+    if (token.type === 'bracket-close') {
+      if (stack[stack.length - 1]?.type === 'array') {
+        stack.pop()
+      }
+      continue
+    }
+    if (token.type === 'comma') {
+      if (top?.expecting === 'commaOrClose') {
+        top.expecting = top.type === 'object' ? 'keyOrClose' : 'valueOrClose'
+      }
+      continue
+    }
+    if (token.type === 'colon') {
+      if (top?.type === 'object' && top.expecting === 'colon') {
+        top.expecting = 'value'
+      }
+      continue
+    }
+    if (token.type === 'string') {
+      if (top?.type === 'object' && top.expecting === 'keyOrClose' && nextType === 'colon') {
+        const key = parseJsonStringTokenValue(token.value)
+        keys.push({ path: top.path, key, startOffset: entry.startOffset })
+        top.pendingKey = key
+        top.expecting = 'colon'
+      } else {
+        markPrimitiveValueConsumed()
+      }
+      continue
+    }
+    if (token.type === 'number' || token.type === 'boolean' || token.type === 'null') {
+      markPrimitiveValueConsumed()
+    }
+  }
+
+  return keys
+}
+
+function inferJsonObjectTargetAtCursor(text, cursorOffset) {
+  const value = String(text ?? '')
+  const cursor = Math.max(0, Math.min(Number.isInteger(cursorOffset) ? cursorOffset : 0, value.length))
+  const path = inferJsonObjectPathAtCursor(value, cursor)
+  const pathKey = JSON.stringify(path)
+  const nextKey = buildJsonObjectKeyEntries(value)
+    .filter((entry) => JSON.stringify(entry.path) === pathKey && entry.startOffset >= cursor)
+    .map((entry) => entry.key)[0]
+
+  return {
+    path,
+    anchorKey: typeof nextKey === 'string' && nextKey.length > 0 ? nextKey : null,
+  }
+}
+
+function buildJsonValueEntries(text) {
+  const entries = buildTokenEntries(text)
+  const stack = []
+  const values = []
+
+  const pushValue = (path, startOffset, startLine) => {
+    values.push({
+      path: Array.isArray(path) ? path : [],
+      startOffset: Number.isInteger(startOffset) ? startOffset : 0,
+      startLine: Number.isInteger(startLine) && startLine > 0 ? startLine : 1,
+    })
+  }
+
+  const enterContainer = (type, startOffset, startLine) => {
+    const parent = stack[stack.length - 1]
+    let path = []
+
+    if (parent) {
+      if (parent.type === 'object') {
+        if (typeof parent.pendingKey === 'string' && parent.pendingKey.length > 0) {
+          path = [...parent.path, parent.pendingKey]
+        } else {
+          path = [...parent.path]
+        }
+        parent.pendingKey = null
+        parent.expecting = 'commaOrClose'
+      } else if (parent.type === 'array') {
+        path = [...parent.path, parent.nextIndex]
+        parent.nextIndex += 1
+        parent.expecting = 'commaOrClose'
+      }
+    }
+
+    stack.push({
+      type,
+      path,
+      expecting: type === 'object' ? 'keyOrClose' : 'valueOrClose',
+      pendingKey: null,
+      nextIndex: 0,
+    })
+
+    pushValue(path, startOffset, startLine)
+  }
+
+  const markPrimitiveValue = (startOffset, startLine) => {
+    const parent = stack[stack.length - 1]
+    if (!parent) {
+      pushValue([], startOffset, startLine)
+      return
+    }
+
+    if (parent.type === 'object' && parent.expecting === 'value' && typeof parent.pendingKey === 'string') {
+      pushValue([...parent.path, parent.pendingKey], startOffset, startLine)
+      parent.pendingKey = null
+      parent.expecting = 'commaOrClose'
+      return
+    }
+
+    if (parent.type === 'array' && parent.expecting === 'valueOrClose') {
+      pushValue([...parent.path, parent.nextIndex], startOffset, startLine)
+      parent.nextIndex += 1
+      parent.expecting = 'commaOrClose'
+    }
+  }
+
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i]
+    const token = entry.token
+    const top = stack[stack.length - 1]
+    const nextType = entries[i + 1]?.token?.type ?? ''
+
+    if (token.type === 'brace-open') {
+      enterContainer('object', entry.startOffset, Number(token.line) || 1)
+      continue
+    }
+
+    if (token.type === 'bracket-open') {
+      enterContainer('array', entry.startOffset, Number(token.line) || 1)
+      continue
+    }
+
+    if (token.type === 'brace-close') {
+      if (stack[stack.length - 1]?.type === 'object') {
+        stack.pop()
+      }
+      continue
+    }
+
+    if (token.type === 'bracket-close') {
+      if (stack[stack.length - 1]?.type === 'array') {
+        stack.pop()
+      }
+      continue
+    }
+
+    if (token.type === 'comma') {
+      if (top?.expecting === 'commaOrClose') {
+        top.expecting = top.type === 'object' ? 'keyOrClose' : 'valueOrClose'
+      }
+      continue
+    }
+
+    if (token.type === 'colon') {
+      if (top?.type === 'object' && top.expecting === 'colon') {
+        top.expecting = 'value'
+      }
+      continue
+    }
+
+    if (token.type === 'string') {
+      if (top?.type === 'object' && top.expecting === 'keyOrClose' && nextType === 'colon') {
+        top.pendingKey = parseJsonStringTokenValue(token.value)
+        top.expecting = 'colon'
+      } else {
+        markPrimitiveValue(entry.startOffset, Number(token.line) || 1)
+      }
+      continue
+    }
+
+    if (token.type === 'number' || token.type === 'boolean' || token.type === 'null') {
+      markPrimitiveValue(entry.startOffset, Number(token.line) || 1)
+    }
+  }
+
+  return values
+}
+
+function inferJsonPathAtLine(text, line) {
+  const targetLine = Math.max(1, Number.isInteger(line) ? line : 1)
+  const entries = buildJsonValueEntries(text)
+  if (entries.length === 0) return []
+
+  let exact = entries.find((entry) => entry.startLine === targetLine)
+  if (exact) return Array.isArray(exact.path) ? exact.path : []
+
+  const next = entries.find((entry) => entry.startLine > targetLine)
+  if (next) return Array.isArray(next.path) ? next.path : []
+
+  const fallback = entries[entries.length - 1]
+  return Array.isArray(fallback?.path) ? fallback.path : []
+}
+
+function inferJsonPathAtOffset(text, offset) {
+  const value = String(text ?? '')
+  const cursor = Math.max(0, Math.min(Number.isInteger(offset) ? offset : 0, value.length))
+  const entries = buildJsonValueEntries(value)
+  let bestPath = []
+
+  for (let i = 0; i < entries.length; i += 1) {
+    if (entries[i].startOffset > cursor) {
+      break
+    }
+    bestPath = entries[i].path
+  }
+
+  return Array.isArray(bestPath) ? bestPath : []
+}
+
+function findJsonValueStartOffsetByPath(text, path) {
+  const entries = buildJsonValueEntries(text)
+  const targetPath = Array.isArray(path) ? [...path] : []
+
+  while (true) {
+    const targetKey = JSON.stringify(targetPath)
+    const match = entries.find((entry) => JSON.stringify(entry.path) === targetKey)
+    if (match) {
+      return match.startOffset
+    }
+    if (targetPath.length === 0) {
+      return 0
+    }
+    targetPath.pop()
+  }
+}
+
+function findJsonValueLineByPath(text, path) {
+  const entries = buildJsonValueEntries(text)
+  const targetPath = Array.isArray(path) ? [...path] : []
+
+  while (true) {
+    const targetKey = JSON.stringify(targetPath)
+    const match = entries.find((entry) => JSON.stringify(entry.path) === targetKey)
+    if (match) {
+      return Number.isInteger(match.startLine) ? match.startLine : 1
+    }
+    if (targetPath.length === 0) {
+      return 1
+    }
+    targetPath.pop()
+  }
+}
+
+function buildJsonPathLineLookup(text) {
+  const entries = buildJsonValueEntries(text)
+  const lookup = new Map()
+
+  for (const entry of entries) {
+    const key = JSON.stringify(Array.isArray(entry.path) ? entry.path : [])
+    if (!lookup.has(key)) {
+      lookup.set(key, Number.isInteger(entry.startLine) && entry.startLine > 0 ? entry.startLine : 1)
+    }
+  }
+
+  if (!lookup.has('[]')) {
+    lookup.set('[]', 1)
+  }
+
+  return lookup
+}
+
+function getJsonNodeByPath(root, path) {
+  let current = root
+  for (const segment of Array.isArray(path) ? path : []) {
+    if (Array.isArray(current) && Number.isInteger(segment) && segment >= 0 && segment < current.length) {
+      current = current[segment]
+      continue
+    }
+    if (current && typeof current === 'object' && !Array.isArray(current) && typeof segment === 'string' && Object.hasOwn(current, segment)) {
+      current = current[segment]
+      continue
+    }
+    return { found: false, node: undefined }
+  }
+  return { found: true, node: current }
+}
+
+function insertObjectPropertyOrdered(objectValue, newKey, newValue, anchorKey) {
+  if (!objectValue || typeof objectValue !== 'object' || Array.isArray(objectValue)) {
+    return null
+  }
+
+  const result = {}
+  let inserted = false
+  const hasAnchor = typeof anchorKey === 'string' && anchorKey.length > 0 && Object.hasOwn(objectValue, anchorKey)
+
+  for (const [key, value] of Object.entries(objectValue)) {
+    if (!inserted && hasAnchor && key === anchorKey && key !== newKey) {
+      result[newKey] = newValue
+      inserted = true
+    }
+
+    if (key === newKey) {
+      if (!inserted) {
+        result[newKey] = newValue
+        inserted = true
+      }
+      continue
+    }
+
+    result[key] = value
+  }
+
+  if (!inserted) {
+    result[newKey] = newValue
+  }
+
+  return result
+}
+
+function createSurfaceTelemetry() {
+  return {
+    mountedAt: Date.now(),
+    lastSyncAt: 0,
+    lastSyncSource: 'none',
+    status: 'starting',
+    statusReason: 'mounting',
+    counters: {
+      legacyInput: 0,
+      surfaceInput: 0,
+      legacyToSurfaceSync: 0,
+      surfaceToLegacySync: 0,
+      commandWrapBold: 0,
+      commandWrapItalic: 0,
+      commandPreviewToggle: 0,
+      commandJsonNormalizeDocument: 0,
+      commandJsonNormalizeSelection: 0,
+      commandJsonToggleBoolean: 0,
+      commandJsonAddProperty: 0,
+      commandJsonSetValue: 0,
+      syncPollTicks: 0,
+      errors: 0,
+    },
+    lengths: {
+      surfaceText: 0,
+      legacyText: 0,
+      driftChars: 0,
+    },
+  }
+}
+
+function getTelemetrySnapshot(telemetry) {
+  return {
+    ...telemetry,
+    counters: { ...telemetry.counters },
+    lengths: { ...telemetry.lengths },
+  }
+}
+
+function publishSurfaceTelemetrySnapshot(telemetry) {
+  window.__nextVSurfaceBetaTelemetry = getTelemetrySnapshot(telemetry)
+}
+
+function readStoredSurfaceBetaEnabled() {
+  return localStorage.getItem(storageKeys.nextVEditorSurfaceBeta) === '1'
+}
+
+function persistSurfaceBetaEnabled(enabled) {
+  if (enabled) {
+    localStorage.setItem(storageKeys.nextVEditorSurfaceBeta, '1')
+  } else {
+    localStorage.removeItem(storageKeys.nextVEditorSurfaceBeta)
+  }
+}
+
+function readStoredSurfaceTelemetryVisible() {
+  const stored = localStorage.getItem(storageKeys.nextVEditorSurfaceTelemetry)
+  if (stored == null) return true
+  return stored === '1'
+}
+
+function persistSurfaceTelemetryVisible(enabled) {
+  localStorage.setItem(storageKeys.nextVEditorSurfaceTelemetry, enabled ? '1' : '0')
+}
+
+function applySurfaceTelemetryVisibility(dom) {
+  const hidden = surfaceTelemetryVisible !== true
+  if (!dom) return
+  const toolbar = dom.toolbar || dom.root?.querySelector('.surface-beta-toolbar')
+  if (toolbar) {
+    toolbar.hidden = hidden
+    toolbar.style.display = hidden ? 'none' : 'flex'
+  }
+  dom.status.hidden = hidden
+  dom.metrics.hidden = hidden
+  dom.telemetry.hidden = hidden
+}
+
+function getPaneTrackedPath(paneId) {
+  if (SURFACE_BETA_EDITOR_PANE_IDS.includes(paneId)) {
+    return String(getPaneState(paneId)?.path ?? '')
+  }
+
+  if (SURFACE_BETA_FLOAT_PANE_IDS.includes(paneId)) {
+    return String(nextVGraphState.floatingPanels.get(paneId)?.filePath ?? '')
+  }
+
+  return ''
+}
+
+function getEligibleSurfaceModeForPane(paneId) {
+  const panePath = getPaneTrackedPath(paneId)
+  const mode = inferModeFromPath(panePath)
+  return mode === 'markdown' || mode === 'json' || mode === 'nerve' ? mode : ''
+}
+
+function ensureSurfacePaneSwitchControls() {
+  for (const paneId of SURFACE_BETA_PANE_IDS) {
+    const paneEl = SURFACE_BETA_EDITOR_PANE_IDS.includes(paneId) ? getPaneEl(paneId) : null
+    const shell = getPaneEditorShell(paneId)
+    const floatingPanelEl = shell?.closest('.nextv-floating-code-panel')
+    const headerEl = paneEl?.querySelector('.editor-pane-header')
+      || floatingPanelEl?.querySelector('.nextv-floating-code-header')
+    if (!headerEl) continue
+
+    let button = headerEl.querySelector('.pane-surface-switch')
+    if (!button) {
+      button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'pane-surface-switch'
+      button.textContent = 'surface'
+      button.hidden = true
+      button.addEventListener('click', () => {
+        const mode = getEligibleSurfaceModeForPane(paneId)
+        if (!mode) return
+        const currentlyActive = paneSurfaceSwitchState.get(paneId) === true
+        paneSurfaceSwitchState.set(paneId, !currentlyActive)
+        refreshSurfacePaneSwitchUi()
+      })
+      const floatingActions = headerEl.querySelector('.nextv-floating-code-actions')
+      if (floatingActions) {
+        headerEl.insertBefore(button, floatingActions)
+      } else {
+        headerEl.appendChild(button)
+      }
+    }
+
+    paneSwitchButtons.set(paneId, button)
+  }
+}
+
+function removeSurfacePaneSwitchControls() {
+  for (const button of paneSwitchButtons.values()) {
+    button?.remove()
+  }
+  paneSwitchButtons.clear()
+}
+
+function refreshSurfacePaneSwitchUi() {
+  if (surfaceBetaEnabled !== true) {
+    for (const paneId of SURFACE_BETA_PANE_IDS) {
+      paneSurfaceSwitchState.set(paneId, false)
+      unmountSurfaceBetaForPane(paneId)
+    }
+    return
+  }
+
+  ensureSurfacePaneSwitchControls()
+
+  for (const paneId of SURFACE_BETA_PANE_IDS) {
+    const button = paneSwitchButtons.get(paneId)
+    if (!button) continue
+
+    const mode = getEligibleSurfaceModeForPane(paneId)
+    if (!mode) {
+      button.hidden = true
+      button.classList.remove('active')
+      paneSurfaceSwitchState.set(paneId, false)
+      unmountSurfaceBetaForPane(paneId)
+      continue
+    }
+
+    button.hidden = false
+    const active = paneSurfaceSwitchState.get(paneId) === true
+    button.classList.toggle('active', active)
+    button.setAttribute('aria-pressed', active ? 'true' : 'false')
+    if (mode === 'nerve') {
+      button.title = active
+        ? 'nerve plugin active (original editor)'
+        : 'enable nerve plugin (original editor)'
+    } else {
+      button.title = active
+        ? `switch to original editor (${mode})`
+        : `switch to surface (${mode})`
+    }
+
+    if (mode === 'nerve') {
+      // Nerve files keep the original editor path even when surface toggle is active.
+      unmountSurfaceBetaForPane(paneId)
+      continue
+    }
+
+    if (active) {
+      mountSurfaceBetaForPane(paneId)
+    } else {
+      unmountSurfaceBetaForPane(paneId)
+    }
+  }
+}
+
+function startSurfacePaneSwitchPolling() {
+  if (surfacePaneSwitchPollTimer != null) return
+  surfacePaneSwitchPollTimer = window.setInterval(() => {
+    refreshSurfacePaneSwitchUi()
+  }, 220)
+}
+
+function stopSurfacePaneSwitchPolling() {
+  if (surfacePaneSwitchPollTimer == null) return
+  window.clearInterval(surfacePaneSwitchPollTimer)
+  surfacePaneSwitchPollTimer = null
+}
+
+function buildSurfaceBetaDom(shell) {
+  const root = document.createElement('div')
+  root.className = 'surface-beta-shell'
+
+  const toolbar = document.createElement('div')
+  toolbar.className = 'surface-beta-toolbar'
+
+  const badge = document.createElement('span')
+  badge.className = 'surface-beta-badge'
+  badge.textContent = 'surface beta'
+
+  const status = document.createElement('span')
+  status.className = 'surface-beta-status'
+  status.dataset.state = 'starting'
+  status.textContent = 'starting'
+
+  const metrics = document.createElement('span')
+  metrics.className = 'surface-beta-metrics'
+
+  const telemetry = document.createElement('span')
+  telemetry.className = 'surface-beta-telemetry'
+
+  const diagnostics = document.createElement('div')
+  diagnostics.className = 'surface-beta-diagnostics'
+  diagnostics.hidden = true
+
+  const jsonBuilder = document.createElement('div')
+  jsonBuilder.className = 'surface-beta-json-builder'
+  jsonBuilder.hidden = true
+
+  const jsonInlineEditor = document.createElement('div')
+  jsonInlineEditor.className = 'surface-beta-json-inline-editor'
+  jsonInlineEditor.hidden = true
+
+  const jsonInlineEditorLabel = document.createElement('span')
+  jsonInlineEditorLabel.className = 'surface-beta-json-inline-label'
+
+  const jsonInlineEditorKeyInput = document.createElement('input')
+  jsonInlineEditorKeyInput.className = 'surface-beta-json-inline-input'
+  jsonInlineEditorKeyInput.type = 'text'
+  jsonInlineEditorKeyInput.placeholder = 'key'
+
+  const jsonInlineEditorType = document.createElement('select')
+  jsonInlineEditorType.className = 'surface-beta-json-inline-select'
+  ;[
+    ['json', 'json'],
+    ['string', 'string'],
+    ['number', 'number'],
+    ['boolean', 'boolean'],
+    ['null', 'null'],
+  ].forEach(([value, label]) => {
+    const option = document.createElement('option')
+    option.value = value
+    option.textContent = label
+    jsonInlineEditorType.appendChild(option)
+  })
+
+  const jsonInlineEditorValueInput = document.createElement('input')
+  jsonInlineEditorValueInput.className = 'surface-beta-json-inline-input'
+  jsonInlineEditorValueInput.type = 'text'
+  jsonInlineEditorValueInput.placeholder = 'value'
+
+  const jsonInlineApplyBtn = document.createElement('button')
+  jsonInlineApplyBtn.type = 'button'
+  jsonInlineApplyBtn.className = 'surface-beta-json-inline-btn'
+  jsonInlineApplyBtn.textContent = 'apply'
+
+  const jsonInlineCancelBtn = document.createElement('button')
+  jsonInlineCancelBtn.type = 'button'
+  jsonInlineCancelBtn.className = 'surface-beta-json-inline-btn'
+  jsonInlineCancelBtn.textContent = 'cancel'
+
+  jsonInlineEditor.appendChild(jsonInlineEditorLabel)
+  jsonInlineEditor.appendChild(jsonInlineEditorKeyInput)
+  jsonInlineEditor.appendChild(jsonInlineEditorType)
+  jsonInlineEditor.appendChild(jsonInlineEditorValueInput)
+  jsonInlineEditor.appendChild(jsonInlineApplyBtn)
+  jsonInlineEditor.appendChild(jsonInlineCancelBtn)
+
+  toolbar.appendChild(badge)
+  toolbar.appendChild(status)
+  toolbar.appendChild(metrics)
+  toolbar.appendChild(telemetry)
+
+  const editorInput = document.createElement('textarea')
+  editorInput.className = 'surface-beta-input'
+  editorInput.spellcheck = false
+  editorInput.wrap = 'soft'
+  editorInput.placeholder = '# Surface beta editor enabled for pane A'
+
+  const preview = document.createElement('div')
+  preview.className = 'surface-beta-preview'
+  preview.hidden = true
+
+  root.appendChild(toolbar)
+  root.appendChild(diagnostics)
+  root.appendChild(jsonBuilder)
+  root.appendChild(jsonInlineEditor)
+  root.appendChild(editorInput)
+  root.appendChild(preview)
+  shell.appendChild(root)
+
+  return {
+    root,
+    toolbar,
+    status,
+    metrics,
+    telemetry,
+    preview,
+    diagnostics,
+    jsonBuilder,
+    jsonInlineEditor,
+    jsonInlineEditorLabel,
+    jsonInlineEditorKeyInput,
+    jsonInlineEditorType,
+    jsonInlineEditorValueInput,
+    jsonInlineApplyBtn,
+    jsonInlineCancelBtn,
+    editorInput,
+  }
+}
+
+function mountSurfaceBetaForPane(paneId) {
+  const resolvedPaneId = SURFACE_BETA_PANE_IDS.includes(String(paneId ?? '').trim().toUpperCase())
+    ? String(paneId).trim().toUpperCase()
+    : 'A'
+
+  if (paneBindings.has(resolvedPaneId)) {
+    return true
+  }
+
+  const shell = getPaneEditorShell(resolvedPaneId)
+  const legacyTextarea = getPaneTextarea(resolvedPaneId)
+  if (!shell || !legacyTextarea) {
+    return false
+  }
+
+  const dom = buildSurfaceBetaDom(shell)
+  applySurfaceTelemetryVisibility(dom)
+  const surface = new Surface({ text: legacyTextarea.value })
+  const renderer = new Renderer()
+  const diagnosticsChannel = new DiagnosticsChannel()
+  const markdownPlugin = createMarkdownPlugin({ previewEnabled: true })
+  const jsonPlugin = createJsonPlugin({ trailingNewline: false, indent: 2 })
+  const detachMarkdown = markdownPlugin.attach({ surface, renderer })
+  const detachJson = jsonPlugin.attach({ surface, diagnosticsChannel })
+  const telemetry = createSurfaceTelemetry()
+  publishSurfaceTelemetrySnapshot(telemetry)
+
+  let syncingFromLegacy = false
+  let syncingFromSurface = false
+  let activeMode = 'markdown'
+  let jsonInlineDraft = null
+  let lastPanePath = normalizePathForModeTracking(getPaneTrackedPath(resolvedPaneId))
+  const suppressScrollSync = new WeakSet()
+
+  function normalizePathForModeTracking(path) {
+    return String(path ?? '').trim()
+  }
+
+  function syncModeFromPathOrContent(options = {}) {
+    const forceContentFallback = options.forceContentFallback === true
+    const currentPanePath = normalizePathForModeTracking(getPaneTrackedPath(resolvedPaneId))
+    const pathChanged = currentPanePath !== lastPanePath
+    const currentPathMode = inferModeFromPath(currentPanePath)
+    if (pathChanged) {
+      lastPanePath = currentPanePath
+      if (currentPathMode) {
+        setMode(currentPathMode)
+        return
+      }
+    }
+
+    if (forceContentFallback) {
+      if (currentPathMode) {
+        setMode(currentPathMode)
+        return
+      }
+      setMode(inferModeFromContent(surface.getText()))
+    }
+  }
+
+  function getScrollRatio(element) {
+    if (!element) return 0
+    const max = Math.max(0, element.scrollHeight - element.clientHeight)
+    if (max <= 0) return 0
+    return Math.max(0, Math.min(1, element.scrollTop / max))
+  }
+
+  function getLineHeightForEditor() {
+    const style = window.getComputedStyle(dom.editorInput)
+    const lineHeight = Number.parseFloat(style.lineHeight)
+    if (Number.isFinite(lineHeight) && lineHeight > 0) {
+      return lineHeight
+    }
+    const fontSize = Number.parseFloat(style.fontSize)
+    if (Number.isFinite(fontSize) && fontSize > 0) {
+      return fontSize * 1.5
+    }
+    return 20
+  }
+
+  function getLineIndexForOffset(text, offset) {
+    const offsets = buildLineOffsets(text)
+    const clampedOffset = Math.max(0, Math.min(Number.isInteger(offset) ? offset : 0, String(text ?? '').length))
+
+    let low = 0
+    let high = Math.max(0, offsets.length - 1)
+    let best = 0
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2)
+      if ((offsets[mid] ?? 0) <= clampedOffset) {
+        best = mid
+        low = mid + 1
+      } else {
+        high = mid - 1
+      }
+    }
+
+    return best
+  }
+
+  function getTopOffsetForEditor(text) {
+    const lineHeight = Math.max(1, getLineHeightForEditor())
+    const topLine = Math.max(0, Math.floor(dom.editorInput.scrollTop / lineHeight))
+    const offsets = buildLineOffsets(text)
+    return offsets[Math.min(offsets.length - 1, topLine)] ?? 0
+  }
+
+  function setScrollTop(element, scrollTop) {
+    if (!element) return
+    suppressScrollSync.add(element)
+    element.scrollTop = Math.max(0, Number.isFinite(scrollTop) ? scrollTop : 0)
+    window.requestAnimationFrame(() => {
+      suppressScrollSync.delete(element)
+    })
+  }
+
+  function findTopVisibleJsonBuilderRow() {
+    const rows = dom.jsonBuilder.querySelectorAll('.surface-beta-json-row[data-path]')
+    if (!rows.length) return null
+    const top = dom.jsonBuilder.getBoundingClientRect().top + 1
+
+    for (const row of rows) {
+      const rect = row.getBoundingClientRect()
+      if (rect.bottom > top) {
+        return row
+      }
+    }
+
+    return rows[rows.length - 1]
+  }
+
+  function syncJsonBuilderFromEditorAnchored() {
+    if (dom.jsonBuilder.hidden) return
+    if (suppressScrollSync.has(dom.editorInput)) return
+
+    const topLine = Math.max(1, Math.floor(dom.editorInput.scrollTop / Math.max(1, getLineHeightForEditor())) + 1)
+    const rows = dom.jsonBuilder.querySelectorAll('.surface-beta-json-row[data-line]')
+    if (!rows.length) return
+
+    let row = null
+    for (const candidate of rows) {
+      const line = Number(candidate.dataset.line)
+      if (Number.isFinite(line) && line >= topLine) {
+        row = candidate
+        break
+      }
+    }
+    if (!row) {
+      row = rows[rows.length - 1]
+    }
+
+    const nextTop = Math.max(0, row.offsetTop - 4)
+    setScrollTop(dom.jsonBuilder, nextTop)
+  }
+
+  function syncEditorFromJsonBuilderAnchored() {
+    if (dom.jsonBuilder.hidden) return
+    if (suppressScrollSync.has(dom.jsonBuilder)) return
+
+    const row = findTopVisibleJsonBuilderRow()
+    if (!row) return
+
+    const parsedLine = Number(row.dataset.line)
+    const lineNumber = Number.isFinite(parsedLine) && parsedLine > 0 ? parsedLine : 1
+    const nextTop = Math.max(0, (lineNumber - 1) * getLineHeightForEditor())
+    setScrollTop(dom.editorInput, nextTop)
+  }
+
+  function setScrollRatio(element, ratio) {
+    if (!element) return
+    const max = Math.max(0, element.scrollHeight - element.clientHeight)
+    const nextTop = max <= 0 ? 0 : Math.round(max * Math.max(0, Math.min(1, ratio)))
+    setScrollTop(element, nextTop)
+  }
+
+  function syncScroll(source, target) {
+    if (!source || !target) return
+    if (suppressScrollSync.has(source)) return
+    setScrollRatio(target, getScrollRatio(source))
+  }
+
+  function syncPartnerScrollFromEditor() {
+    if (activeMode === 'markdown') {
+      if (dom.preview.hidden) return
+      syncScroll(dom.editorInput, dom.preview)
+      return
+    }
+
+    if (activeMode === 'json') {
+      syncJsonBuilderFromEditorAnchored()
+    }
+  }
+
+  function renderPreview(text) {
+    if (activeMode === 'markdown') {
+      dom.preview.hidden = false
+      dom.preview.innerHTML = markdownPlugin.renderPreview(text)
+      return
+    }
+
+    dom.preview.hidden = true
+    dom.preview.innerHTML = ''
+  }
+
+  function tryParsePath(value) {
+    try {
+      const parsed = JSON.parse(String(value ?? '[]'))
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+
+  function createJsonNodeRow({
+    path,
+    keyLabel,
+    value,
+    lineNumber,
+    depth,
+    parentType,
+    parentPath,
+    parentKey,
+  }) {
+    const row = document.createElement('div')
+    row.className = 'surface-beta-json-row'
+    row.style.paddingLeft = `${Math.max(0, depth) * 14 + 8}px`
+    row.dataset.path = JSON.stringify(path)
+    row.dataset.line = String(Math.max(1, Number.isInteger(lineNumber) ? lineNumber : 1))
+
+    if (keyLabel) {
+      const title = document.createElement('span')
+      title.className = 'surface-beta-json-row-title'
+      title.textContent = keyLabel
+      if (parentType === 'object' && typeof parentKey === 'string') {
+        title.classList.add('is-clickable')
+        title.dataset.jsonInlineAction = 'rename-key'
+        title.dataset.parentPath = JSON.stringify(parentPath ?? [])
+        title.dataset.key = parentKey
+      }
+      row.appendChild(title)
+    }
+
+    const isArray = Array.isArray(value)
+    const isObject = value && typeof value === 'object' && !isArray
+
+    const valuePreview = document.createElement('span')
+    valuePreview.className = 'surface-beta-json-row-value'
+    if (isArray || isObject) {
+      valuePreview.textContent = ''
+    } else if (typeof value === 'string') {
+      valuePreview.textContent = value.length > 36 ? `${value.slice(0, 36)}...` : value
+      valuePreview.classList.add('is-clickable')
+      valuePreview.dataset.jsonInlineAction = 'set-value'
+      valuePreview.dataset.path = JSON.stringify(path)
+      valuePreview.dataset.valueType = 'string'
+      valuePreview.dataset.valueRaw = value
+    } else {
+      valuePreview.textContent = String(value)
+    }
+    row.appendChild(valuePreview)
+
+    const actions = document.createElement('div')
+    actions.className = 'surface-beta-json-row-actions'
+
+    const addAction = (label, actionName, extra = {}) => {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'surface-beta-json-row-btn'
+      btn.textContent = label
+      btn.dataset.jsonAction = actionName
+      btn.dataset.path = JSON.stringify(path)
+      btn.dataset.parentPath = JSON.stringify(parentPath ?? [])
+      btn.dataset.parentType = String(parentType ?? '')
+      if (typeof parentKey === 'string' || Number.isInteger(parentKey)) {
+        btn.dataset.parentKey = String(parentKey)
+      }
+      for (const [key, extraValue] of Object.entries(extra)) {
+        btn.dataset[key] = String(extraValue)
+      }
+      actions.appendChild(btn)
+    }
+
+    if (isObject) {
+      addAction('+prop', 'add-property')
+    }
+    if (isArray) {
+      addAction('+item', 'add-item')
+    }
+
+    if (!isObject && !isArray) {
+      if (typeof value === 'boolean') {
+        addAction('toggle', 'toggle-bool')
+      }
+    }
+
+    if (parentType === 'object' && typeof parentKey === 'string') {
+      addAction('remove', 'remove-property', { key: parentKey })
+    }
+
+    if (parentType === 'array' && Number.isInteger(parentKey)) {
+      addAction('remove', 'remove-item', { index: parentKey })
+    }
+
+    row.appendChild(actions)
+    return row
+  }
+
+  function renderJsonBuilderNode(container, node, path, depth, relation = {}, lineLookup = null) {
+    const keyLabel = relation.kind === 'object'
+      ? String(relation.key)
+      : (relation.kind === 'array' ? '' : '$')
+    const pathKey = JSON.stringify(path)
+    const lineNumber = lineLookup instanceof Map
+      ? (lineLookup.get(pathKey) ?? 1)
+      : 1
+
+    container.appendChild(createJsonNodeRow({
+      path,
+      keyLabel,
+      value: node,
+      lineNumber,
+      depth,
+      parentType: relation.kind ?? '',
+      parentPath: relation.parentPath ?? [],
+      parentKey: relation.key,
+    }))
+
+    if (Array.isArray(node)) {
+      for (let index = 0; index < node.length; index += 1) {
+        renderJsonBuilderNode(container, node[index], [...path, index], depth + 1, {
+          kind: 'array',
+          parentPath: path,
+          key: index,
+        }, lineLookup)
+      }
+      return
+    }
+
+    if (node && typeof node === 'object') {
+      for (const [key, value] of Object.entries(node)) {
+        renderJsonBuilderNode(container, value, [...path, key], depth + 1, {
+          kind: 'object',
+          parentPath: path,
+          key,
+        }, lineLookup)
+      }
+    }
+  }
+
+  function renderJsonBuilder(text) {
+    if (activeMode !== 'json') {
+      dom.jsonBuilder.hidden = true
+      dom.jsonBuilder.innerHTML = ''
+      closeJsonInlineEditor()
+      return
+    }
+
+    dom.jsonBuilder.hidden = false
+    dom.jsonBuilder.innerHTML = ''
+
+    let parsed
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      const hint = document.createElement('div')
+      hint.className = 'surface-beta-json-builder-empty'
+      hint.textContent = 'builder disabled until JSON is valid'
+      dom.jsonBuilder.appendChild(hint)
+      return
+    }
+
+    const lineLookup = buildJsonPathLineLookup(text)
+    renderJsonBuilderNode(dom.jsonBuilder, parsed, [], 0, { kind: 'root', key: '$', parentPath: [] }, lineLookup)
+  }
+
+  function setStatus(status, reason = '') {
+    telemetry.status = status
+    telemetry.statusReason = reason
+    dom.status.dataset.state = status
+    dom.status.textContent = reason ? `${status}: ${reason}` : status
+    publishSurfaceTelemetrySnapshot(telemetry)
+  }
+
+  function recordError(error, reason) {
+    telemetry.counters.errors += 1
+    const message = String(error?.message ?? reason ?? 'error')
+    setStatus('error', message)
+  }
+
+  function renderSurfaceMetrics() {
+    const text = surface.getText()
+    telemetry.lengths.surfaceText = text.length
+    telemetry.lengths.legacyText = legacyTextarea.value.length
+    telemetry.lengths.driftChars = Math.abs(telemetry.lengths.surfaceText - telemetry.lengths.legacyText)
+    const lineCount = text.length === 0 ? 1 : text.split('\n').length
+    const tokenCount = activeMode === 'json'
+      ? tokenizeJson(text).length
+      : renderer.getTokens().length
+    dom.metrics.textContent = `${lineCount} lines, ${tokenCount} tokens, drift ${telemetry.lengths.driftChars}`
+
+    const uptimeSeconds = Math.max(0, Math.floor((Date.now() - telemetry.mountedAt) / 1000))
+    const sinceLastSyncMs = telemetry.lastSyncAt > 0 ? Date.now() - telemetry.lastSyncAt : -1
+    const syncAgeLabel = sinceLastSyncMs >= 0 ? `${sinceLastSyncMs}ms ago` : 'n/a'
+    dom.telemetry.textContent = [
+      `src=${telemetry.lastSyncSource}`,
+      `mode=${activeMode}`,
+      `legacy->surface=${telemetry.counters.legacyToSurfaceSync}`,
+      `surface->legacy=${telemetry.counters.surfaceToLegacySync}`,
+      `errors=${telemetry.counters.errors}`,
+      `last=${syncAgeLabel}`,
+      `up=${uptimeSeconds}s`,
+    ].join(' | ')
+
+    publishSurfaceTelemetrySnapshot(telemetry)
+  }
+
+  function syncSurfaceToDom(statusReason = 'surface active') {
+    let text = ''
+    try {
+      text = surface.getText()
+    } catch (error) {
+      recordError(error, 'surface read failed')
+      return
+    }
+    telemetry.lastSyncAt = Date.now()
+    telemetry.lastSyncSource = 'surface'
+    telemetry.counters.surfaceToLegacySync += 1
+
+    if (dom.editorInput.value !== text) {
+      const selection = surface.getSelection()
+      dom.editorInput.value = text
+      dom.editorInput.setSelectionRange(selection.start, selection.end)
+    }
+
+    if (legacyTextarea.value !== text) {
+      try {
+        syncingFromSurface = true
+        legacyTextarea.value = text
+        legacyTextarea.dispatchEvent(new Event('input', { bubbles: true }))
+      } catch (error) {
+        recordError(error, 'legacy sync failed')
+      } finally {
+        syncingFromSurface = false
+      }
+    }
+
+    renderPreview(text)
+    renderJsonBuilder(text)
+    syncPartnerScrollFromEditor()
+
+    setStatus('live', statusReason)
+    renderSurfaceMetrics()
+  }
+
+  function syncLegacyToSurface() {
+    if (syncingFromSurface) {
+      return
+    }
+
+    const value = legacyTextarea.value
+    syncModeFromPathOrContent()
+    if (value === surface.getText()) {
+      telemetry.counters.syncPollTicks += 1
+      return
+    }
+
+    setStatus('syncing', 'legacy -> surface')
+    try {
+      syncingFromLegacy = true
+      telemetry.lastSyncAt = Date.now()
+      telemetry.lastSyncSource = 'legacy'
+      telemetry.counters.legacyToSurfaceSync += 1
+      surface.setText(value)
+    } catch (error) {
+      recordError(error, 'surface sync failed')
+    } finally {
+      syncingFromLegacy = false
+    }
+  }
+
+  const onLegacyInput = () => {
+    telemetry.counters.legacyInput += 1
+    syncLegacyToSurface()
+  }
+
+  const onSurfaceChange = () => {
+    syncSurfaceToDom(syncingFromLegacy ? 'legacy mirrored' : 'surface active')
+  }
+
+  const onSurfaceInput = () => {
+    if (activeMode === 'json') {
+      return
+    }
+    if (syncingFromSurface) {
+      return
+    }
+    telemetry.counters.surfaceInput += 1
+    setStatus('syncing', 'surface -> legacy')
+    try {
+      surface.setSelection(dom.editorInput.selectionStart, dom.editorInput.selectionEnd)
+      surface.setText(dom.editorInput.value)
+    } catch (error) {
+      recordError(error, 'surface write failed')
+    }
+  }
+
+  const onSurfaceClick = async () => {
+    if (dom.editorInput.selectionStart !== dom.editorInput.selectionEnd) return
+
+    const text = String(dom.editorInput.value ?? '')
+    const primaryOffset = Number(dom.editorInput.selectionStart)
+    const candidateOffsets = [primaryOffset, Math.max(0, primaryOffset - 1)]
+
+    for (const offset of candidateOffsets) {
+      const opened = await openEditorClickTargetAtOffset(text, offset)
+      if (opened) return
+    }
+  }
+
+  const onSurfaceKeyDown = (event) => {
+    const isCommandKey = event.ctrlKey || event.metaKey
+    if (!isCommandKey || event.altKey) {
+      return
+    }
+
+    if (event.key.toLowerCase() === 'z') {
+      event.preventDefault()
+      if (event.shiftKey) {
+        surface.redo()
+      } else {
+        surface.undo()
+      }
+      syncSurfaceToDom()
+      return
+    }
+
+    if (event.key.toLowerCase() === 'y') {
+      event.preventDefault()
+      surface.redo()
+      syncSurfaceToDom()
+      return
+    }
+
+    if (event.key.toLowerCase() === 'b' && activeMode === 'markdown') {
+      event.preventDefault()
+      telemetry.counters.commandWrapBold += 1
+      try {
+        surface.setSelection(dom.editorInput.selectionStart, dom.editorInput.selectionEnd)
+        surface.dispatchCommand('markdown.wrapBold')
+        syncSurfaceToDom()
+      } catch (error) {
+        recordError(error, 'bold command failed')
+      }
+      return
+    }
+
+    if (event.key.toLowerCase() === 'i' && activeMode === 'markdown') {
+      event.preventDefault()
+      telemetry.counters.commandWrapItalic += 1
+      try {
+        surface.setSelection(dom.editorInput.selectionStart, dom.editorInput.selectionEnd)
+        surface.dispatchCommand('markdown.wrapItalic')
+        syncSurfaceToDom()
+      } catch (error) {
+        recordError(error, 'italic command failed')
+      }
+      return
+    }
+
+  }
+
+  function renderDiagnostics() {
+    const diagnostics = diagnosticsChannel.getDiagnostics()
+    if (activeMode !== 'json') {
+      dom.diagnostics.hidden = true
+      dom.diagnostics.textContent = ''
+      return
+    }
+
+    if (diagnostics.length === 0) {
+      dom.diagnostics.hidden = false
+      dom.diagnostics.dataset.level = 'ok'
+      dom.diagnostics.textContent = 'json diagnostics: clean'
+      return
+    }
+
+    const first = diagnostics[0]
+    dom.diagnostics.hidden = false
+    dom.diagnostics.dataset.level = first.severity === 'error' ? 'error' : 'warn'
+    dom.diagnostics.textContent = `json diagnostics: ${first.severity} L${first.line}:C${first.column} ${first.message}`
+  }
+
+  function setMode(nextMode) {
+    activeMode = nextMode === 'json'
+      ? 'json'
+      : (nextMode === 'nerve' ? 'nerve' : 'markdown')
+    const useOriginalEditor = activeMode === 'nerve'
+    dom.root.hidden = useOriginalEditor
+    shell.classList.toggle('surface-beta-enabled', !useOriginalEditor)
+    dom.editorInput.readOnly = activeMode === 'json'
+    dom.editorInput.wrap = activeMode === 'json' ? 'off' : 'soft'
+    dom.editorInput.classList.toggle('is-json-output', activeMode === 'json')
+    if (activeMode !== 'json') {
+      closeJsonInlineEditor()
+    }
+    renderDiagnostics()
+    renderPreview(surface.getText())
+    renderJsonBuilder(surface.getText())
+    syncPartnerScrollFromEditor()
+    renderSurfaceMetrics()
+  }
+
+  function parseJsonPromptValue(inputValue) {
+    const raw = String(inputValue ?? '').trim()
+    if (!raw) return null
+    try {
+      return JSON.parse(raw)
+    } catch {
+      return raw
+    }
+  }
+
+  function parseJsonInlineValue() {
+    const type = String(dom.jsonInlineEditorType.value ?? 'json')
+    const raw = String(dom.jsonInlineEditorValueInput.value ?? '')
+    if (type === 'null') return null
+    if (type === 'string') return raw
+    if (type === 'number') {
+      const numeric = Number(raw)
+      return Number.isFinite(numeric) ? numeric : 0
+    }
+    if (type === 'boolean') {
+      return String(raw).trim().toLowerCase() === 'true'
+    }
+    return parseJsonPromptValue(raw)
+  }
+
+  function closeJsonInlineEditor() {
+    jsonInlineDraft = null
+    dom.jsonInlineEditor.hidden = true
+    dom.jsonInlineEditorLabel.textContent = ''
+    dom.jsonInlineEditorKeyInput.value = ''
+    dom.jsonInlineEditorValueInput.value = ''
+  }
+
+  function openJsonInlineEditor(draft) {
+    jsonInlineDraft = draft
+    dom.jsonInlineEditor.hidden = false
+    dom.jsonInlineEditorLabel.textContent = String(draft?.label ?? 'edit')
+    dom.jsonInlineEditorKeyInput.hidden = draft?.needsKey !== true
+    dom.jsonInlineEditorType.hidden = draft?.needsValue !== true
+    dom.jsonInlineEditorValueInput.hidden = draft?.needsValue !== true
+    dom.jsonInlineEditorKeyInput.value = String(draft?.keyValue ?? '')
+    dom.jsonInlineEditorValueInput.value = String(draft?.valueRaw ?? '')
+    dom.jsonInlineEditorType.value = String(draft?.valueType ?? 'json')
+    if (draft?.needsKey === true) {
+      dom.jsonInlineEditorKeyInput.focus()
+      dom.jsonInlineEditorKeyInput.select()
+    } else if (draft?.needsValue === true) {
+      dom.jsonInlineEditorValueInput.focus()
+      dom.jsonInlineEditorValueInput.select()
+    }
+  }
+
+  function applyJsonInlineEditor() {
+    if (!jsonInlineDraft) {
+      return
+    }
+
+    const draft = jsonInlineDraft
+    const keyValue = String(dom.jsonInlineEditorKeyInput.value ?? '').trim()
+    const value = parseJsonInlineValue()
+
+    withJsonMode(() => {
+      if (draft.action === 'add-property') {
+        if (!keyValue) return
+        surface.dispatchCommand('json.addProperty', { path: draft.path, key: keyValue, value })
+      } else if (draft.action === 'rename-key') {
+        if (!keyValue || keyValue === draft.key) return
+        surface.dispatchCommand('json.renameKey', { path: draft.parentPath, fromKey: draft.key, toKey: keyValue })
+      } else if (draft.action === 'set-value') {
+        surface.dispatchCommand('json.setValue', { path: draft.path, value })
+      } else if (draft.action === 'add-item') {
+        surface.dispatchCommand('json.addArrayItem', { path: draft.path, value })
+      }
+    })
+
+    closeJsonInlineEditor()
+  }
+
+  function withJsonMode(operation) {
+    if (activeMode !== 'json') {
+      setMode('json')
+    }
+    try {
+      operation()
+    } catch (error) {
+      recordError(error, 'json control failed')
+    } finally {
+      syncSurfaceToDom()
+      renderDiagnostics()
+    }
+  }
+
+  const onJsonBuilderClick = (event) => {
+    const actionButton = event.target.closest('[data-json-action]')
+    if (!actionButton) {
+      const inlineTarget = event.target.closest('[data-json-inline-action]')
+      if (!inlineTarget) {
+        return
+      }
+
+      const inlineAction = String(inlineTarget.dataset.jsonInlineAction ?? '').trim()
+      if (inlineAction === 'rename-key') {
+        const inlineParentPath = tryParsePath(inlineTarget.dataset.parentPath)
+        const inlineKey = String(inlineTarget.dataset.key ?? '').trim()
+        if (!inlineKey) return
+        openJsonInlineEditor({
+          action: 'rename-key',
+          label: `rename ${inlineKey}`,
+          parentPath: inlineParentPath,
+          key: inlineKey,
+          needsKey: true,
+          keyValue: inlineKey,
+          needsValue: false,
+        })
+        return
+      }
+
+      if (inlineAction === 'set-value') {
+        const inlinePath = tryParsePath(inlineTarget.dataset.path)
+        const inlineValueType = String(inlineTarget.dataset.valueType ?? 'json')
+        const inlineValueRaw = String(inlineTarget.dataset.valueRaw ?? '')
+        openJsonInlineEditor({
+          action: 'set-value',
+          label: 'set value',
+          path: inlinePath,
+          needsKey: false,
+          needsValue: true,
+          valueType: inlineValueType,
+          valueRaw: inlineValueRaw,
+        })
+      }
+
+      return
+    }
+
+    const action = String(actionButton.dataset.jsonAction ?? '').trim()
+    const path = tryParsePath(actionButton.dataset.path)
+    const parentPath = tryParsePath(actionButton.dataset.parentPath)
+    const key = String(actionButton.dataset.key ?? '').trim()
+    const index = Number(actionButton.dataset.index)
+
+    if (action === 'add-property') {
+      openJsonInlineEditor({
+        action,
+        label: 'add property',
+        path,
+        needsKey: true,
+        needsValue: true,
+        valueType: 'json',
+        valueRaw: '{}',
+      })
+      return
+    }
+
+    if (action === 'rename-key') {
+      if (!key) return
+      openJsonInlineEditor({
+        action,
+        label: `rename ${key}`,
+        parentPath,
+        key,
+        needsKey: true,
+        keyValue: key,
+        needsValue: false,
+      })
+      return
+    }
+
+    if (action === 'set-value') {
+      openJsonInlineEditor({
+        action,
+        label: 'set value',
+        path,
+        needsKey: false,
+        needsValue: true,
+        valueType: 'json',
+        valueRaw: 'null',
+      })
+      return
+    }
+
+    if (action === 'add-item') {
+      openJsonInlineEditor({
+        action,
+        label: 'add array item',
+        path,
+        needsKey: false,
+        needsValue: true,
+        valueType: 'json',
+        valueRaw: 'null',
+      })
+      return
+    }
+
+    withJsonMode(() => {
+      if (action === 'remove-property') {
+        if (!key) return
+        surface.dispatchCommand('json.removeProperty', { path: parentPath, key })
+        return
+      }
+
+      if (action === 'toggle-bool') {
+        surface.dispatchCommand('json.toggleBoolean', { path })
+        return
+      }
+
+      if (action === 'remove-item') {
+        if (!Number.isInteger(index)) return
+        surface.dispatchCommand('json.removeArrayItem', { path: parentPath, index })
+      }
+    })
+  }
+
+  const onJsonInlineApply = () => {
+    applyJsonInlineEditor()
+  }
+
+  const onJsonInlineCancel = () => {
+    closeJsonInlineEditor()
+  }
+
+  const onJsonInlineKeyDown = (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      applyJsonInlineEditor()
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeJsonInlineEditor()
+    }
+  }
+
+  const onEditorScroll = () => {
+    syncPartnerScrollFromEditor()
+  }
+
+  const onPreviewScroll = () => {
+    if (activeMode !== 'markdown' || dom.preview.hidden) {
+      return
+    }
+    syncScroll(dom.preview, dom.editorInput)
+  }
+
+  const onJsonBuilderScroll = () => {
+    if (activeMode !== 'json' || dom.jsonBuilder.hidden) {
+      return
+    }
+    syncEditorFromJsonBuilderAnchored()
+  }
+
+  legacyTextarea.addEventListener('input', onLegacyInput)
+  dom.editorInput.addEventListener('input', onSurfaceInput)
+  dom.editorInput.addEventListener('click', onSurfaceClick)
+  dom.editorInput.addEventListener('keydown', onSurfaceKeyDown)
+  dom.editorInput.addEventListener('scroll', onEditorScroll)
+  dom.preview.addEventListener('scroll', onPreviewScroll)
+  dom.jsonBuilder.addEventListener('scroll', onJsonBuilderScroll)
+  dom.jsonBuilder.addEventListener('click', onJsonBuilderClick)
+  dom.jsonInlineApplyBtn.addEventListener('click', onJsonInlineApply)
+  dom.jsonInlineCancelBtn.addEventListener('click', onJsonInlineCancel)
+  dom.jsonInlineEditorKeyInput.addEventListener('keydown', onJsonInlineKeyDown)
+  dom.jsonInlineEditorValueInput.addEventListener('keydown', onJsonInlineKeyDown)
+
+  const unsubscribeSurface = surface.on('change', onSurfaceChange)
+  const unsubscribeDiagnostics = diagnosticsChannel.subscribe(() => {
+    renderDiagnostics()
+  })
+
+  // Capture programmatic textarea updates that bypass input events.
+  const syncTimer = window.setInterval(syncLegacyToSurface, 180)
+  const telemetryTimer = window.setInterval(() => {
+    telemetry.counters.syncPollTicks += 1
+    renderSurfaceMetrics()
+  }, 1000)
+
+  syncModeFromPathOrContent({ forceContentFallback: true })
+  renderDiagnostics()
+  syncSurfaceToDom()
+
+  const paneBinding = {
+    paneId: resolvedPaneId,
+    shell,
+    dom,
+    detachMarkdown,
+    detachJson,
+    unsubscribeSurface,
+    unsubscribeDiagnostics,
+    syncTimer,
+    telemetryTimer,
+    onLegacyInput,
+    onSurfaceInput,
+    onSurfaceClick,
+    onSurfaceKeyDown,
+    onEditorScroll,
+    onPreviewScroll,
+    onJsonBuilderScroll,
+    onJsonBuilderClick,
+    onJsonInlineApply,
+    onJsonInlineCancel,
+    onJsonInlineKeyDown,
+    legacyTextarea,
+    setStatus,
+    telemetry,
+  }
+
+  paneBindings.set(resolvedPaneId, paneBinding)
+
+  return true
+}
+
+function unmountSurfaceBetaForPane(paneId) {
+  const resolvedPaneId = SURFACE_BETA_PANE_IDS.includes(String(paneId ?? '').trim().toUpperCase())
+    ? String(paneId).trim().toUpperCase()
+    : 'A'
+  const paneBinding = paneBindings.get(resolvedPaneId)
+  if (!paneBinding) {
+    return
+  }
+
+  const {
+    shell,
+    dom,
+    detachMarkdown,
+    detachJson,
+    unsubscribeSurface,
+    unsubscribeDiagnostics,
+    syncTimer,
+    telemetryTimer,
+    onLegacyInput,
+    onSurfaceInput,
+    onSurfaceClick,
+    onSurfaceKeyDown,
+    onEditorScroll,
+    onPreviewScroll,
+    onJsonBuilderScroll,
+    onJsonBuilderClick,
+    onJsonInlineApply,
+    onJsonInlineCancel,
+    onJsonInlineKeyDown,
+    legacyTextarea,
+    setStatus,
+    telemetry,
+  } = paneBinding
+
+  window.clearInterval(syncTimer)
+  window.clearInterval(telemetryTimer)
+  legacyTextarea.removeEventListener('input', onLegacyInput)
+  dom.editorInput.removeEventListener('input', onSurfaceInput)
+  dom.editorInput.removeEventListener('click', onSurfaceClick)
+  dom.editorInput.removeEventListener('keydown', onSurfaceKeyDown)
+  dom.editorInput.removeEventListener('scroll', onEditorScroll)
+  dom.preview.removeEventListener('scroll', onPreviewScroll)
+  dom.jsonBuilder.removeEventListener('scroll', onJsonBuilderScroll)
+  dom.jsonBuilder.removeEventListener('click', onJsonBuilderClick)
+  dom.jsonInlineApplyBtn.removeEventListener('click', onJsonInlineApply)
+  dom.jsonInlineCancelBtn.removeEventListener('click', onJsonInlineCancel)
+  dom.jsonInlineEditorKeyInput.removeEventListener('keydown', onJsonInlineKeyDown)
+  dom.jsonInlineEditorValueInput.removeEventListener('keydown', onJsonInlineKeyDown)
+
+  if (typeof unsubscribeSurface === 'function') unsubscribeSurface()
+  if (typeof unsubscribeDiagnostics === 'function') unsubscribeDiagnostics()
+  if (typeof detachMarkdown === 'function') detachMarkdown()
+  if (typeof detachJson === 'function') detachJson()
+
+  setStatus('stopped', 'disabled')
+  publishSurfaceTelemetrySnapshot(telemetry)
+
+  shell.classList.remove('surface-beta-enabled')
+  dom.root.remove()
+  paneBindings.delete(resolvedPaneId)
+}
+
+export function setNextVEditorSurfaceBetaEnabled(enabled, options = {}) {
+  const nextEnabled = Boolean(enabled)
+  surfaceBetaEnabled = nextEnabled
+
+  if (nextVEditorSurfaceBetaToggle) {
+    nextVEditorSurfaceBetaToggle.checked = nextEnabled
+  }
+
+  if (nextEnabled) {
+    ensureSurfacePaneSwitchControls()
+    refreshSurfacePaneSwitchUi()
+    startSurfacePaneSwitchPolling()
+  } else {
+    stopSurfacePaneSwitchPolling()
+    for (const paneId of SURFACE_BETA_PANE_IDS) {
+      paneSurfaceSwitchState.set(paneId, false)
+      unmountSurfaceBetaForPane(paneId)
+    }
+    removeSurfacePaneSwitchControls()
+  }
+
+  if (options.persist !== false) {
+    persistSurfaceBetaEnabled(nextEnabled)
+  }
+
+  return surfaceBetaEnabled
+}
+
+export function setNextVEditorSurfaceTelemetryVisible(enabled, options = {}) {
+  const nextVisible = enabled !== false
+  surfaceTelemetryVisible = nextVisible
+
+  if (nextVEditorSurfaceTelemetryToggle) {
+    nextVEditorSurfaceTelemetryToggle.checked = nextVisible
+  }
+
+  for (const paneBinding of paneBindings.values()) {
+    applySurfaceTelemetryVisibility(paneBinding.dom)
+  }
+
+  if (options.persist !== false) {
+    persistSurfaceTelemetryVisible(nextVisible)
+  }
+
+  return surfaceTelemetryVisible
+}
+
+export function isNextVEditorSurfaceTelemetryVisible() {
+  return surfaceTelemetryVisible
+}
+
+export function isNextVEditorSurfaceBetaEnabled() {
+  return surfaceBetaEnabled
+}
+
+export function initNextVEditorSurfaceBeta() {
+  setNextVEditorSurfaceTelemetryVisible(readStoredSurfaceTelemetryVisible(), { persist: false })
+  const enabled = readStoredSurfaceBetaEnabled()
+  setNextVEditorSurfaceBetaEnabled(enabled, { persist: false })
+}
+
+// --- Imports (auto-generated by gen-es-modules.js) ---
+import {
+  nextVEventsOutput,
+} from './state.js'
+import {
+  openNextVCallInspectorForToken,
+} from './12_stream.js'
+
+let nextVTokenClickPluginBound = false
+
+export function initNextVTokenClickPlugin() {
+  if (!nextVEventsOutput || nextVTokenClickPluginBound) return
+  nextVTokenClickPluginBound = true
+
+  nextVEventsOutput.addEventListener('click', (event) => {
+    const target = event.target instanceof Element
+      ? event.target.closest('.exec-event-token[data-nerve-token-kind][data-nerve-token-value]')
+      : null
+    if (!target) return
+
+    const kind = String(target.dataset.nerveTokenKind ?? '').trim().toLowerCase()
+    const value = String(target.dataset.nerveTokenValue ?? '').trim()
+    if (!value || (kind !== 'agent' && kind !== 'model')) return
+
+    event.preventDefault()
+    openNextVCallInspectorForToken(kind, value, { focusPrompt: true }).catch(() => {})
+  })
+}

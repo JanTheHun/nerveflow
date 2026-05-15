@@ -2,10 +2,22 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  hasMeaningfulNextVExecutionEvents,
   normalizeEffectsPolicy,
   validateDeclaredEffectBindings,
   validateRequiredCapabilityBindings,
 } from '../src/host_core/runtime_policy.js'
+
+test('hasMeaningfulNextVExecutionEvents treats agent activity as meaningful', () => {
+  assert.equal(
+    hasMeaningfulNextVExecutionEvents([{ type: 'agent_call' }]),
+    true,
+  )
+  assert.equal(
+    hasMeaningfulNextVExecutionEvents([{ type: 'agent_result', metadata: { elapsedMs: 12 } }]),
+    true,
+  )
+})
 
 test('normalizeEffectsPolicy defaults to warn when missing', () => {
   assert.equal(normalizeEffectsPolicy(undefined), 'warn')

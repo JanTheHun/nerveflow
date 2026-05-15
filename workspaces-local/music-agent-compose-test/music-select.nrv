@@ -12,7 +12,7 @@ on "user_wants_music"
   limit = 0.6
 
   relevant = cut(results.items, "similarity", ">=", limit)
-	output json relevant
+	# output json relevant
 	context = { query: event.value, candidates: relevant, require_fresh_time_tool: true }
 	  music = agent(
 	    "chat",

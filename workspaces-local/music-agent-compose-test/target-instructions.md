@@ -1,4 +1,4 @@
-Decide target of user intent.
+## Decide target of user intent.
 
 Example:
 user query: play XYZ

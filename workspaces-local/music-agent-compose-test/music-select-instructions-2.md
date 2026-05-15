@@ -1,17 +1,17 @@
-User query:
-- ${event.value}
+# User query:
+**${event.value}**
 
-Candidates:
+### Candidates:
 - Provided as a list, ordered by similarity (highest first).
 - Each candidate has a unique "id" field.
 - You MUST choose one of these ids.
 
-Task:
+### Task:
 Select the most likely target type ("author", "album", or "song"),
 select the best matching candidate by its "id",
 and assign confidence based on similarity and semantic match.
 
-Rules:
+### Rules:
 
 1. Valid selection:
    You MUST choose an id that exists in the candidates list.
@@ -57,8 +57,8 @@ Rules:
 9. Uncertainty rule:
    If unsure, prefer lower confidence over guessing.
 
-Output:
-Return:
+## Output:
+### Return:
 - type: "author" | "album" | "song"
 - id: selected candidate id (must match one of the inputs exactly)
 - confidence: number between 0 and 1

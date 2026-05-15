@@ -65,10 +65,20 @@
     "gemini-model": {
       "model": "gemini-2.5-flash-lite",
       "transport": "gemini"
+    },
+    "groq2": {
+      "model": "openai/gpt-oss-20b",
+      "transport": "groq"
     }
   },
   "tools": {
-    "allow": ["get_time", "memory_retrieve", "memory_store", "memory_delete", "memory_update"]
+    "allow": [
+      "get_time",
+      "memory_retrieve",
+      "memory_store",
+      "memory_delete",
+      "memory_update"
+    ]
   },
   "requires": {
     "memory": {

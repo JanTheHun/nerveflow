@@ -1851,6 +1851,12 @@ async function executeFunctionCall(name, args, context, origin, callOptions = nu
     if (err instanceof NextVError) throw err
     if (err?.code === 'INVALID_OUTPUT_CONTRACT') throw err
     if (err?.code === 'AGENT_RETURN_CONTRACT_VIOLATION') throw err
+    const rawErrorDetail = (
+      typeof err?.message === 'string'
+        ? err.message
+        : String(err ?? '')
+    ).trim()
+    const errorDetail = rawErrorDetail || 'Unknown function call error'
     throw nextvError({
       line: context.line,
       sourcePath: context.sourcePath,
@@ -1858,7 +1864,7 @@ async function executeFunctionCall(name, args, context, origin, callOptions = nu
       kind: 'runtime',
       code: 'FUNCTION_CALL_ERROR',
       statement: context.statement,
-      message: `${name}() failed: ${String(err?.message ?? err ?? 'Unknown function call error')}`,
+      message: `${name}() failed: ${errorDetail}`,
     })
   }
 

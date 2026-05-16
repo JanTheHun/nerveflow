@@ -261,6 +261,34 @@ Supported WebSocket command types map directly to protocol v1 commands:
 - `subscribe`
 - `unsubscribe`
 
+`call_inspector_execute` accepts optional governed tools policy controls:
+
+```json
+{
+  "type": "call_inspector_execute",
+  "requestId": "call-1",
+  "payload": {
+    "targetKind": "agent",
+    "agent": "router",
+    "prompt": "route this",
+    "mode": "call",
+    "tools": {
+      "mode": "governed",
+      "allow": ["search", "fetch"],
+      "maxRounds": 8,
+      "timeoutMs": 0,
+      "denyOnUnknownTool": true
+    }
+  }
+}
+```
+
+Notes:
+
+- Omit `tools` or set `tools.mode` to `disabled` to keep tool execution off.
+- When `tools.mode` is `governed`, `tools.allow` must contain at least one tool name.
+- For agent targets, runtime policy still intersects requested tools with any agent profile tools declared in workspace config.
+
 ## Standalone runtime process and attach CLI
 
 Nerveflow also provides a dedicated runtime process with a WebSocket control surface and a companion attach CLI.

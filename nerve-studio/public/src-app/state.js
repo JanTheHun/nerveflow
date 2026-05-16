@@ -81,6 +81,12 @@ export const storageKeys = {
   nextVCallInspectorPrompt: 'local-agent.nextv.callInspectorPrompt',
   nextVCallInspectorReturns: 'local-agent.nextv.callInspectorReturns',
   nextVCallInspectorDecide: 'local-agent.nextv.callInspectorDecide',
+  nextVCallInspectorToolsMode: 'local-agent.nextv.callInspectorToolsMode',
+  nextVCallInspectorToolsMaxRounds: 'local-agent.nextv.callInspectorToolsMaxRounds',
+  nextVCallInspectorToolsTimeoutMs: 'local-agent.nextv.callInspectorToolsTimeoutMs',
+  nextVCallInspectorToolsDenyUnknown: 'local-agent.nextv.callInspectorToolsDenyUnknown',
+  nextVCallInspectorToolsExtra: 'local-agent.nextv.callInspectorToolsExtra',
+  nextVCallInspectorToolsChecked: 'local-agent.nextv.callInspectorToolsChecked',
   nextVEditorGridSplit: 'local-agent.nextv.editorGridSplit',
   nextVEditorLayout: 'local-agent.nextv.editorLayout',
   nextVEditorTabSize: 'local-agent.nextv.editorTabSize',
@@ -393,6 +399,13 @@ export const nextVCallInstructionsInput = document.getElementById('nextv-call-in
 export const nextVCallPromptInput = document.getElementById('nextv-call-prompt')
 export const nextVCallReturnsInput = document.getElementById('nextv-call-returns')
 export const nextVCallDecideInput = document.getElementById('nextv-call-decide')
+export const nextVCallToolsModeInput = document.getElementById('nextv-call-tools-mode')
+export const nextVCallToolsMaxRoundsInput = document.getElementById('nextv-call-tools-max-rounds')
+export const nextVCallToolsTimeoutMsInput = document.getElementById('nextv-call-tools-timeout-ms')
+export const nextVCallToolsDenyUnknownInput = document.getElementById('nextv-call-tools-deny-unknown')
+export const nextVCallToolsExtraInput = document.getElementById('nextv-call-tools-extra')
+export const nextVCallToolsList = document.getElementById('nextv-call-tools-list')
+export const nextVCallToolsSection = document.getElementById('nextv-call-tools-section')
 export const nextVCallTargetConfigLabel = document.getElementById('nextv-call-target-config-label')
 export const nextVCallTargetConfigOutput = document.getElementById('nextv-call-target-config')
 export const nextVCallResolvedLabel = document.getElementById('nextv-call-resolved-label')

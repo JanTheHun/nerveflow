@@ -1422,6 +1422,38 @@ test('try failure envelope includes original output when provided on contract er
   assert.equal(result.locals.response.error.output, 'garbage')
 })
 
+test('agent() emits agent_error runtime event with request metadata when call fails', async () => {
+  const result = await runNextVScript('response = try agent("router", "q", decide=["yes", "no"], retry_on_contract_violation=1)', {
+    callAgent: async () => {
+      const err = new Error('decide contract violation: output "play." does not match any allowed value. (after 1 retry)')
+      err.code = 'AGENT_RETURN_CONTRACT_VIOLATION'
+      err.output = 'play.'
+      err.requestMetadata = {
+        attempt: 2,
+        retryLimit: 1,
+        wirePayload: {
+          model: 'mini-model',
+          messages: [
+            { role: 'system', content: 'Classify.' },
+            { role: 'user', content: 'q' },
+          ],
+        },
+      }
+      throw err
+    },
+  })
+
+  assert.equal(result.locals.response.ok, false)
+  const agentErrorEvent = result.events.find((event) => event.type === 'agent_error')
+  assert.equal(Boolean(agentErrorEvent), true)
+  assert.equal(agentErrorEvent.agent, 'router')
+  assert.equal(agentErrorEvent.metadata.code, 'AGENT_RETURN_CONTRACT_VIOLATION')
+  assert.equal(agentErrorEvent.metadata.output, 'play.')
+  assert.equal(agentErrorEvent.metadata.request.attempt, 2)
+  assert.equal(agentErrorEvent.metadata.request.retryLimit, 1)
+  assert.equal(Array.isArray(agentErrorEvent.metadata.request.wirePayload.messages), true)
+})
+
 test('try agent() with returns and retry converts retry-exhausted contract failure to envelope', async () => {
   const calls = []
   const result = await runNextVScript('response = try agent("router", "q", returns={ intent: ["play", "unclear"] }, retry_on_contract_violation=2)', {

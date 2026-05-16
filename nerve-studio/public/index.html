@@ -398,6 +398,23 @@
               <textarea id="nextv-call-prompt" rows="3" placeholder="prompt" autocomplete="off" spellcheck="false"></textarea>
               <textarea id="nextv-call-returns" rows="3" placeholder="returns contract JSON (optional)"></textarea>
               <input id="nextv-call-decide" type="text" placeholder="decide options (comma-separated, optional)" autocomplete="off" spellcheck="false" />
+              <div id="nextv-call-tools-section" class="nextv-call-target-config">
+                <div class="nextv-call-target-config-label">governed tools policy</div>
+                <div class="footer-row" style="gap:8px;flex-wrap:wrap;align-items:center">
+                  <select id="nextv-call-tools-mode" title="tools mode">
+                    <option value="disabled" selected>tools disabled</option>
+                    <option value="governed">tools governed</option>
+                  </select>
+                  <input id="nextv-call-tools-max-rounds" type="number" min="0" max="32" step="1" value="8" title="tools max rounds" style="width:96px" />
+                  <input id="nextv-call-tools-timeout-ms" type="number" min="0" step="100" value="0" title="tools timeout ms" style="width:120px" />
+                  <label class="check-label">
+                    <input id="nextv-call-tools-deny-unknown" type="checkbox" checked>
+                    deny unknown tools
+                  </label>
+                </div>
+                <div id="nextv-call-tools-list" class="panel-scroll nextv-call-target-config-output" style="max-height:140px"></div>
+                <input id="nextv-call-tools-extra" type="text" placeholder="extra tools (comma-separated, optional)" autocomplete="off" spellcheck="false" />
+              </div>
               <div class="nextv-call-target-config">
                 <div id="nextv-call-target-config-label" class="nextv-call-target-config-label">project config</div>
                 <pre id="nextv-call-target-config" class="panel-scroll nextv-call-target-config-output"></pre>

@@ -140,6 +140,7 @@ export function createRuntimeCore({
   ingressRuntime = null,
   effectRuntime = null,
   defaultModel = '',
+  slowAgentWarningMs = 15000,
   parallelMaxConcurrency = null,
   resolvers,
 } = {}) {
@@ -194,6 +195,7 @@ export function createRuntimeCore({
     effectRuntime,
     callAgent,
     defaultModel,
+    slowAgentWarningMs,
     parallelMaxConcurrency,
   })
 
@@ -320,6 +322,7 @@ export function createRuntimeCore({
     retryOnViolation = 0,
     returnsContract = null,
     decideContract = null,
+    toolsPolicy = null,
     requestMetadata = null,
   } = {}) {
     const request = requestMetadata && typeof requestMetadata === 'object' ? requestMetadata : {}
@@ -370,6 +373,7 @@ export function createRuntimeCore({
         : Math.max(0, Math.min(8, Number(retryOnViolation) || 0)),
       ...(returnsContract != null ? { returns: returnsContract } : {}),
       ...(Array.isArray(decideContract) && decideContract.length > 0 ? { decide: decideContract } : {}),
+      ...(toolsPolicy && typeof toolsPolicy === 'object' ? { tools: toolsPolicy } : {}),
       ...(toolNames.length > 0 ? { toolNames } : {}),
     }
   }
@@ -401,6 +405,44 @@ export function createRuntimeCore({
     return { ok: false, error }
   }
 
+  function normalizeCallInspectorToolsPolicy(rawTools) {
+    if (rawTools == null) return null
+    if (!rawTools || typeof rawTools !== 'object' || Array.isArray(rawTools)) {
+      throw new Error('tools must be an object when provided')
+    }
+
+    const modeRaw = String(rawTools.mode ?? 'disabled').trim().toLowerCase()
+    const mode = modeRaw === 'governed' ? 'governed' : 'disabled'
+    if (!['disabled', 'governed'].includes(modeRaw)) {
+      throw new Error('tools.mode must be either "disabled" or "governed"')
+    }
+
+    if (mode === 'disabled') {
+      return { mode: 'disabled' }
+    }
+
+    const allow = Array.isArray(rawTools.allow)
+      ? [...new Set(rawTools.allow.map((value) => String(value ?? '').trim()).filter(Boolean))]
+      : []
+    if (allow.length === 0) {
+      throw new Error('tools.allow must include at least one tool when tools.mode is "governed"')
+    }
+
+    const maxRoundsRaw = Number(rawTools.maxRounds)
+    const timeoutMsRaw = Number(rawTools.timeoutMs)
+    const maxRounds = Number.isInteger(maxRoundsRaw) && maxRoundsRaw >= 0 ? maxRoundsRaw : 8
+    const timeoutMs = Number.isInteger(timeoutMsRaw) && timeoutMsRaw >= 0 ? timeoutMsRaw : 0
+    const denyOnUnknownTool = rawTools.denyOnUnknownTool === false ? false : true
+
+    return {
+      mode: 'governed',
+      allow,
+      maxRounds,
+      timeoutMs,
+      denyOnUnknownTool,
+    }
+  }
+
   async function callInspectorExecute(payload = {}) {
     const targetKindRaw = String(payload?.targetKind ?? 'agent').trim().toLowerCase()
     const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
@@ -416,6 +458,7 @@ export function createRuntimeCore({
     const retryOnViolation = Number.isInteger(retryOnViolationRaw)
       ? Math.max(0, Math.min(8, retryOnViolationRaw))
       : 0
+    const toolsPolicy = normalizeCallInspectorToolsPolicy(payload?.tools)
 
     let returnsContract = null
     if (payload && Object.prototype.hasOwnProperty.call(payload, 'returns')) {
@@ -519,6 +562,7 @@ export function createRuntimeCore({
         messages: normalizedMessages,
         returns: returnsContract,
         decide: decideContract,
+        tools: toolsPolicy,
         validate: validateMode,
         retry_on_contract_violation: retryOnViolation,
         on_contract_violation: mode === 'try'
@@ -566,6 +610,7 @@ export function createRuntimeCore({
         target: targetKind === 'agent' ? agentName : modelName,
         validate: validateMode,
         retry_on_contract_violation: retryOnViolation,
+        ...(toolsPolicy && typeof toolsPolicy === 'object' ? { tools: toolsPolicy } : {}),
       },
       resolvedCall: buildResolvedCallSummary({
         targetKind,
@@ -576,6 +621,7 @@ export function createRuntimeCore({
         retryOnViolation,
         returnsContract,
         decideContract,
+        toolsPolicy,
         requestMetadata,
       }),
       result: {

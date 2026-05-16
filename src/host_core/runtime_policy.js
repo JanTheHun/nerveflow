@@ -16,6 +16,7 @@ export function hasMeaningfulNextVExecutionEvents(events) {
       || type === 'output'
       || type === 'agent_call'
       || type === 'agent_result'
+      || type === 'agent_error'
       || type === 'tool_call'
       || type === 'tool_result'
       || type === 'input'

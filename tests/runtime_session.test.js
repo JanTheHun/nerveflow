@@ -641,6 +641,7 @@ test('callAgent retries on JSON parse failure when retry_on_contract_violation i
     },
     validateAgentReturnContract: (output) => output,
     buildAgentRetryPrompt: () => 'Please respond with valid JSON.',
+    captureAgentRequestPayload: true,
   })
 
   const result = await adapter.callAgent({
@@ -652,10 +653,11 @@ test('callAgent retries on JSON parse failure when retry_on_contract_violation i
   })
 
   assert.equal(callCount, 2)
-  assert.deepEqual(result, {
-    value: { intent: 'search' },
-    metadata: null,
-  })
+  assert.deepEqual(result.value, { intent: 'search' })
+  assert.equal(Array.isArray(result.metadata?.retryLineage?.attempts), true)
+  assert.equal(result.metadata.retryLineage.attempts.length, 2)
+  assert.equal(result.metadata.retryLineage.attempts[0].status, 'violation')
+  assert.equal(result.metadata.retryLineage.attempts[1].status, 'success')
 })
 
 test('callAgent throws JSON parse error when retries exhausted', async () => {
@@ -678,6 +680,7 @@ test('callAgent throws JSON parse error when retries exhausted', async () => {
       return value
     },
     validateAgentReturnContract: (output) => output,
+    captureAgentRequestPayload: true,
   })
 
   await assert.rejects(
@@ -688,7 +691,14 @@ test('callAgent throws JSON parse error when retries exhausted', async () => {
       retry_on_contract_violation: 1,
       event: {},
     }),
-    /JSON_PARSE_ERROR/,
+    (err) => {
+      assert.match(String(err?.message ?? ''), /JSON_PARSE_ERROR/)
+      assert.equal(Array.isArray(err?.retryLineage?.attempts), true)
+      assert.equal(err.retryLineage.attempts.length, 2)
+      assert.equal(err.retryLineage.attempts[0].status, 'violation')
+      assert.equal(err.retryLineage.attempts[1].status, 'violation')
+      return true
+    },
   )
 })
 

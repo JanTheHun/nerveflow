@@ -312,6 +312,62 @@ test('runtime core callInspectorExecute mode=try returns failure envelope on con
   )
 })
 
+test('runtime core callInspectorExecute forwards governed tools policy', async () => {
+  let capturedPayload = null
+  const runtime = createRuntimeCore({
+    resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
+    callAgent: async (payload) => {
+      capturedPayload = payload
+      return 'tool-ready'
+    },
+  })
+
+  const response = await runtime.callInspectorExecute({
+    workspaceDir: 'examples/mqtt-simple-host',
+    targetKind: 'model',
+    mode: 'call',
+    model: 'test-model',
+    prompt: 'hello',
+    tools: {
+      mode: 'governed',
+      allow: ['search', 'fetch'],
+      maxRounds: 3,
+      timeoutMs: 2500,
+      denyOnUnknownTool: false,
+    },
+  })
+
+  assert.equal(Array.isArray(capturedPayload?.tools), true)
+  assert.equal(capturedPayload.tools.length, 2)
+  assert.equal(capturedPayload.tools[0].function.name, 'search')
+  assert.equal(capturedPayload.tools[1].function.name, 'fetch')
+  assert.equal(response.call.tools.mode, 'governed')
+  assert.deepEqual(response.call.tools.allow, ['search', 'fetch'])
+  assert.equal(response.resolvedCall.tools.mode, 'governed')
+  assert.deepEqual(response.resolvedCall.tools.allow, ['search', 'fetch'])
+})
+
+test('runtime core callInspectorExecute rejects invalid tools mode', async () => {
+  const runtime = createRuntimeCore({
+    resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
+    callAgent: async () => 'ignored',
+  })
+
+  await assert.rejects(
+    () => runtime.callInspectorExecute({
+      workspaceDir: 'examples/mqtt-simple-host',
+      targetKind: 'model',
+      mode: 'call',
+      model: 'test-model',
+      prompt: 'hello',
+      tools: {
+        mode: 'auto',
+      },
+    }),
+    /tools.mode must be either "disabled" or "governed"/i,
+  )
+})
+
 test('controller startup exposes configured models in nextv_started event', async () => {
   const runtime = createRuntimeCore({
     resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),

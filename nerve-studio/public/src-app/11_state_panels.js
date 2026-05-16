@@ -461,6 +461,41 @@ export function renderCanonicalNextVEvents(events) {
       if (wirePayload) {
         appendNextVDebugRow('[nextv:agent_request:wire]', toPrettyJson(wirePayload))
       }
+
+      const lineageAttempts = Array.isArray(event?.metadata?.retryLineage?.attempts)
+        ? event.metadata.retryLineage.attempts
+        : []
+      if (lineageAttempts.length > 0) {
+        appendNextVDebugRow('[nextv:agent_retry_lineage]', toPrettyJson(lineageAttempts))
+      }
+      continue
+    }
+
+    if (event.type === 'agent_error') {
+      const agentName = String(event.agent ?? '').trim() || 'unknown'
+      const errorCode = String(event?.metadata?.code ?? '').trim()
+      const errorMessage = String(event?.metadata?.message ?? '').trim()
+      const errorSuffix = errorCode ? ` code=${errorCode}` : ''
+      appendNextVLogRow(`[nextv:agent_error] agent=${agentName}${errorSuffix}`, 'result')
+
+      if (errorMessage) {
+        appendNextVDebugRow('[nextv:agent_error:message]', errorMessage)
+      }
+
+      const requestDebug = event?.metadata?.request ?? null
+      const wirePayload = requestDebug && typeof requestDebug === 'object'
+        ? (requestDebug.wirePayload ?? requestDebug)
+        : null
+      if (wirePayload) {
+        appendNextVDebugRow('[nextv:agent_request:wire]', toPrettyJson(wirePayload))
+      }
+
+      const lineageAttempts = Array.isArray(event?.metadata?.retryLineage?.attempts)
+        ? event.metadata.retryLineage.attempts
+        : []
+      if (lineageAttempts.length > 0) {
+        appendNextVDebugRow('[nextv:agent_retry_lineage]', toPrettyJson(lineageAttempts))
+      }
       continue
     }
 

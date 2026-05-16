@@ -487,6 +487,34 @@ export function createHostAdapter({
       let lastViolation = null
       let previousViolationKey = null
       let lastRequestDebugPayload = null
+      const attemptLineage = []
+
+      function cloneAttemptLineage() {
+        return attemptLineage.map((entry) => ({ ...entry }))
+      }
+
+      function appendAttemptLineage(entry = {}) {
+        if (captureAgentRequestPayload !== true) return
+        if (!entry || typeof entry !== 'object') return
+        attemptLineage.push({ ...entry })
+      }
+
+      function withRetryLineageMetadata(metadataValue) {
+        if (captureAgentRequestPayload !== true || attemptLineage.length === 0) {
+          return metadataValue
+        }
+
+        const lineage = { attempts: cloneAttemptLineage() }
+        if (metadataValue && typeof metadataValue === 'object' && !Array.isArray(metadataValue)) {
+          return {
+            ...metadataValue,
+            retryLineage: lineage,
+          }
+        }
+        return {
+          retryLineage: lineage,
+        }
+      }
 
       for (let attemptNum = 0; attemptNum <= retryLimit; attemptNum += 1) {
         const chatMessages = []
@@ -610,6 +638,19 @@ export function createHostAdapter({
           toolsUsed: [],
         }
         const chatHistory = [...chatMessages]
+        const attemptLineageBase = {
+          attempt: attemptNum + 1,
+          retryLimit,
+          retryGuidanceInjected: attemptNum > 0,
+          request: requestDebugPayload
+            ? {
+                model: requestDebugPayload.resolvedModel || requestDebugPayload.model || '',
+                transportProvider: requestDebugPayload.transportProvider || '',
+                messageCount: requestDebugPayload.messageCount,
+                wirePayload: requestDebugPayload.wirePayload ?? null,
+              }
+            : null,
+        }
         try {
           if (!governedToolsEnabled) {
             const callPayload = { model: resolvedModel, messages: chatMessages }
@@ -743,6 +784,20 @@ export function createHostAdapter({
               throw new Error(`${callLabel} did not produce a final response.`)
             }
           }
+        } catch (transportErr) {
+          appendAttemptLineage({
+            ...attemptLineageBase,
+            status: 'error',
+            error: {
+              code: String(transportErr?.code ?? '').trim() || 'FUNCTION_CALL_ERROR',
+              message: String(transportErr?.message ?? transportErr ?? 'Unknown transport error'),
+            },
+          })
+          if (captureAgentRequestPayload === true) {
+            transportErr.requestMetadata = lastRequestDebugPayload
+            transportErr.retryLineage = { attempts: cloneAttemptLineage() }
+          }
+          throw transportErr
         } finally {
           if (slowWarningTimer) {
             clearTimeout(slowWarningTimer)
@@ -782,19 +837,37 @@ export function createHostAdapter({
           : metadataWithTiming
         if (returns != null) {
           if (validate === 'none') {
+            appendAttemptLineage({
+              ...attemptLineageBase,
+              status: 'success',
+              output: String(raw ?? ''),
+              contract: 'returns_validate_none',
+            })
             let lateBindValue
             try {
               lateBindValue = normalizeAgentFormattedOutput(raw, 'json')
             } catch {
               lateBindValue = raw
             }
-            return { value: lateBindValue, outputText: String(raw ?? ''), metadata: metadataWithDebug }
+            return {
+              value: lateBindValue,
+              metadata: withRetryLineageMetadata(metadataWithDebug),
+            }
           }
 
           let parsed
           try {
             parsed = normalizeAgentFormattedOutput(raw, 'json')
           } catch (parseErr) {
+            appendAttemptLineage({
+              ...attemptLineageBase,
+              status: 'violation',
+              output: String(raw ?? ''),
+              contract: 'json_parse_error',
+              violation: {
+                message: String(parseErr?.message ?? 'Failed to parse JSON output'),
+              },
+            })
             lastViolation = parseErr
             const violationKey = `JSON_PARSE_ERROR:${String(parseErr?.message ?? '').slice(0, 80)}`
             previousViolationKey = violationKey
@@ -805,7 +878,7 @@ export function createHostAdapter({
               return {
                 __nextv_contract_violation__: true,
                 expression: on_contract_violation,
-                metadata: metadataWithDebug,
+                metadata: withRetryLineageMetadata(metadataWithDebug),
                 violation: {
                   type: 'json_parse_error',
                   field: '',
@@ -816,18 +889,36 @@ export function createHostAdapter({
               }
             }
             parseErr.requestMetadata = lastRequestDebugPayload
+            parseErr.retryLineage = { attempts: cloneAttemptLineage() }
             annotateRetryExhaustion(parseErr, retryLimit, attemptNum)
             throw parseErr
           }
           if (typeof validateAgentReturnContract === 'function') {
             const mode = String(validate ?? '').trim() || 'coerce'
             try {
+              appendAttemptLineage({
+                ...attemptLineageBase,
+                status: 'success',
+                output: String(raw ?? ''),
+                contract: 'returns_validated',
+              })
               return {
                 value: validateAgentReturnContract(parsed, returns, mode),
-                outputText: String(raw ?? ''),
-                metadata: metadataWithDebug,
+                metadata: withRetryLineageMetadata(metadataWithDebug),
               }
             } catch (err) {
+              appendAttemptLineage({
+                ...attemptLineageBase,
+                status: 'violation',
+                output: String(raw ?? ''),
+                contract: 'contract_violation',
+                violation: {
+                  path: String(err?.path ?? ''),
+                  expected: String(err?.expected ?? ''),
+                  actual: String(err?.actual ?? ''),
+                  message: String(err?.message ?? ''),
+                },
+              })
               lastViolation = err
               const violationKey = `${err?.path}:${err?.expected}:${err?.actual}`
               if (violationKey === previousViolationKey && attemptNum < retryLimit) {
@@ -842,7 +933,7 @@ export function createHostAdapter({
                 return {
                   __nextv_contract_violation__: true,
                   expression: on_contract_violation,
-                  metadata: metadataWithDebug,
+                  metadata: withRetryLineageMetadata(metadataWithDebug),
                   violation: {
                     type: 'contract_violation',
                     message: String(err?.message ?? ''),
@@ -854,21 +945,49 @@ export function createHostAdapter({
                 }
               }
               err.requestMetadata = lastRequestDebugPayload
+              err.retryLineage = { attempts: cloneAttemptLineage() }
               err.output = String(raw ?? '')
               enrichAgentContractError(err, { agentName, line, statement, sourcePath, sourceLine })
               annotateRetryExhaustion(err, retryLimit, attemptNum)
               throw err
             }
           }
-          return { value: parsed, outputText: String(raw ?? ''), metadata: metadataWithDebug }
+          appendAttemptLineage({
+            ...attemptLineageBase,
+            status: 'success',
+            output: String(raw ?? ''),
+            contract: 'returns_parsed',
+          })
+          return {
+            value: parsed,
+            metadata: withRetryLineageMetadata(metadataWithDebug),
+          }
         }
 
         // decide contract: plain-text enum validation, no JSON parsing
         if (decide != null && typeof validateDecideOutput === 'function') {
           try {
             const matched = validateDecideOutput(raw, decide)
-            return { value: matched, outputText: String(raw ?? ''), metadata: metadataWithDebug }
+            appendAttemptLineage({
+              ...attemptLineageBase,
+              status: 'success',
+              output: String(raw ?? ''),
+              contract: 'decide_validated',
+            })
+            return {
+              value: matched,
+              metadata: withRetryLineageMetadata(metadataWithDebug),
+            }
           } catch (err) {
+            appendAttemptLineage({
+              ...attemptLineageBase,
+              status: 'violation',
+              output: String(raw ?? ''),
+              contract: 'decide_mismatch',
+              violation: {
+                message: String(err?.message ?? ''),
+              },
+            })
             lastViolation = String(raw ?? '')
             const violationKey = `DECIDE_MISMATCH:${String(raw ?? '').slice(0, 80)}`
             if (violationKey === previousViolationKey && attemptNum < retryLimit) {
@@ -881,7 +1000,7 @@ export function createHostAdapter({
               return {
                 __nextv_contract_violation__: true,
                 expression: on_contract_violation,
-                metadata: metadataWithDebug,
+                metadata: withRetryLineageMetadata(metadataWithDebug),
                 violation: {
                   type: 'contract_violation',
                   subtype: 'decide_mismatch',
@@ -897,16 +1016,33 @@ export function createHostAdapter({
             decideErr.code = 'AGENT_RETURN_CONTRACT_VIOLATION'
             decideErr.output = String(raw ?? '')
             decideErr.requestMetadata = lastRequestDebugPayload
+            decideErr.retryLineage = { attempts: cloneAttemptLineage() }
             annotateRetryExhaustion(decideErr, retryLimit, attemptNum)
             throw decideErr
           }
         }
 
-        if (!format) return { value: raw, outputText: String(raw ?? ''), metadata: metadataWithDebug }
+        if (!format) {
+          appendAttemptLineage({
+            ...attemptLineageBase,
+            status: 'success',
+            output: String(raw ?? ''),
+            contract: 'none',
+          })
+          return {
+            value: raw,
+            metadata: withRetryLineageMetadata(metadataWithDebug),
+          }
+        }
+        appendAttemptLineage({
+          ...attemptLineageBase,
+          status: 'success',
+          output: String(raw ?? ''),
+          contract: `format:${format}`,
+        })
         return {
           value: normalizeAgentFormattedOutput(raw, format),
-          outputText: String(raw ?? ''),
-          metadata: metadataWithDebug,
+          metadata: withRetryLineageMetadata(metadataWithDebug),
         }
       }
     },

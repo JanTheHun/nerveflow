@@ -123,6 +123,10 @@ const OLLAMA_DEBUG_LOG_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.OL
 const OLLAMA_DEBUG_SUMMARY_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.OLLAMA_DEBUG_SUMMARY ?? '').trim())
 const OLLAMA_DEBUG_LOG_PATH = String(process.env.OLLAMA_DEBUG_LOG_PATH ?? '').trim()
   || resolve(REPO_ROOT, 'logs', 'ollama-preview.jsonl')
+const SLOW_AGENT_WARNING_MS_RAW = Number(process.env.SLOW_AGENT_WARNING_MS)
+const SLOW_AGENT_WARNING_MS = Number.isFinite(SLOW_AGENT_WARNING_MS_RAW) && SLOW_AGENT_WARNING_MS_RAW > 0
+  ? Math.floor(SLOW_AGENT_WARNING_MS_RAW)
+  : 15000
 
 const MAX_EDITOR_BYTES = 512 * 1024
 const MAX_SCRIPT_BYTES = 1024 * 1024
@@ -199,6 +203,12 @@ const recentTimerRuntimeEvents = []
 const ERROR_REPLAY_WINDOW_MS = 30_000
 const ERROR_REPLAY_LIMIT = 32
 const recentErrors = []
+const WARNING_REPLAY_WINDOW_MS = 30_000
+const WARNING_REPLAY_LIMIT = 32
+const recentWarnings = []
+const PRELOAD_REPLAY_WINDOW_MS = 30_000
+const PRELOAD_REPLAY_LIMIT = 32
+const recentPreloadEvents = []
 
 function pruneRecentTimerPulses(now = Date.now()) {
   while (recentTimerPulses.length > 0) {
@@ -244,6 +254,28 @@ function pruneRecentErrors(now = Date.now()) {
   }
 }
 
+function pruneRecentWarnings(now = Date.now()) {
+  while (recentWarnings.length > 0) {
+    const ageMs = now - Number(recentWarnings[0]?.timestamp ?? 0)
+    if (ageMs <= WARNING_REPLAY_WINDOW_MS) break
+    recentWarnings.shift()
+  }
+  while (recentWarnings.length > WARNING_REPLAY_LIMIT) {
+    recentWarnings.shift()
+  }
+}
+
+function pruneRecentPreloadEvents(now = Date.now()) {
+  while (recentPreloadEvents.length > 0) {
+    const ageMs = now - Number(recentPreloadEvents[0]?.timestamp ?? 0)
+    if (ageMs <= PRELOAD_REPLAY_WINDOW_MS) break
+    recentPreloadEvents.shift()
+  }
+  while (recentPreloadEvents.length > PRELOAD_REPLAY_LIMIT) {
+    recentPreloadEvents.shift()
+  }
+}
+
 eventBus.subscribe((eventName, payload) => {
   if (eventName === 'nextv_timer_pulse') {
     recentTimerPulses.push({
@@ -286,10 +318,31 @@ eventBus.subscribe((eventName, payload) => {
     return
   }
 
+  if (eventName === 'nextv_warning') {
+    recentWarnings.push({
+      timestamp: Date.now(),
+      payload,
+    })
+    pruneRecentWarnings()
+    return
+  }
+
+  if (eventName === 'nextv_preload_start' || eventName === 'nextv_preload_success' || eventName === 'nextv_preload_error') {
+    recentPreloadEvents.push({
+      timestamp: Date.now(),
+      eventName,
+      payload,
+    })
+    pruneRecentPreloadEvents()
+    return
+  }
+
   if (eventName === 'nextv_stopped') {
     recentTimerExecutions.length = 0
     recentTimerRuntimeEvents.length = 0
     recentErrors.length = 0
+    recentWarnings.length = 0
+    recentPreloadEvents.length = 0
     return
   }
 })
@@ -560,6 +613,7 @@ function buildResolvedCallSummary({
   retryOnViolation = 0,
   returnsContract = null,
   decideContract = null,
+  toolsPolicy = null,
   requestMetadata = null,
 } = {}) {
   function sanitizeRequestMessages(rawMessages) {
@@ -664,6 +718,7 @@ function buildResolvedCallSummary({
       : Math.max(0, Math.min(8, Number(retryOnViolation) || 0)),
     ...(returnsContract != null ? { returns: returnsContract } : {}),
     ...(Array.isArray(decideContract) && decideContract.length > 0 ? { decide: decideContract } : {}),
+    ...(toolsPolicy && typeof toolsPolicy === 'object' ? { tools: toolsPolicy } : {}),
     ...(toolNames.length > 0 ? { toolNames } : {}),
   }
 }
@@ -693,6 +748,44 @@ function toCallInspectorTryFailureEnvelope(err) {
     error.output = outputRaw
   }
   return { ok: false, error }
+}
+
+function normalizeCallInspectorToolsPolicy(rawTools) {
+  if (rawTools == null) return null
+  if (!rawTools || typeof rawTools !== 'object' || Array.isArray(rawTools)) {
+    throw new Error('tools must be an object when provided')
+  }
+
+  const modeRaw = String(rawTools.mode ?? 'disabled').trim().toLowerCase()
+  const mode = modeRaw === 'governed' ? 'governed' : 'disabled'
+  if (!['disabled', 'governed'].includes(modeRaw)) {
+    throw new Error('tools.mode must be either "disabled" or "governed"')
+  }
+
+  if (mode === 'disabled') {
+    return { mode: 'disabled' }
+  }
+
+  const allow = Array.isArray(rawTools.allow)
+    ? [...new Set(rawTools.allow.map((value) => String(value ?? '').trim()).filter(Boolean))]
+    : []
+  if (allow.length === 0) {
+    throw new Error('tools.allow must include at least one tool when tools.mode is "governed"')
+  }
+
+  const maxRoundsRaw = Number(rawTools.maxRounds)
+  const timeoutMsRaw = Number(rawTools.timeoutMs)
+  const maxRounds = Number.isInteger(maxRoundsRaw) && maxRoundsRaw >= 0 ? maxRoundsRaw : 8
+  const timeoutMs = Number.isInteger(timeoutMsRaw) && timeoutMsRaw >= 0 ? timeoutMsRaw : 0
+  const denyOnUnknownTool = rawTools.denyOnUnknownTool === false ? false : true
+
+  return {
+    mode: 'governed',
+    allow,
+    maxRounds,
+    timeoutMs,
+    denyOnUnknownTool,
+  }
 }
 
 function mapRemoteCommandErrorStatus(errorCode) {
@@ -1165,6 +1258,7 @@ const runtimeController = createNextVRuntimeController({
   effectRuntime: dynamicEffectRuntime,
   callAgent: ollamaTransport,
   defaultModel: process.env.OLLAMA_MODEL ?? '',
+  slowAgentWarningMs: SLOW_AGENT_WARNING_MS,
 })
 
 async function handleApi(req, res, url) {
@@ -1396,6 +1490,29 @@ async function handleApi(req, res, url) {
       const transportsMap = workspaceConfig?.transports?.map && typeof workspaceConfig.transports.map === 'object'
         ? workspaceConfig.transports.map
         : {}
+      const workspaceToolsAllowRaw = workspaceConfig?.tools?.allow
+      const workspaceToolsAllow = workspaceToolsAllowRaw instanceof Set
+        ? [...workspaceToolsAllowRaw]
+        : (Array.isArray(workspaceToolsAllowRaw) ? workspaceToolsAllowRaw : [])
+      const configuredAllowedTools = workspaceToolsAllow
+        .map((value) => String(value ?? '').trim())
+        .filter(Boolean)
+        .sort((left, right) => left.localeCompare(right))
+      const configuredToolAliases = workspaceConfig?.tools?.aliases && typeof workspaceConfig.tools.aliases === 'object'
+        ? Object.fromEntries(
+          Object.entries(workspaceConfig.tools.aliases)
+            .map(([alias, target]) => [String(alias ?? '').trim(), String(target ?? '').trim()])
+            .filter(([alias, target]) => alias && target)
+        )
+        : {}
+      const configuredAgentDeclaredTools = Object.fromEntries(
+        Object.entries(configuredAgentProfiles).map(([agentName, profile]) => {
+          const tools = Array.isArray(profile?.tools)
+            ? [...new Set(profile.tools.map((value) => String(value ?? '').trim()).filter(Boolean))]
+            : []
+          return [agentName, tools]
+        })
+      )
       const configuredTransportProviders = Object.fromEntries(
         Object.entries(transportsMap).map(([name, transport]) => [name, String(transport?.provider ?? '').trim()])
       )
@@ -1412,6 +1529,9 @@ async function handleApi(req, res, url) {
         configuredAgentProfiles,
         configuredModelConfigs,
         configuredTransportProviders,
+        configuredAllowedTools,
+        configuredToolAliases,
+        configuredAgentDeclaredTools,
         timers: Array.isArray(workspaceConfig.nextv.timers)
           ? workspaceConfig.nextv.timers.map((timer) => ({
               event: timer.event,
@@ -1915,6 +2035,12 @@ async function handleApi(req, res, url) {
     const retryOnViolation = Number.isInteger(retryOnViolationRaw)
       ? Math.max(0, Math.min(8, retryOnViolationRaw))
       : 0
+    let toolsPolicy = null
+    try {
+      toolsPolicy = normalizeCallInspectorToolsPolicy(body?.tools)
+    } catch (err) {
+      return sendJson(res, 400, { error: String(err?.message ?? err) })
+    }
 
     const normalizedMessages = Array.isArray(body?.messages)
       ? body.messages
@@ -1996,7 +2122,7 @@ async function handleApi(req, res, url) {
         callAgent: ollamaTransport,
         defaultModel: process.env.OLLAMA_MODEL ?? '',
         captureAgentRequestPayload: true,
-        slowAgentWarningMs: 15000,
+        slowAgentWarningMs: SLOW_AGENT_WARNING_MS,
         resolvePathFromBaseDirectory,
         existsSync,
         runNextVScriptFromFile,
@@ -2024,6 +2150,7 @@ async function handleApi(req, res, url) {
           messages: normalizedMessages,
           returns: returnsContract,
           decide: decideContract,
+          tools: toolsPolicy,
           validate: validateMode,
           retry_on_contract_violation: retryOnViolation,
           on_contract_violation: mode === 'try'
@@ -2076,6 +2203,7 @@ async function handleApi(req, res, url) {
           retry_on_contract_violation: retryOnViolation,
           hasReturns: returnsContract != null,
           hasDecide: Array.isArray(decideContract) && decideContract.length > 0,
+          ...(toolsPolicy && typeof toolsPolicy === 'object' ? { tools: toolsPolicy } : {}),
         },
         resolvedCall: buildResolvedCallSummary({
           targetKind,
@@ -2086,6 +2214,7 @@ async function handleApi(req, res, url) {
           retryOnViolation,
           returnsContract,
           decideContract,
+          toolsPolicy,
           requestMetadata,
         }),
         result: {
@@ -2240,6 +2369,8 @@ async function handleApi(req, res, url) {
       pruneRecentTimerExecutions(now)
       pruneRecentTimerRuntimeEvents(now)
       pruneRecentErrors(now)
+      pruneRecentWarnings(now)
+      pruneRecentPreloadEvents(now)
       for (const entry of recentTimerPulses) {
         if (entry.timestamp >= connectionTime) continue
         try {
@@ -2268,6 +2399,22 @@ async function handleApi(req, res, url) {
         if (entry.timestamp >= connectionTime) continue
         try {
           sseEvent(res, 'nextv_error', entry.payload)
+        } catch {
+          break
+        }
+      }
+      for (const entry of recentWarnings) {
+        if (entry.timestamp >= connectionTime) continue
+        try {
+          sseEvent(res, 'nextv_warning', entry.payload)
+        } catch {
+          break
+        }
+      }
+      for (const entry of recentPreloadEvents) {
+        if (entry.timestamp >= connectionTime) continue
+        try {
+          sseEvent(res, entry.eventName, entry.payload)
         } catch {
           break
         }

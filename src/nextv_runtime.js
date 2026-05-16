@@ -2479,29 +2479,56 @@ function buildFunctions(options, runtimeContext) {
         sourceLine,
       })
 
-      const callResult = await options.callAgent({
-        agent: agentName,
-        prompt,
-        instructions: finalInstructions,
-        messages,
-        tools: toolsPolicy,
-        format: effectiveFormat,
-        returns,
-        validate,
-        decide: decideOptions,
-        retry_on_contract_violation: retryCount,
-        on_contract_violation: onViolationExpr,
-        state,
-        event,
-        locals,
-        line,
-        statement,
-        sourcePath,
-        sourceLine,
-        onGovernedToolEvent: async (toolEvent) => {
-          await runtimeContext.emitEvent(toolEvent, { line, sourcePath, sourceLine })
-        },
-      })
+      let callResult
+      try {
+        callResult = await options.callAgent({
+          agent: agentName,
+          prompt,
+          instructions: finalInstructions,
+          messages,
+          tools: toolsPolicy,
+          format: effectiveFormat,
+          returns,
+          validate,
+          decide: decideOptions,
+          retry_on_contract_violation: retryCount,
+          on_contract_violation: onViolationExpr,
+          state,
+          event,
+          locals,
+          line,
+          statement,
+          sourcePath,
+          sourceLine,
+          onGovernedToolEvent: async (toolEvent) => {
+            await runtimeContext.emitEvent(toolEvent, { line, sourcePath, sourceLine })
+          },
+        })
+      } catch (err) {
+        const metadata = {
+          code: String(err?.code ?? '').trim() || 'FUNCTION_CALL_ERROR',
+          message: String(err?.message ?? 'Unknown agent call error'),
+          ...(Object.prototype.hasOwnProperty.call(err ?? {}, 'output') ? { output: err.output } : {}),
+        }
+        if (err?.requestMetadata && typeof err.requestMetadata === 'object') {
+          metadata.request = err.requestMetadata
+        }
+        if (err?.retryLineage && typeof err.retryLineage === 'object') {
+          metadata.retryLineage = err.retryLineage
+        }
+        await runtimeContext.emitEvent({
+          type: 'agent_error',
+          agent: agentName,
+          line,
+          statement,
+          metadata,
+        }, {
+          line,
+          sourcePath,
+          sourceLine,
+        })
+        throw err
+      }
 
       if (callResult && typeof callResult === 'object' && callResult.__nextv_contract_violation__ === true) {
         if (onViolationExpr) {
@@ -2671,28 +2698,55 @@ function buildFunctions(options, runtimeContext) {
         sourceLine,
       })
 
-      const callResult = await options.callAgent({
-        model: modelName,
-        prompt,
-        instructions,
-        messages,
-        tools: toolsPolicy,
-        format: effectiveFormat,
-        returns,
-        validate,
-        retry_on_contract_violation: retryCount,
-        on_contract_violation: onViolationExpr,
-        state,
-        event,
-        locals,
-        line,
-        statement,
-        sourcePath,
-        sourceLine,
-        onGovernedToolEvent: async (toolEvent) => {
-          await runtimeContext.emitEvent(toolEvent, { line, sourcePath, sourceLine })
-        },
-      })
+      let callResult
+      try {
+        callResult = await options.callAgent({
+          model: modelName,
+          prompt,
+          instructions,
+          messages,
+          tools: toolsPolicy,
+          format: effectiveFormat,
+          returns,
+          validate,
+          retry_on_contract_violation: retryCount,
+          on_contract_violation: onViolationExpr,
+          state,
+          event,
+          locals,
+          line,
+          statement,
+          sourcePath,
+          sourceLine,
+          onGovernedToolEvent: async (toolEvent) => {
+            await runtimeContext.emitEvent(toolEvent, { line, sourcePath, sourceLine })
+          },
+        })
+      } catch (err) {
+        const metadata = {
+          code: String(err?.code ?? '').trim() || 'FUNCTION_CALL_ERROR',
+          message: String(err?.message ?? 'Unknown model call error'),
+          ...(Object.prototype.hasOwnProperty.call(err ?? {}, 'output') ? { output: err.output } : {}),
+        }
+        if (err?.requestMetadata && typeof err.requestMetadata === 'object') {
+          metadata.request = err.requestMetadata
+        }
+        if (err?.retryLineage && typeof err.retryLineage === 'object') {
+          metadata.retryLineage = err.retryLineage
+        }
+        await runtimeContext.emitEvent({
+          type: 'agent_error',
+          agent: `model:${modelName}`,
+          line,
+          statement,
+          metadata,
+        }, {
+          line,
+          sourcePath,
+          sourceLine,
+        })
+        throw err
+      }
 
       if (callResult && typeof callResult === 'object' && callResult.__nextv_contract_violation__ === true) {
         if (onViolationExpr) {

@@ -43,6 +43,13 @@ import {
   nextVCallPromptInput,
   nextVCallReturnsInput,
   nextVCallDecideInput,
+  nextVCallToolsModeInput,
+  nextVCallToolsMaxRoundsInput,
+  nextVCallToolsTimeoutMsInput,
+  nextVCallToolsDenyUnknownInput,
+  nextVCallToolsExtraInput,
+  nextVCallToolsList,
+  nextVCallToolsSection,
   nextVCallTargetConfigLabel,
   nextVCallTargetConfigOutput,
   nextVCallResolvedLabel,
@@ -180,6 +187,13 @@ import {
 } from './13_layout.js'
 
 let bufferedRuntimeEventsForExecution = []
+let pendingAgentCallCount = 0
+
+function formatPendingCallLabel(count) {
+  return count === 1
+    ? 'nextv waiting for model response...'
+    : `nextv waiting for model responses (${count})...`
+}
 
 function toExecutionEventKey(event) {
   if (!event || typeof event !== 'object') return ''
@@ -426,6 +440,19 @@ export function openNextVStream() {
       appendTraceRows([runtimeEvent])
         applyNextVGraphRuntimeVisuals()
 
+      const runtimeEventType = String(runtimeEvent?.type ?? '').trim()
+      if (runtimeEventType === 'agent_call') {
+        pendingAgentCallCount += 1
+        setStatus(formatPendingCallLabel(pendingAgentCallCount), 'thinking')
+      } else if (runtimeEventType === 'agent_result' || runtimeEventType === 'agent_error') {
+        pendingAgentCallCount = Math.max(0, pendingAgentCallCount - 1)
+        if (pendingAgentCallCount > 0) {
+          setStatus(formatPendingCallLabel(pendingAgentCallCount), 'thinking')
+        } else {
+          setStatus(runtimeEventType === 'agent_error' ? 'nextv model call failed' : 'nextv model response received')
+        }
+      }
+
       const toolFailureMessage = readToolErrorMessageFromRuntimeEvent(runtimeEvent)
       if (toolFailureMessage) {
         appendNextVErrorLog({ message: toolFailureMessage }, '[nextv:tool_error]')
@@ -561,7 +588,63 @@ export function openNextVStream() {
       renderNextVSnapshot(payload.snapshot)
       bufferedRuntimeEventsForExecution = []
       _setNextVHasLiveRuntimeEvents(false)
+      pendingAgentCallCount = 0
       setStatus('nextv execution complete')
+    } catch {
+      // ignore malformed stream payload
+    }
+  })
+
+  nextVEventSource.addEventListener('nextv_warning', (evt) => {
+    try {
+      const payload = JSON.parse(evt.data)
+      const warningCode = String(payload?.code ?? '').trim().toUpperCase()
+      if (warningCode !== 'SLOW_AGENT_CALL') return
+
+      const agent = String(payload?.agent ?? '').trim() || 'unknown'
+      const model = String(payload?.model ?? '').trim() || 'unknown'
+      const elapsedMs = Number(payload?.elapsedMs)
+      const thresholdMs = Number(payload?.thresholdMs)
+      const elapsedLabel = Number.isFinite(elapsedMs) ? `${Math.max(0, Math.round(elapsedMs))}ms` : 'unknown time'
+      const thresholdLabel = Number.isFinite(thresholdMs) ? `${Math.max(0, Math.round(thresholdMs))}ms` : 'threshold'
+
+      appendNextVLogRow(`[nextv:warning] slow agent call agent=${agent} model=${model} elapsed=${elapsedLabel} threshold=${thresholdLabel}`, 'step')
+      setStatus(`nextv waiting: ${agent} on ${model} exceeded ${thresholdLabel}`, 'thinking')
+    } catch {
+      // ignore malformed stream payload
+    }
+  })
+
+  nextVEventSource.addEventListener('nextv_preload_start', (evt) => {
+    try {
+      const payload = JSON.parse(evt.data)
+      const model = String(payload?.modelId ?? payload?.model ?? '').trim() || 'model'
+      appendNextVLogRow(`[nextv:preload] loading ${model}`, 'step')
+      setStatus(`nextv preload: loading ${model}`, 'thinking')
+    } catch {
+      // ignore malformed stream payload
+    }
+  })
+
+  nextVEventSource.addEventListener('nextv_preload_success', (evt) => {
+    try {
+      const payload = JSON.parse(evt.data)
+      const model = String(payload?.modelId ?? payload?.model ?? '').trim() || 'model'
+      const durationMs = Number(payload?.durationMs)
+      const durationLabel = Number.isFinite(durationMs) ? `${Math.max(0, Math.round(durationMs))}ms` : 'n/a'
+      appendNextVLogRow(`[nextv:preload] loaded ${model} duration=${durationLabel}`, 'result')
+      setStatus(`nextv preload ready: ${model}`)
+    } catch {
+      // ignore malformed stream payload
+    }
+  })
+
+  nextVEventSource.addEventListener('nextv_preload_error', (evt) => {
+    try {
+      const payload = JSON.parse(evt.data)
+      const model = String(payload?.modelId ?? payload?.model ?? '').trim() || 'model'
+      appendNextVErrorLog({ message: `preload failed for ${model}: ${String(payload?.error ?? 'unknown error')}` }, '[nextv:preload_error]')
+      setStatus(`nextv preload warning: ${model}`, 'responding')
     } catch {
       // ignore malformed stream payload
     }
@@ -644,6 +727,7 @@ export function openNextVStream() {
 
       finalizeNextVGraphActiveAgentTimers()
       applyNextVGraphRuntimeVisuals()
+      pendingAgentCallCount = 0
       appendNextVErrorLog(payload)
       if (payload?.snapshot) renderNextVSnapshot(payload.snapshot)
       const { line, sourcePath } = getErrorMessageAndSource(payload)
@@ -670,6 +754,7 @@ export function openNextVStream() {
       applyNextVGraphRuntimeVisuals()
       _setNextVRuntimeRunning(false)
       setNextVRunControls()
+      pendingAgentCallCount = 0
       appendNextVLogRow('[nextv:stop] runtime stopped', 'step')
       setStatus('nextv runtime stopped')
     } catch {
@@ -1181,6 +1266,8 @@ export async function executeNextVCallInspector() {
   const validate = ['strict', 'coerce', 'none'].includes(validateRaw) ? validateRaw : 'coerce'
   const retryRaw = Number(nextVCallRetryInput?.value)
   const retryCount = Number.isInteger(retryRaw) ? Math.max(0, Math.min(8, retryRaw)) : 0
+  const toolsPolicyResult = buildNextVCallInspectorToolsPolicy()
+  const toolsPolicy = toolsPolicyResult.ok ? toolsPolicyResult.policy : null
 
   function failInspectorValidation(message) {
     renderNextVCallInspectorResolvedCall({ status: 'call inspector validation failed before runtime invocation' })
@@ -1198,6 +1285,10 @@ export async function executeNextVCallInspector() {
   }
   if (returnsText && decideText) {
     failInspectorValidation('use either returns or decide, not both')
+    return
+  }
+  if (!toolsPolicyResult.ok) {
+    failInspectorValidation(toolsPolicyResult.error)
     return
   }
 
@@ -1229,6 +1320,9 @@ export async function executeNextVCallInspector() {
       .split(',')
       .map((value) => value.trim())
       .filter(Boolean)
+  }
+  if (toolsPolicyResult.policy) {
+    requestBody.tools = toolsPolicyResult.policy
   }
 
   renderNextVCallInspectorResolvedCall({ status: 'resolving runtime invocation...' })
@@ -1272,6 +1366,36 @@ function stringifyInspectorPane(value) {
   }
 }
 
+const nextVCallInspectorToolsState = {
+  checked: new Set(),
+}
+
+function normalizeNextVCallInspectorToolsMode(modeRaw) {
+  return String(modeRaw ?? '').trim().toLowerCase() === 'governed' ? 'governed' : 'disabled'
+}
+
+function parseNextVCallInspectorToolsCsv(text) {
+  return [...new Set(
+    String(text ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean)
+  )]
+}
+
+function getStoredNextVCallInspectorCheckedTools() {
+  const raw = String(localStorage.getItem(storageKeys.nextVCallInspectorToolsChecked) ?? '').trim()
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed)
+      ? [...new Set(parsed.map((value) => String(value ?? '').trim()).filter(Boolean))]
+      : []
+  } catch {
+    return []
+  }
+}
+
 function persistNextVCallInspectorInputs() {
   const targetKind = String(nextVCallTargetKindInput?.value ?? '').trim()
   if (targetKind) localStorage.setItem(storageKeys.nextVCallInspectorTargetKind, targetKind)
@@ -1296,6 +1420,29 @@ function persistNextVCallInspectorInputs() {
   localStorage.setItem(storageKeys.nextVCallInspectorPrompt, String(nextVCallPromptInput?.value ?? ''))
   localStorage.setItem(storageKeys.nextVCallInspectorReturns, String(nextVCallReturnsInput?.value ?? ''))
   localStorage.setItem(storageKeys.nextVCallInspectorDecide, String(nextVCallDecideInput?.value ?? ''))
+
+  const toolsMode = normalizeNextVCallInspectorToolsMode(nextVCallToolsModeInput?.value ?? 'disabled')
+  localStorage.setItem(storageKeys.nextVCallInspectorToolsMode, toolsMode)
+
+  const toolsMaxRounds = String(nextVCallToolsMaxRoundsInput?.value ?? '').trim()
+  if (toolsMaxRounds !== '') {
+    localStorage.setItem(storageKeys.nextVCallInspectorToolsMaxRounds, toolsMaxRounds)
+  }
+
+  const toolsTimeoutMs = String(nextVCallToolsTimeoutMsInput?.value ?? '').trim()
+  if (toolsTimeoutMs !== '') {
+    localStorage.setItem(storageKeys.nextVCallInspectorToolsTimeoutMs, toolsTimeoutMs)
+  }
+
+  localStorage.setItem(
+    storageKeys.nextVCallInspectorToolsDenyUnknown,
+    nextVCallToolsDenyUnknownInput?.checked === false ? '0' : '1'
+  )
+  localStorage.setItem(storageKeys.nextVCallInspectorToolsExtra, String(nextVCallToolsExtraInput?.value ?? ''))
+  localStorage.setItem(
+    storageKeys.nextVCallInspectorToolsChecked,
+    JSON.stringify([...nextVCallInspectorToolsState.checked].sort((left, right) => left.localeCompare(right)))
+  )
 }
 
 function restoreNextVCallInspectorInputs() {
@@ -1324,18 +1471,51 @@ function restoreNextVCallInspectorInputs() {
 
   const decide = localStorage.getItem(storageKeys.nextVCallInspectorDecide)
   if (decide !== null && nextVCallDecideInput) nextVCallDecideInput.value = decide
+
+  const toolsMode = normalizeNextVCallInspectorToolsMode(localStorage.getItem(storageKeys.nextVCallInspectorToolsMode) ?? 'disabled')
+  if (nextVCallToolsModeInput) {
+    nextVCallToolsModeInput.value = toolsMode
+  }
+
+  const toolsMaxRounds = String(localStorage.getItem(storageKeys.nextVCallInspectorToolsMaxRounds) ?? '').trim()
+  if (toolsMaxRounds !== '' && nextVCallToolsMaxRoundsInput) {
+    nextVCallToolsMaxRoundsInput.value = toolsMaxRounds
+  }
+
+  const toolsTimeoutMs = String(localStorage.getItem(storageKeys.nextVCallInspectorToolsTimeoutMs) ?? '').trim()
+  if (toolsTimeoutMs !== '' && nextVCallToolsTimeoutMsInput) {
+    nextVCallToolsTimeoutMsInput.value = toolsTimeoutMs
+  }
+
+  const denyUnknownStored = String(localStorage.getItem(storageKeys.nextVCallInspectorToolsDenyUnknown) ?? '').trim()
+  if (nextVCallToolsDenyUnknownInput) {
+    nextVCallToolsDenyUnknownInput.checked = denyUnknownStored === '' ? true : denyUnknownStored !== '0'
+  }
+
+  const toolsExtra = localStorage.getItem(storageKeys.nextVCallInspectorToolsExtra)
+  if (toolsExtra !== null && nextVCallToolsExtraInput) {
+    nextVCallToolsExtraInput.value = toolsExtra
+  }
+
+  nextVCallInspectorToolsState.checked = new Set(getStoredNextVCallInspectorCheckedTools())
 }
 
 const nextVCallInspectorProjectConfig = {
   agentsByName: {},
   modelsByName: {},
   transportProvidersByName: {},
+  allowedTools: [],
+  toolAliases: {},
+  agentDeclaredTools: {},
 }
 
 function setNextVCallInspectorProjectConfig(payload = {}) {
   const agentsByName = payload?.agentsByName
   const modelsByName = payload?.modelsByName
   const transportProvidersByName = payload?.transportProvidersByName
+  const allowedTools = payload?.allowedTools
+  const toolAliases = payload?.toolAliases
+  const agentDeclaredTools = payload?.agentDeclaredTools
 
   nextVCallInspectorProjectConfig.agentsByName = agentsByName && typeof agentsByName === 'object' && !Array.isArray(agentsByName)
     ? agentsByName
@@ -1346,6 +1526,141 @@ function setNextVCallInspectorProjectConfig(payload = {}) {
   nextVCallInspectorProjectConfig.transportProvidersByName = transportProvidersByName && typeof transportProvidersByName === 'object' && !Array.isArray(transportProvidersByName)
     ? transportProvidersByName
     : {}
+  nextVCallInspectorProjectConfig.allowedTools = Array.isArray(allowedTools)
+    ? [...new Set(allowedTools.map((value) => String(value ?? '').trim()).filter(Boolean))]
+    : []
+  nextVCallInspectorProjectConfig.toolAliases = toolAliases && typeof toolAliases === 'object' && !Array.isArray(toolAliases)
+    ? toolAliases
+    : {}
+  nextVCallInspectorProjectConfig.agentDeclaredTools = agentDeclaredTools && typeof agentDeclaredTools === 'object' && !Array.isArray(agentDeclaredTools)
+    ? agentDeclaredTools
+    : {}
+}
+
+function getNextVCallInspectorAvailableTools() {
+  const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
+  const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  if (targetKind === 'agent') {
+    const agentName = String(nextVCallTargetAgentInput?.value ?? '').trim()
+    const profile = nextVCallInspectorProjectConfig.agentsByName[agentName]
+    const profileTools = Array.isArray(profile?.tools)
+      ? profile.tools
+      : nextVCallInspectorProjectConfig.agentDeclaredTools[agentName]
+    if (Array.isArray(profileTools) && profileTools.length > 0) {
+      return [...new Set(profileTools.map((value) => String(value ?? '').trim()).filter(Boolean))]
+    }
+  }
+  return [...nextVCallInspectorProjectConfig.allowedTools]
+}
+
+function syncNextVCallInspectorToolsModeUi() {
+  if (!nextVCallToolsModeInput || !nextVCallToolsSection) return
+  const mode = normalizeNextVCallInspectorToolsMode(nextVCallToolsModeInput.value)
+  const governed = mode === 'governed'
+
+  if (nextVCallToolsList) {
+    nextVCallToolsList.style.opacity = governed ? '1' : '0.6'
+  }
+  if (nextVCallToolsMaxRoundsInput) {
+    nextVCallToolsMaxRoundsInput.disabled = !governed
+  }
+  if (nextVCallToolsTimeoutMsInput) {
+    nextVCallToolsTimeoutMsInput.disabled = !governed
+  }
+  if (nextVCallToolsDenyUnknownInput) {
+    nextVCallToolsDenyUnknownInput.disabled = !governed
+  }
+  if (nextVCallToolsExtraInput) {
+    nextVCallToolsExtraInput.disabled = !governed
+  }
+}
+
+function renderNextVCallInspectorToolsChecklist() {
+  if (!nextVCallToolsList) return
+  const availableTools = getNextVCallInspectorAvailableTools()
+  const validChecked = [...nextVCallInspectorToolsState.checked].filter((name) => availableTools.includes(name))
+  nextVCallInspectorToolsState.checked = new Set(validChecked)
+  nextVCallToolsList.innerHTML = ''
+
+  if (availableTools.length === 0) {
+    nextVCallToolsList.textContent = '(no configured tools available for this target)'
+    return
+  }
+
+  const aliasEntries = Object.entries(nextVCallInspectorProjectConfig.toolAliases)
+  for (const toolName of availableTools) {
+    const wrapper = document.createElement('label')
+    wrapper.className = 'check-label'
+    wrapper.style.display = 'block'
+    wrapper.style.marginBottom = '4px'
+
+    const input = document.createElement('input')
+    input.type = 'checkbox'
+    input.className = 'nextv-call-tool-checkbox'
+    input.value = toolName
+    input.checked = nextVCallInspectorToolsState.checked.has(toolName)
+    input.addEventListener('change', () => {
+      if (input.checked) {
+        nextVCallInspectorToolsState.checked.add(toolName)
+      } else {
+        nextVCallInspectorToolsState.checked.delete(toolName)
+      }
+      persistNextVCallInspectorInputs()
+      renderNextVCallInspectorSnippet()
+    })
+
+    const labelText = document.createElement('span')
+    const aliases = aliasEntries
+      .filter(([, target]) => String(target ?? '').trim() === toolName)
+      .map(([alias]) => String(alias ?? '').trim())
+      .filter(Boolean)
+    labelText.textContent = aliases.length > 0
+      ? `${toolName} (aliases: ${aliases.join(', ')})`
+      : toolName
+
+    wrapper.appendChild(input)
+    wrapper.appendChild(labelText)
+    nextVCallToolsList.appendChild(wrapper)
+  }
+}
+
+function buildNextVCallInspectorToolsPolicy() {
+  const mode = normalizeNextVCallInspectorToolsMode(nextVCallToolsModeInput?.value ?? 'disabled')
+  if (mode === 'disabled') {
+    return { ok: true, policy: null }
+  }
+
+  const availableTools = getNextVCallInspectorAvailableTools()
+  const checkedTools = [...nextVCallInspectorToolsState.checked].filter((name) => availableTools.includes(name))
+  const extraTools = parseNextVCallInspectorToolsCsv(nextVCallToolsExtraInput?.value ?? '')
+  const allow = [...new Set([...checkedTools, ...extraTools])]
+  if (allow.length === 0) {
+    return {
+      ok: false,
+      error: 'select at least one governed tool or provide extra tools before running the call',
+      policy: null,
+    }
+  }
+
+  const maxRoundsRaw = Number(nextVCallToolsMaxRoundsInput?.value)
+  const timeoutMsRaw = Number(nextVCallToolsTimeoutMsInput?.value)
+  if (!Number.isInteger(maxRoundsRaw) || maxRoundsRaw < 0) {
+    return { ok: false, error: 'tools max rounds must be a non-negative integer', policy: null }
+  }
+  if (!Number.isInteger(timeoutMsRaw) || timeoutMsRaw < 0) {
+    return { ok: false, error: 'tools timeout ms must be a non-negative integer', policy: null }
+  }
+
+  return {
+    ok: true,
+    policy: {
+      mode: 'governed',
+      allow,
+      maxRounds: maxRoundsRaw,
+      timeoutMs: timeoutMsRaw,
+      denyOnUnknownTool: nextVCallToolsDenyUnknownInput?.checked === false ? false : true,
+    },
+  }
 }
 
 function renderNextVCallInspectorTargetConfig() {
@@ -1392,6 +1707,8 @@ function renderNextVCallInspectorTargetConfig() {
           : {
               status: 'agent does not declare a model',
             }),
+      availableTools: getNextVCallInspectorAvailableTools(),
+      toolAliases: nextVCallInspectorProjectConfig.toolAliases,
     })
     return
   }
@@ -1406,6 +1723,8 @@ function renderNextVCallInspectorTargetConfig() {
     ? {
         ...model,
         transportProvider: provider || undefined,
+        availableTools: getNextVCallInspectorAvailableTools(),
+        toolAliases: nextVCallInspectorProjectConfig.toolAliases,
       }
     : { status: 'model not found in workspace config' })
 }
@@ -1452,6 +1771,8 @@ function syncNextVCallInspectorTargetMode() {
     nextVCallTargetInput.hidden = isAgentMode
     nextVCallTargetInput.disabled = isAgentMode
   }
+  syncNextVCallInspectorToolsModeUi()
+  renderNextVCallInspectorToolsChecklist()
 }
 
 function setNextVCallInspectorAgentOptions(agentNames, options = {}) {
@@ -1538,6 +1859,9 @@ export async function refreshNextVCallInspectorAgents(options = {}) {
       agentsByName: data?.configuredAgentProfiles,
       modelsByName: data?.configuredModelConfigs,
       transportProvidersByName: data?.configuredTransportProviders,
+      allowedTools: data?.configuredAllowedTools,
+      toolAliases: data?.configuredToolAliases,
+      agentDeclaredTools: data?.configuredAgentDeclaredTools,
     })
     setNextVCallInspectorAgentOptions(configuredAgents, { emptyLabel: noAgentsLabel })
     setNextVCallInspectorModelOptions(configuredModels, { emptyLabel: noModelsLabel })
@@ -1805,6 +2129,8 @@ export function buildNextVCallInspectorSnippet() {
   const validate = ['strict', 'coerce', 'none'].includes(validateRaw) ? validateRaw : 'coerce'
   const retryRaw = Number(nextVCallRetryInput?.value)
   const retryCount = Number.isInteger(retryRaw) ? Math.max(0, Math.min(8, retryRaw)) : 0
+  const toolsPolicyResult = buildNextVCallInspectorToolsPolicy()
+  const toolsPolicy = toolsPolicyResult.ok ? toolsPolicyResult.policy : null
 
   const lines = []
   const head = target || (targetKind === 'agent' ? 'router' : 'model-id')
@@ -1831,6 +2157,9 @@ export function buildNextVCallInspectorSnippet() {
   }
   if (retryCount > 0) {
     lines.push(`  retry_on_contract_violation=${retryCount},`)
+  }
+  if (toolsPolicy && typeof toolsPolicy === 'object') {
+    lines.push(`  tools=${JSON.stringify(toolsPolicy)},`)
   }
   lines.push(')')
   return lines.join('\n')
@@ -1877,6 +2206,11 @@ export function initNextVCallInspector() {
     nextVCallPromptInput,
     nextVCallReturnsInput,
     nextVCallDecideInput,
+    nextVCallToolsModeInput,
+    nextVCallToolsMaxRoundsInput,
+    nextVCallToolsTimeoutMsInput,
+    nextVCallToolsDenyUnknownInput,
+    nextVCallToolsExtraInput,
   ]
   for (const control of controls) {
     if (!control || control.dataset.callInspectorBound === '1') continue
@@ -1888,11 +2222,25 @@ export function initNextVCallInspector() {
           refreshNextVCallInspectorAgents({ quiet: true })
         }
       }
+      if (control === nextVCallTargetAgentInput || control === nextVCallTargetInput) {
+        renderNextVCallInspectorToolsChecklist()
+      }
+      if (control === nextVCallToolsModeInput) {
+        syncNextVCallInspectorToolsModeUi()
+      }
       persistNextVCallInspectorInputs()
       renderNextVCallInspectorSnippet()
     }
     control.addEventListener('input', rerender)
     control.addEventListener('change', rerender)
+  }
+
+  if (nextVCallToolsList && nextVCallToolsList.dataset.callInspectorBound !== '1') {
+    nextVCallToolsList.dataset.callInspectorBound = '1'
+    nextVCallToolsList.addEventListener('change', () => {
+      persistNextVCallInspectorInputs()
+      renderNextVCallInspectorSnippet()
+    })
   }
 
   if (nextVWorkspaceDirInput && nextVWorkspaceDirInput.dataset.callInspectorWorkspaceBound !== '1') {
@@ -1929,6 +2277,7 @@ export function initNextVCallInspector() {
 
   restoreNextVCallInspectorInputs()
   syncNextVCallInspectorTargetMode()
+  syncNextVCallInspectorToolsModeUi()
   refreshNextVCallInspectorAgents({ quiet: true })
   renderNextVCallInspectorSnippet()
   renderNextVCallInspectorResolvedCall(null)

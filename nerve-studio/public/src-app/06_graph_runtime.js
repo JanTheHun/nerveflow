@@ -1291,7 +1291,7 @@ export function handleNextVGraphRuntimeEvent(runtimeEvent) {
     return
   }
 
-  if (runtimeEvent.type === 'agent_result') {
+  if (runtimeEvent.type === 'agent_result' || runtimeEvent.type === 'agent_error') {
     finishNextVGraphAgentTimer(runtimeEvent)
     return
   }

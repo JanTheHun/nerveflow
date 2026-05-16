@@ -10,6 +10,8 @@ All notable changes to this project are documented in this file.
 - Enum constraints are exact-literal only; wildcard/pattern semantics are explicitly unsupported.
 - Nerve Studio graph view now supports two floating source-code panels with per-panel save/close/drag interactions and a chooser dialog when both panel slots are occupied.
 - Floating and editor textareas now recognize `file("...")` references in addition to `file:...` references for hover/click navigation.
+- Call inspector now supports governed tools policy controls (mode, max rounds, timeout, unknown-tool policy), per-tool checkbox allow-list toggles, and extra per-call tools input.
+- Call inspector now auto-populates available tools from workspace config, using agent profile tools when targeting an agent.
 - Packaged runtime smoke automation command (`npm run test:pack-smoke`) to validate packed artifact install, runtime boot, attach snapshot, and ingress endpoint behavior.
 - Editor-core publish guards:
 	- `npm run verify:editor-core-sync` validates package source and Studio mirror parity.
@@ -23,6 +25,7 @@ All notable changes to this project are documented in this file.
 - WebSocket runtime dependency (`ws`) is now a runtime dependency so published runtime surfaces and attach CLI are self-contained.
 - Published CLI boundary now focuses on standalone runtime tools (`nerve-runtime`, `nerve-attach`, `nerve-model-check`); `nerve-dev-remote` remains repository-only.
 - Publish gate CI workflow now enforces editor-core sync and pack checks before runtime packed-artifact smoke.
+- Call inspector execution now accepts optional `tools` policy payloads for direct model/agent invocations in both runtime-core and Studio preview host surfaces.
 
 ### Notes
 

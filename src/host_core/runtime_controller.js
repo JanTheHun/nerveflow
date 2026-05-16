@@ -459,6 +459,7 @@ export function createNextVRuntimeController({
           const allowTimerRuntimeEvent = (
             runtimeEventType === 'agent_call'
             || runtimeEventType === 'agent_result'
+            || runtimeEventType === 'agent_error'
             || runtimeEventType === 'tool_call'
             || runtimeEventType === 'tool_result'
             || runtimeEventType === 'output'

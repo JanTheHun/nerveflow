@@ -8,8 +8,10 @@ Validated patterns for coding agents generating Nerveflow projects.
 2. Bounded Tool Routing
 3. Fallback-driven routing (other)
 4. Contract violation handling
-5. Structured output channel usage
-6. Externalized contract and prompt files
+5. Explicit try envelope handling
+6. Ranked result trimming (sort/cut)
+7. Structured output channel usage
+8. Externalized contract and prompt files
 
 ## 1. Classify -> Route -> Act
 
@@ -64,7 +66,35 @@ on "contract_violation"
 end
 ```
 
-## 4. Structured output channel
+## 4. Try envelope for operational fallback
+
+```nrv
+on external "user_message"
+	lookup = try tool("search", { q:event.value })
+
+	if lookup.ok
+		emit("search_results", lookup.value)
+	else
+		output text "Search is temporarily unavailable."
+	end
+end
+```
+
+## 5. Ranked filtering with sort + cut
+
+```nrv
+on "search_results"
+	ranked = sort(event.value, "score", true)
+	top = cut(ranked, "score", ">=", 0.6)
+	output json {
+		total: length(ranked),
+		selected: length(top),
+		items: top
+	}
+end
+```
+
+## 6. Structured output channel
 
 ```nrv
 on "search_flow"
@@ -73,7 +103,7 @@ on "search_flow"
 end
 ```
 
-## 5. Guarded call with externalized contract
+## 7. Guarded call with externalized contract
 
 ```nrv
 decision = agent(

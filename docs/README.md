@@ -33,6 +33,7 @@ This documentation is for **users building workflows with Nerveflow**.
 - [spec-late-contract-binding.md](spec-late-contract-binding.md)
 - [spec-bounded-control-flow-provenance.md](spec-bounded-control-flow-provenance.md)
 - [spec-parallel-group-evaluation.md](spec-parallel-group-evaluation.md)
+- [spec-explicit-runtime-failure-envelopes.md](spec-explicit-runtime-failure-envelopes.md)
 
 ## Operational & Release
 

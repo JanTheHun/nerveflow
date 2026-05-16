@@ -8,13 +8,13 @@ npm install nerveflow
 
 ## 2. Write your first script
 
-```wfs
-state.count = state.count + 1
-doubled = state.count * 2
+```nrv
+state.total_messages = state.total_messages + 1
+state.last_message = event.value
 
 on external "user_message"
-  output text "count=${state.count}"
-  output text "double=${doubled}"
+  output text "messages=${state.total_messages}"
+  output text "last=${state.last_message}"
 end
 ```
 
@@ -36,6 +36,8 @@ Then run the workflow:
 curl -X POST http://127.0.0.1:4173/run -H "Content-Type: application/json" -d "{}"
 ```
 
+The reference host defaults to event `{ "type": "user_message", "value": "hello nerve" }` and initial state `{ "total_messages": 0, "last_message": "" }` when omitted.
+
 ## 4. Embed directly in Node.js
 
 ```js
@@ -45,8 +47,8 @@ const source = `
 state.count = state.count + 1
 remaining = 5 - state.count
 on external "user_message"
-  output text "count=${state.count}"
-  output text "remaining=${remaining}"
+  output text "count=\${state.count}"
+  output text "remaining=\${remaining}"
 end
 `
 

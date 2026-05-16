@@ -73,6 +73,8 @@ For supported operational failures, `try` converts execution failure into a dete
 - invalid workflow semantics
 - deterministic evaluation errors
 
+Integration-unavailable runtime errors (for example, `tool(...)` when no host `callTool` implementation is present) are deterministic availability failures and remain hard runtime errors.
+
 `try` only converts supported operational execution failures into explicit envelopes.
 
 ## Semantics
@@ -235,6 +237,7 @@ In Phase 1, `try` around `agent` and `model` is valid for contracted and uncontr
 ## Compatibility Matrix
 
 - `try` + `tool/script/operator`: valid
+  - valid when the integration surface is available in the host
 - `try` + `agent/model` (contracted or uncontracted): valid
 - `try` + `agent/model` with `on_contract_violation`: invalid
 - `try` + `agent/model` with `retry_on_contract_violation > 0`: valid

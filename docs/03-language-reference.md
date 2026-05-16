@@ -132,6 +132,8 @@ Invalid combinations raise `INVALID_CALL_CONFIG`.
 
 `try` does not suppress parse errors, compile/runtime structural errors, invalid workflow semantics, or deterministic evaluation errors.
 
+Integration-unavailable failures (for example, `tool(...)` without a host `callTool` implementation) are deterministic runtime availability errors and are raised directly rather than wrapped in a `try` envelope.
+
 See `docs/spec-parallel-group-evaluation.md` for full semantics.
 
 Collection helper semantics:

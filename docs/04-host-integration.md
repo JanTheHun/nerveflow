@@ -347,12 +347,33 @@ const result = await runNextVScript(source, {
     async callTool({ name, args, positional, state, event, locals, line, statement }) {
       // Your tool runtime
     },
-    async callAgent({ agent, prompt, instructions, messages, format, state, event, locals, line, statement }) {
+    async callAgent({
+      agent,
+      model,
+      prompt,
+      instructions,
+      messages,
+      tools,
+      format,
+      returns,
+      validate,
+      decide,
+      retry_on_contract_violation,
+      on_contract_violation,
+      state,
+      event,
+      locals,
+      line,
+      statement,
+      sourcePath,
+      sourceLine,
+      onGovernedToolEvent,
+    }) {
       // Your model runtime
       // messages entries have the shape { role, content, images? }
       // images is present only when the DSL message entry carried a non-empty images array
     },
-    async callScript({ path, state, event, locals, executionRole, onEvent }) {
+    async callScript({ path, state, event, locals, line, statement, executionRole, onEvent }) {
       // Nested script execution
     },
     resolveOperatorPath(operatorId) {

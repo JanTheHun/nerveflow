@@ -30,6 +30,12 @@ Return contracts support:
 
 They provide deterministic structure over probabilistic generation.
 
+Related boundary mode:
+
+- `decide=[...]` (agent only) is supported as scalar bounded-decision shorthand for single-value routing decisions.
+- `returns={...}` remains the structured object/array contract mode.
+- `decide` and `returns` are mutually exclusive for the same call.
+
 ---
 
 # Syntax

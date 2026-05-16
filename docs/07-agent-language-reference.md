@@ -17,3 +17,19 @@ This legacy page is being consolidated.
 - Retry/violation: retry_on_contract_violation, on_contract_violation routing
 - Event model: emit queues, on handlers, on external for host ingress
 - Output model: explicit channels (text, json, console, voice, visual, interaction)
+
+## Decide shorthand (reference)
+
+`agent(...)` supports `decide=[...]` for scalar bounded decisions when routing depends on one enum-like value.
+
+Example:
+
+```nrv
+intent = agent("router", event.value, decide=["chat", "search", "other"])
+```
+
+Notes:
+
+- `decide` is agent-only
+- `decide` and `returns` are mutually exclusive for the same call
+- use `returns` when you need structured object/array output

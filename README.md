@@ -1,255 +1,278 @@
 # Nerveflow
 
-**Deterministic control for AI workflows.**
+**Deterministic control for probabilistic software.**
 
-Nerveflow defines how your system actually runs, with explicit control flow, visible state, and predictable behavior.
+Nerveflow is a runtime authority for AI systems that need explicit control, visible execution, and bounded interaction with the world.
 
-Instead of hiding logic inside prompts or agent loops, Nerveflow makes routing, state, and side effects explicit. Your workflow is a script. Every step is inspectable. Every decision has a place.
+This runtime model is stable, while surrounding host surfaces continue to evolve.
 
----
+It gives probabilistic systems a deterministic execution spine:
 
-## What Nerveflow does
+- explicit routing
+- inspectable state
+- declared effects
+- bounded model decisions
+- attachable runtime surfaces
 
-- deterministic execution of workflows
-- explicit event routing (`on`, `emit`)
-- persistent, inspectable state (`state.*`)
-- structured orchestration of agents and tools
-- compact expression support for arithmetic, comparisons, and logical checks
+Instead of hiding behavior inside prompt-only loops, Nerveflow makes workflow control part of the runtime itself.
 
-## What Nerveflow does *not* do
+## Three primitives
 
-- manage databases or persistence layers
-- define how APIs, files, or images are transported
-- hide behavior inside autonomous agent loops
+Nerveflow is built on three reinforcing primitives:
 
-Those responsibilities belong to your **host environment**.
-Nerveflow stays focused on control.
+1. Deterministic Workflow: the execution spine
+2. Decision Contracts: the cognition boundary
+3. Event and Effect Surface: the world interface
 
----
+Together they create bounded autonomy:
 
-## Hello Nerveflow
+> model flexibility inside explicit control
 
-```wfs
-on external "user_message"
-  state.count = state.count + 1
-  doubled = state.count * 2
-  print "(${state.count}) You said: ${event.value}"
-  print "double-count=${doubled}"
-end
+If the core is right, everything else can evolve around it.
+If the core is wrong, features will not save it.
+## Runtime topology
+
+Nerveflow can run as a single-session runtime authority with attached surfaces.
+
+Surfaces may:
+
+- observe execution
+- enqueue events
+- realize effects
+- attach and detach independently of runtime execution (for supported surfaces)
+
+Examples:
+
+- Studio UI
+- WebSocket clients
+- MQTT observability bridges
+- embedded device hosts
+- CLI attach tools
+
+The runtime owns execution.
+Surfaces attach to it.
+
+## What this means in practice
+
+- workflow control flow is explicit and inspectable
+- routing-critical model calls can be contract-bounded
+- retries and violation handling are part of workflow logic
+- effects happen through declared channels and events
+- runtime execution is deterministic within defined workflow/runtime semantics
+- host integrations stay outside runtime semantics
+
+## What Nerveflow is not
+
+- not a database or persistence layer
+- not an infrastructure provisioning tool
+- not an autonomous hidden agent loop framework
+
+Those concerns belong to the host environment.
+
+## Start in 60 seconds
+
+Run the reference host from this repository:
+
+```bash
+cd examples/minimal-web-host
+npm install
+npm start
 ```
 
-A workflow is just a script that runs on every event.
+Then open `http://127.0.0.1:4173`, paste or edit a workflow, and run it.
 
----
+For additional setup paths, see [Getting started](./docs/02-getting-started.md).
 
-## Example: simple router
+## Quick language feel
 
-```wfs
+```nrv
 on external "user_message"
-  emit("triage", event.value)
-end
+  intent = agent(
+    "router",
+    event.value,
+    decide=["chat","search","other"],
+    retry_on_contract_violation=1,
+    on_contract_violation=emit("contract_violation", violation)
+  )
 
-on "triage"
-  result = agent("classifier", event.value, format="json")
-
-  if result.intent == "chat"
+  if intent == "chat"
     emit("chat_flow", event.value)
-  else if result.intent == "search"
+  else if intent == "search"
     emit("search_flow", event.value)
   else
-    emit("fallback", event.value)
+    emit("route_unclear", event.value)
   end
 end
 
-on "chat_flow"
-  reply = agent("chat", event.value)
-  emit("user_output", reply)
+on "route_unclear"
+  output text "Do you want chat help or search help?"
 end
 
-on "search_flow"
-  reply = agent("searcher", event.value)
-  emit("user_output", reply)
-end
-
-on "fallback"
-  emit("user_output", "I didn't understand that.")
-end
-
-on "user_output"
-  output text event.value
+on "contract_violation"
+  output text "I did not understand that safely. Please rephrase."
 end
 ```
 
-Routing is explicit.
-State is explicit.
-Nothing is hidden inside prompts.
+Minimal surface. Hidden depth.
 
----
+That small contract boundary can provide, depending on configuration:
 
-## Runtime vs Host
+- runtime validation
+- bounded retries
+- deterministic routing
+- explicit failure handling
 
-**Nerveflow runtime**
+Expression support includes arithmetic (`+`, `-`, `*`, `/`), comparisons, and logical operators.
 
-- deterministic execution
-- event routing
-- explicit state (`state.*`)
-- agent / tool orchestration
+## Failure envelopes with try
 
-**Host (your app)**
+For supported `agent(...)` and `model(...)` operations, `try` can convert supported operational/contract failures into explicit envelope values.
 
-- persistence (files, DB, etc.)
-- APIs and integrations
-- input formats (text, images, files)
-- deployment (CLI, web, backend)
+```nrv
+on external "user_message"
+  result = try agent("router", event.value, decide=["chat", "search", "other"])
 
----
+  if result.ok
+    emit("route", result.value)
+  else
+    output text "I hit a guarded failure: ${result.error.type}"
+  end
+end
+```
 
-## Philosophy & Scope
+See [Language reference](./docs/03-language-reference.md) and [explicit runtime failure envelopes](./docs/spec-explicit-runtime-failure-envelopes.md) for supported modes and limits.
 
-### What Nerveflow focuses on
+## Runtime vs host
 
-Nerveflow is intentionally focused on **control flow and execution semantics**.
+Runtime responsibilities:
 
-It defines:
+- deterministic execution order
+- event routing and state transitions
+- contract validation and binding
+- bounded control flow
+- orchestration boundaries for tools, agents, and scripts
 
-- how workflows run
-- how state evolves
-- how decisions are routed
+Host responsibilities:
 
-Everything else — integrations, persistence layers, external APIs, multimodal inputs — belongs to the host environment.
+- persistence and infrastructure
+- APIs and external integrations
+- ingress connectors
+- effect realizers
+- transport surfaces
+- deployment and operational topology
 
-### What's evolving around it
-
-Additional layers are being built around the core:
-
-- host integrations (APIs, databases, external systems)
-- persistence adapters (file, DB, distributed state)
-- testing and evaluation tooling for workflows
-
-These evolve **without changing how workflows are written**.
-
-Because workflows are deterministic and state is explicit, Nerveflow is designed to support reproducible testing and evaluation. Tooling around this is under active development.
-
-### Why this approach
-
-If the core is right, everything else can grow around it.
-If the core is wrong, features won't fix it.
-
-Nerveflow is built by getting the core right first.
-
----
+The runtime governs execution.
+Hosts connect it to the world.
 
 ## Getting started
 
-### 1. Install
+Choose the path that matches your goal.
+
+### Path A: Use Nerveflow as a library
 
 ```bash
 npm install nerveflow
 ```
 
-### 2. Run the example host
-
-```bash
-cd node_modules/nerveflow/examples/minimal-web-host
-npm install
-node server.js
-```
-
-Open `http://127.0.0.1:4173` in your browser. Write scripts, run them, inspect state and execution events.
-
-### 3. Use in your code
-
 ```js
 import { runNextVScript } from 'nerveflow'
 
-const result = await runNextVScript(`
-state.count = state.count + 1
-remaining = 10 - state.count
-output text "count=${state.count}"
-output text "remaining=${remaining}"
-`, {
+const source = `
+on external "user_message"
+  state.count = state.count + 1
+  output text "count=${state.count}"
+end
+`
+
+const result = await runNextVScript(source, {
   state: { count: 0 },
+  event: { type: 'user_message', value: 'hello' },
 })
 
 console.log(result.state.count)
 ```
 
----
+### Path B: Run a reference host from this repository
 
-## Learn more
+```bash
+cd examples/minimal-web-host
+npm install
+npm start
+```
 
-- [Full documentation](./docs/)
-- [Language reference](./docs/03-language-reference.md)
-- [Host integration guide](./docs/04-host-integration.md)
-- [Production readiness checklist](./docs/11-production-readiness.md) (for maintainers and release planning)
-- [Docker deployment guide](./docs/12-docker-deployment.md)
-- [Runtime module notes](./src/runtime/README.md)
-- [Example workflows](./docs/examples/)
+Then open `http://127.0.0.1:4173`.
 
-Expression note: Nerveflow supports `+`, `-`, `*`, `/`, comparisons, and logical operators directly in workflow expressions. See the language reference for precedence and coercion rules.
-
----
-
-## Standalone runtime + attach
-
-Run Nerveflow as a dedicated runtime process:
+### Path C: Run standalone runtime + attach
 
 ```bash
 node bin/nerve-runtime.js start examples/mqtt-simple-host --port 4190
-```
-
-Attach from another terminal:
-
-```bash
 node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws snapshot
 node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws enqueue user_message hello
-node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws stop
-```
-
-Stream runtime events:
-
-```bash
 node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws listen
 ```
 
-Start runtime and remote Studio together:
+## Public APIs
 
-```bash
-node bin/nerve-dev-remote.js examples/mqtt-simple-host
+Recommended subpath imports:
+
+```js
+import { createHostAdapter } from 'nerveflow/host_core'
+import { createRuntimeCore, createRuntimeResolvers } from 'nerveflow/runtime'
 ```
 
-This launcher is a repository development utility and is not part of the published npm runtime artifact.
-Use it when working from a full repository checkout.
+Top-level runtime helper imports remain in a compatibility window, but new integrations should use `nerveflow/runtime`.
 
-See the host guide for full details and protocol semantics: [Host integration guide](./docs/04-host-integration.md).
-For workspace capability scaffolding and diagnostics (`modules`, `doctor`, `add memory-pgvector`, `add speech`), see the Compose CLI section in the host guide.
+## Docs map
 
-Deploy one workflow workspace as a containerized app with the root [Dockerfile](./Dockerfile), [docker-compose.yml](./docker-compose.yml), and [Docker deployment guide](./docs/12-docker-deployment.md).
+Start here:
 
----
+- [Documentation index](./docs/README.md)
+- [What is Nerveflow](./docs/01-what-is-nerve.md)
+- [Getting started](./docs/02-getting-started.md)
+- [Language reference](./docs/03-language-reference.md)
+- [Host integration guide](./docs/04-host-integration.md)
+- [Platform vision](./docs/05-platform-vision.md)
 
-## Run tests
+Workflow generation docs:
+
+- [Project generator guide](./docs/project-generation/project-generator-guide.md)
+- [Workflow generation rules](./docs/project-generation/workflow-generation-rules.md)
+- [Agent language reference (project generation)](./docs/project-generation/agent-language-reference.md)
+- [Workflow checklists](./docs/project-generation/workflow-checklists.md)
+- [Canonical snippets](./docs/project-generation/canonical-snippets.md)
+
+Operations:
+
+- [Production readiness](./docs/11-production-readiness.md)
+- [Docker deployment](./docs/12-docker-deployment.md)
+
+## Status
+
+Nerveflow is stable in the core runtime and language layer:
+
+- deterministic execution model
+- explicit event/effect semantics
+- contract-bounded model call behavior
+
+Surrounding ecosystem layers are active work areas and evolving quickly:
+
+- host module composition
+- connector and effect adapters
+- workflow evaluation and tooling
+
+## Development
+
+Run tests:
 
 ```bash
 npm test
 ```
 
-Packaged runtime smoke validation:
+Packaged runtime smoke check:
 
 ```bash
 npm run test:pack-smoke
 ```
-
----
-
-## Status
-
-Nerveflow is a stable, early-stage project focused on the core runtime and workflow model.
-
-The execution model, state handling, and DSL are stable and maturing.
-Integrations, persistence adapters, and testing tools are evolving around it.
-
----
 
 ## License
 

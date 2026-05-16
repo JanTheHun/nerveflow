@@ -155,7 +155,7 @@ relevant = cut(results, "similarity", ">=", 0.6)
 Recognized integration calls:
 
 - `tool(name, ...)`
-- `agent(agentName, prompt?, instructions?, messages=?, format=?, returns=?, validate=?, retry_on_contract_violation=?, on_contract_violation=?)`
+- `agent(agentName, prompt?, instructions?, messages=?, format=?, returns=?, validate=?, decide=?, retry_on_contract_violation=?, on_contract_violation=?)`
 - `model(modelName, prompt?, instructions?, messages=?, format=?, returns=?, validate=?, retry_on_contract_violation=?, on_contract_violation=?)`
 
 `model()` has the same signature and semantics as `agent()`, but takes a direct model identifier instead of an agent profile name. The model name is passed directly to the transport layer.
@@ -171,6 +171,20 @@ reply = agent("visual", messages=history)
 ```
 
 `returns` accepts a JSON-like object or array contract template for structured agent output. When present, NerveFlow treats the call as JSON output mode and validates the parsed output against the contract.
+
+`decide` (agent only) is scalar bounded-decision shorthand. It accepts an array of string options and returns a single string value constrained to that set.
+
+Example:
+
+```
+intent = agent(
+  "router",
+  event.value,
+  decide=["chat", "search", "other"]
+)
+```
+
+Use `decide` for single routing decisions. Use `returns` for structured object/array outputs. `decide` and `returns` are mutually exclusive for the same call.
 
 Contracts can also be loaded from JSON files with standard value expressions:
 

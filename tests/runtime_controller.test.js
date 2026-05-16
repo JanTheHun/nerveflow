@@ -140,8 +140,11 @@ test('buildInactiveSnapshot returns deterministic shape', () => {
 test('buildInactiveCandidateStatus returns deterministic shape', () => {
   assert.deepEqual(buildInactiveCandidateStatus(), {
     status: 'none',
+    candidateId: '',
+    definitionHash: '',
     policy: 'warn',
     submittedAt: null,
+    validatedAt: null,
     workspaceDir: '',
     entrypointPath: '',
     issues: [],
@@ -290,6 +293,10 @@ test('controller submitCandidate reports rejected candidate without mutating act
   const queuedAfter = controller.enqueue({ type: 'user_message', value: 'after-candidate' })
 
   assert.equal(candidate.status, 'rejected')
+  assert.equal(typeof candidate.candidateId, 'string')
+  assert.equal(candidate.candidateId.startsWith('candidate_'), true)
+  assert.equal(typeof candidate.definitionHash, 'string')
+  assert.equal(candidate.definitionHash.length, 64)
   assert.equal(candidate.workspaceConfig.agentsSource, 'agents.bad.json')
   assert.equal(candidate.issues.some((issue) => issue.code === 'FORBIDDEN_AGENT_FIELD'), true)
   assert.equal(queuedBefore.snapshot.running, true)
@@ -374,10 +381,14 @@ test('controller promoteCandidate applies candidate and resets candidate status'
   await controller.start({ entrypointPath: 'main.nrv' })
   const candidate = controller.submitCandidate()
   assert.equal(candidate.status, 'promotable')
+  assert.equal(candidate.candidateId.startsWith('candidate_'), true)
+  assert.equal(candidate.definitionHash.length, 64)
 
   const promoted = controller.promoteCandidate()
 
   assert.equal(promoted.workspaceConfig.agentsSource, 'agents.v2.json')
+  assert.equal(promoted.activeDefinitionId.startsWith('definition_'), true)
+  assert.equal(promoted.definitionHash.length, 64)
   assert.equal(
     published.some((entry) => entry.eventName === 'nextv_candidate_promoted'),
     true,
@@ -388,6 +399,43 @@ test('controller promoteCandidate applies candidate and resets candidate status'
   )
   const status = controller.getDefinitionStatus()
   assert.equal(status.candidate.status, 'none')
+  assert.equal(status.active.activeDefinitionId.startsWith('definition_'), true)
+  assert.equal(status.active.definitionHash.length, 64)
+})
+
+test('controller promoteCandidate rejects stale candidate definition', async () => {
+  const configStart = {
+    agents: { status: 'loaded', source: 'agents.v1.json', profiles: {} },
+    tools: { status: 'loaded', source: 'tools.json', allow: null, aliases: {} },
+    nextv: { status: 'loaded', file: 'nextv.json', config: {}, timers: [], timersSource: '' },
+    operators: { status: 'missing', source: '', map: {} },
+  }
+  const configCandidate = {
+    ...configStart,
+    agents: { status: 'loaded', source: 'agents.v2.json', profiles: {} },
+  }
+  const configChangedAfterSubmit = {
+    ...configStart,
+    agents: { status: 'loaded', source: 'agents.v3.json', profiles: {} },
+  }
+  const loadedConfigs = [configStart, configCandidate, configChangedAfterSubmit]
+  let loadIndex = 0
+
+  const { controller } = createController({
+    loadWorkspaceConfig: () => loadedConfigs[Math.min(loadIndex++, loadedConfigs.length - 1)],
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  const candidate = controller.submitCandidate()
+  assert.equal(candidate.status, 'promotable')
+
+  assert.throws(
+    () => controller.promoteCandidate(),
+    /candidate is stale/i,
+  )
+
+  const status = controller.getDefinitionStatus()
+  assert.equal(status.candidate.status, 'promotable')
 })
 
 test('controller start warns for unsupported declared effects in warn mode and continues startup', async () => {

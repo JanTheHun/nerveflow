@@ -322,3 +322,59 @@ test('runner emits startup init signal once before first external event', async 
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('runner caches compiled entrypoint by default across event cycles', async () => {
+  const { dir, scriptPath } = createScript('state.counter = state.counter + 1')
+
+  try {
+    const runner = new NextVEventRunner({
+      entrypointPath: scriptPath,
+      initialState: { counter: 0 },
+    })
+
+    runner.start()
+    runner.enqueue({ value: 'first' })
+    await runner.waitForIdle()
+
+    // If the runner recompiles each cycle, the second event would use +10.
+    writeFileSync(scriptPath, 'state.counter = state.counter + 10', 'utf8')
+
+    runner.enqueue({ value: 'second' })
+    await runner.waitForIdle()
+    runner.stop()
+
+    const snapshot = runner.getSnapshot()
+    assert.equal(snapshot.executionCount, 2)
+    assert.equal(snapshot.state.counter, 2)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('runner can opt out of entrypoint precompile cache', async () => {
+  const { dir, scriptPath } = createScript('state.counter = state.counter + 1')
+
+  try {
+    const runner = new NextVEventRunner({
+      entrypointPath: scriptPath,
+      initialState: { counter: 0 },
+      precompileEntrypoint: false,
+    })
+
+    runner.start()
+    runner.enqueue({ value: 'first' })
+    await runner.waitForIdle()
+
+    writeFileSync(scriptPath, 'state.counter = state.counter + 10', 'utf8')
+
+    runner.enqueue({ value: 'second' })
+    await runner.waitForIdle()
+    runner.stop()
+
+    const snapshot = runner.getSnapshot()
+    assert.equal(snapshot.executionCount, 2)
+    assert.equal(snapshot.state.counter, 11)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

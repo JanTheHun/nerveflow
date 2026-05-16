@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 export function buildInactiveSnapshot() {
   return {
     running: false,
@@ -11,11 +13,41 @@ export function buildInactiveSnapshot() {
 export function buildInactiveCandidateStatus() {
   return {
     status: 'none',
+    candidateId: '',
+    definitionHash: '',
     policy: 'warn',
     submittedAt: null,
+    validatedAt: null,
     workspaceDir: '',
     entrypointPath: '',
     issues: [],
+  }
+}
+
+function stableStringify(value) {
+  if (value == null || typeof value !== 'object') {
+    return JSON.stringify(value)
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry)).join(',')}]`
+  }
+
+  const keys = Object.keys(value).sort()
+  const pairs = keys.map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+  return `{${pairs.join(',')}}`
+}
+
+function buildDefinitionIdentity({ workspaceDir, entrypointPath, workspaceConfigSummary }) {
+  const material = stableStringify({
+    workspaceDir,
+    entrypointPath,
+    workspaceConfig: workspaceConfigSummary,
+  })
+  const definitionHash = createHash('sha256').update(material).digest('hex')
+  return {
+    definitionHash,
+    candidateId: `candidate_${definitionHash.slice(0, 16)}`,
+    activeDefinitionId: `definition_${definitionHash.slice(0, 16)}`,
   }
 }
 
@@ -74,6 +106,10 @@ export function createNextVRuntimeController({
   let nextVWorkspaceDirResolved = null
   let nextVWorkspaceConfig = null
   let nextVRuntimeCallHooks = null
+  let nextVActiveDefinition = {
+    activeDefinitionId: '',
+    definitionHash: '',
+  }
   let nextVCandidateStatus = buildInactiveCandidateStatus()
 
   function normalizeRuntimeEventSourcePath(pathValue) {
@@ -120,6 +156,10 @@ export function createNextVRuntimeController({
     nextVRuntimeCallHooks = null
     nextVWorkspaceConfig = null
     nextVWorkspaceDirResolved = null
+    nextVActiveDefinition = {
+      activeDefinitionId: '',
+      definitionHash: '',
+    }
     nextVCandidateStatus = buildInactiveCandidateStatus()
     return snapshot
   }
@@ -379,6 +419,16 @@ export function createNextVRuntimeController({
     nextVEntrypointPath = entrypoint.relativePath
     nextVWorkspaceDirResolved = workspaceDir
     nextVWorkspaceConfig = workspaceConfig
+    const workspaceConfigSummary = summarizeWorkspaceConfig(workspaceConfig)
+    const activeIdentity = buildDefinitionIdentity({
+      workspaceDir: workspaceDir.relativePath,
+      entrypointPath: entrypoint.relativePath,
+      workspaceConfigSummary,
+    })
+    nextVActiveDefinition = {
+      activeDefinitionId: activeIdentity.activeDefinitionId,
+      definitionHash: activeIdentity.definitionHash,
+    }
     const runtimeCallHooks = createHostAdapter({
       workspaceDir,
       workspaceConfig,
@@ -565,17 +615,10 @@ export function createNextVRuntimeController({
       stateLoadSource,
       stateLoadPath: stateLoadDisplayPath || null,
       workspaceConfig: {
-        models: workspaceConfig?.models?.status || 'not-loaded',
-        agents: workspaceConfig?.agents?.status || 'not-loaded',
-        tools: workspaceConfig?.tools?.status || 'not-loaded',
-        nextv: workspaceConfig?.nextv?.status || 'not-loaded',
-        operators: workspaceConfig?.operators?.status || 'not-loaded',
-        modelsSource: workspaceConfig?.models?.source || null,
-        agentsSource: workspaceConfig?.agents?.source || null,
-        toolsSource: workspaceConfig?.tools?.source || null,
-        nextvSource: workspaceConfig?.nextv?.file || null,
-        operatorsSource: workspaceConfig?.operators?.source || null,
+        ...workspaceConfigSummary,
       },
+      activeDefinitionId: nextVActiveDefinition.activeDefinitionId,
+      definitionHash: nextVActiveDefinition.definitionHash,
       timers: {
         configured: Array.isArray(workspaceConfig.nextv.timers) ? workspaceConfig.nextv.timers.length : 0,
         source: workspaceConfig.nextv.timersSource || null,
@@ -639,6 +682,16 @@ export function createNextVRuntimeController({
 
     nextVWorkspaceDirResolved = workspaceDir
     nextVWorkspaceConfig = workspaceConfig
+    const workspaceConfigSummary = summarizeWorkspaceConfig(workspaceConfig)
+    const activeIdentity = buildDefinitionIdentity({
+      workspaceDir: workspaceDir.relativePath,
+      entrypointPath: nextVEntrypointPath,
+      workspaceConfigSummary,
+    })
+    nextVActiveDefinition = {
+      activeDefinitionId: activeIdentity.activeDefinitionId,
+      definitionHash: activeIdentity.definitionHash,
+    }
     if (nextVRuntimeCallHooks && typeof nextVRuntimeCallHooks.clearConfigCache === 'function') {
       nextVRuntimeCallHooks.clearConfigCache()
     }
@@ -646,7 +699,9 @@ export function createNextVRuntimeController({
     const payload = {
       workspaceDir: workspaceDir.relativePath,
       entrypointPath: nextVEntrypointPath,
-      workspaceConfig: summarizeWorkspaceConfig(workspaceConfig),
+      workspaceConfig: workspaceConfigSummary,
+      activeDefinitionId: nextVActiveDefinition.activeDefinitionId,
+      definitionHash: nextVActiveDefinition.definitionHash,
     }
     eventBus.publish('nextv_config_reloaded', payload)
     return payload
@@ -660,8 +715,17 @@ export function createNextVRuntimeController({
     const workspaceDir = nextVWorkspaceDirResolved || resolveWorkspaceDirectory(nextVWorkspaceDir)
     const workspaceConfig = loadWorkspaceConfig(workspaceDir)
     const effectsPolicy = normalizeEffectsPolicy(workspaceConfig?.nextv?.config?.effectsPolicy)
+    const workspaceConfigSummary = summarizeWorkspaceConfig(workspaceConfig)
+    const candidateIdentity = buildDefinitionIdentity({
+      workspaceDir: workspaceDir.relativePath,
+      entrypointPath: nextVEntrypointPath,
+      workspaceConfigSummary,
+    })
+    const submittedAt = new Date().toISOString()
 
     eventBus.publish('nextv_candidate_validation_started', {
+      candidateId: candidateIdentity.candidateId,
+      definitionHash: candidateIdentity.definitionHash,
       workspaceDir: workspaceDir.relativePath,
       entrypointPath: nextVEntrypointPath,
       policy: effectsPolicy,
@@ -671,11 +735,14 @@ export function createNextVRuntimeController({
     const rejected = issues.some((issue) => issue.severity === 'error')
     const payload = {
       status: rejected ? 'rejected' : 'promotable',
+      candidateId: candidateIdentity.candidateId,
+      definitionHash: candidateIdentity.definitionHash,
       policy: effectsPolicy,
-      submittedAt: new Date().toISOString(),
+      submittedAt,
+      validatedAt: submittedAt,
       workspaceDir: workspaceDir.relativePath,
       entrypointPath: nextVEntrypointPath,
-      workspaceConfig: summarizeWorkspaceConfig(workspaceConfig),
+      workspaceConfig: workspaceConfigSummary,
       issues,
     }
     nextVCandidateStatus = payload
@@ -695,6 +762,18 @@ export function createNextVRuntimeController({
     }
     if (nextVCandidateStatus.status !== 'promotable') {
       throw new Error('no promotable candidate — run submitCandidate first')
+    }
+
+    const workspaceDir = nextVWorkspaceDirResolved || resolveWorkspaceDirectory(nextVWorkspaceDir)
+    const workspaceConfig = loadWorkspaceConfig(workspaceDir)
+    const workspaceConfigSummary = summarizeWorkspaceConfig(workspaceConfig)
+    const currentIdentity = buildDefinitionIdentity({
+      workspaceDir: workspaceDir.relativePath,
+      entrypointPath: nextVEntrypointPath,
+      workspaceConfigSummary,
+    })
+    if (currentIdentity.definitionHash !== nextVCandidateStatus.definitionHash) {
+      throw new Error('candidate is stale — run submitCandidate again before promoteCandidate')
     }
 
     const reloaded = reloadConfig()
@@ -783,6 +862,8 @@ export function createNextVRuntimeController({
         running: Boolean(nextVRunner),
         workspaceDir: nextVWorkspaceDir,
         entrypointPath: nextVEntrypointPath,
+        activeDefinitionId: nextVActiveDefinition.activeDefinitionId,
+        definitionHash: nextVActiveDefinition.definitionHash,
       },
       candidate: nextVCandidateStatus,
     }

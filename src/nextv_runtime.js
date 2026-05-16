@@ -2972,13 +2972,26 @@ function resolveDeclaredEffectChannel(channelName, effectChannelsRaw) {
   return null
 }
 
-export async function runNextVScript(source, options = {}) {
-  const runtimeOptions = normalizeRuntimeOptions(options)
-  const statements = parseNextVScript(source, { baseDir: runtimeOptions.baseDir, filePath: runtimeOptions.filePath })
+function compileNextVSource(source, options = {}) {
+  const statements = parseNextVScript(source, { baseDir: options.baseDir, filePath: options.filePath })
   const instructions = compileAST(statements, {
-    strict: runtimeOptions.strict === true,
+    strict: options.strict === true,
     errorFactory: nextvError,
   })
+  return { instructions }
+}
+
+export async function runNextVScript(source, options = {}) {
+  const runtimeOptions = normalizeRuntimeOptions(options)
+  const precompiledInstructions = Array.isArray(runtimeOptions.instructions)
+    ? runtimeOptions.instructions
+    : null
+  const instructions = precompiledInstructions
+    ?? compileNextVSource(source, {
+      baseDir: runtimeOptions.baseDir,
+      filePath: runtimeOptions.filePath,
+      strict: runtimeOptions.strict,
+    }).instructions
 
   // Emit event contract warnings as runtime warning events.
   const runtimeDeclaredExternals = Array.isArray(runtimeOptions.declaredExternals)
@@ -3407,10 +3420,30 @@ export function parseNextVScriptFromFile(filePath, options = {}) {
   return parseNextVScript(source, { baseDir, filePath: absolutePath })
 }
 
-export async function runNextVScriptFromFile(filePath, options = {}) {
+export function compileNextVScriptFromFile(filePath, options = {}) {
   const absolutePath = resolve(filePath)
   const source = readFileSync(absolutePath, 'utf8')
   const baseDir = options.baseDir ?? dirname(absolutePath)
+  const { instructions } = compileNextVSource(source, {
+    baseDir,
+    filePath: absolutePath,
+    strict: options.strict,
+  })
+  return {
+    filePath: absolutePath,
+    baseDir,
+    instructions,
+  }
+}
+
+export async function runNextVScriptFromFile(filePath, options = {}) {
+  const absolutePath = resolve(filePath)
+  const baseDir = options.baseDir ?? dirname(absolutePath)
+  if (Array.isArray(options.instructions)) {
+    return runNextVScript('', { ...options, baseDir, filePath: absolutePath })
+  }
+
+  const source = readFileSync(absolutePath, 'utf8')
   return runNextVScript(source, { ...options, baseDir, filePath: absolutePath })
 }
 

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { runNextVScriptFromFile } from './nextv_runtime.js'
+import { compileNextVScriptFromFile, runNextVScriptFromFile } from './nextv_runtime.js'
 
 function cloneState(state) {
   if (state == null || typeof state !== 'object' || Array.isArray(state)) return {}
@@ -29,9 +29,11 @@ export class NextVEventRunner {
     this.onEvent = typeof options.onEvent === 'function' ? options.onEvent : null
     this.outputHandlers = isPlainObject(options.outputHandlers) ? options.outputHandlers : {}
     this.runFn = typeof options.runFn === 'function' ? options.runFn : runNextVScriptFromFile
+    this.precompileEntrypoint = options.precompileEntrypoint !== false
     this.emitInitOnStart = options.emitInitOnStart !== false
     this.initSignalType = String(options.initSignalType ?? 'init').trim() || 'init'
     this.initSignalValue = options.initSignalValue ?? null
+    this.compiledEntrypointInstructions = null
 
     this.running = false
     this.busy = false
@@ -201,8 +203,14 @@ export class NextVEventRunner {
         const shouldEmitInit = this.initPending
         this.initPending = false
 
+        if (this.precompileEntrypoint && this.compiledEntrypointInstructions == null) {
+          const compiled = compileNextVScriptFromFile(this.entrypointPath, this.defaultRunOptions)
+          this.compiledEntrypointInstructions = compiled.instructions
+        }
+
         const result = await this.runFn(this.entrypointPath, {
           ...this.defaultRunOptions,
+          ...(this.compiledEntrypointInstructions ? { instructions: this.compiledEntrypointInstructions } : {}),
           state: this.state,
           event,
           autoInitSignalType: shouldEmitInit ? this.initSignalType : '',

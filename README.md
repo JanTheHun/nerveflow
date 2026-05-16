@@ -180,7 +180,7 @@ import { runNextVScript } from 'nerveflow'
 const source = `
 on external "user_message"
   state.count = state.count + 1
-  output text "count=${state.count}"
+  output text "count=\${state.count}"
 end
 `
 

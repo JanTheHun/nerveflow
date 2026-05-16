@@ -21,22 +21,29 @@ app.get('/', (_req, res) => {
 function createHostAdapter() {
   return {
     // Host-owned implementations: replace these stubs with your real integrations.
-    async callTool(name, args) {
+    async callTool({ name, args }) {
       if (name === 'get_time') return new Date().toISOString()
       return JSON.stringify({ ok: true, tool: name, args: args ?? {} })
     },
-    async callAgent(prompt) {
+    async callAgent({ prompt, messages }) {
+      const fallbackPrompt = Array.isArray(messages)
+        ? messages.map((entry) => String(entry?.content ?? '')).filter(Boolean).join('\n')
+        : ''
       return JSON.stringify({
         status: 'ready',
         decision: 'mock',
-        prompt,
+        prompt: String(prompt ?? fallbackPrompt),
       })
     },
-    async callScript(path, state) {
+    async callScript({ path, state, event, locals, executionRole, onEvent }) {
       const source = readFileSync(path, 'utf8')
       const result = await runNextVScript(source, {
         state,
+        event,
+        locals,
+        executionRole,
         hostAdapter: createHostAdapter(),
+        onEvent,
       })
       return {
         state: result.state,
@@ -56,8 +63,10 @@ app.post('/run', async (req, res) => {
       ? req.body.source
       : readFileSync(exampleScriptPath, 'utf8')
 
-    const inputEvent = req.body?.event ?? { type: 'user_message', value: 'hello' }
-    const state = req.body?.state && typeof req.body.state === 'object' ? req.body.state : {}
+    const inputEvent = req.body?.event ?? { type: 'user_message', value: 'hello nerve' }
+    const state = req.body?.state && typeof req.body.state === 'object'
+      ? req.body.state
+      : { total_messages: 0, last_message: '' }
     const runtimeEvents = []
 
     const result = await runNextVScript(source, {

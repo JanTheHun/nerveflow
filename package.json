@@ -73,6 +73,7 @@
     "examples/minimal-web-host/public/index.html",
     "LICENSE",
     "README.md",
+    "NERVEFLOW_AGENT_RULES.md",
     "CHANGELOG.md",
     ".npmignore"
   ]

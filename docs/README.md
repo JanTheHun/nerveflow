@@ -40,6 +40,10 @@ This documentation is for **users building workflows with Nerveflow**.
 - [11-production-readiness.md](11-production-readiness.md) — Production readiness gates and pre-publish checklist
 - [12-docker-deployment.md](12-docker-deployment.md) — Deploy one workflow workspace as a Dockerized app
 
+## Host patterns
+
+- [examples/multi-surface-attachment-pattern.md](examples/multi-surface-attachment-pattern.md)
+
 ## Editor-Core Companion Package
 
 - [../packages/editor-core/README.md](../packages/editor-core/README.md) — package API, usage, and source-of-truth workflow

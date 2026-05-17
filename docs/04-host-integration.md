@@ -49,6 +49,13 @@ Compatibility note:
 - top-level runtime helper imports from `nerveflow` still work during the compatibility window
 - new integrations should import runtime authority APIs from `nerveflow/runtime`
 
+Naming transition note:
+
+- `nerve` and `Nerveflow` are the canonical public names going forward
+- some APIs, config filenames, and protocol identifiers still use legacy `nextv` naming during the compatibility transition
+- for new integrations, prefer `nerve`/`Nerveflow` terminology and surfaces
+- legacy `nextv` names remain supported during this transition window; future cleanup will be announced with explicit migration guidance before removals
+
 Migration example:
 
 ```js
@@ -182,8 +189,8 @@ Behavior and boundaries:
 
 `nerveflow/host_core/protocol` provides a transport-agnostic envelope contract for multi-surface hosts.
 
-- command types: `start`, `stop`, `enqueue_event`, `dispatch_ingress`, `snapshot`, `subscribe`, `unsubscribe`
-- canonical event names: `nextv_started`, `nextv_stopped`, `nextv_warning`, `nextv_runtime_event`, `nextv_execution`, `nextv_error`, `nextv_timer_pulse`, `nextv_event_queued`
+- command types: `start`, `stop`, `enqueue_event`, `dispatch_ingress`, `call_inspector_execute`, `submit_candidate`, `promote_candidate`, `snapshot`, `definition_status`, `subscribe`, `unsubscribe`
+- canonical event names: `nextv_started`, `nextv_stopped`, `nextv_warning`, `nextv_runtime_event`, `nextv_execution`, `nextv_error`, `nextv_timer_pulse`, `nextv_event_queued`, `nextv_ingress_dispatched`, `nextv_effect_realized`, `nextv_candidate_validation_started`, `nextv_candidate_validation_failed`, `nextv_candidate_promotable`, `nextv_candidate_promoted`
 - canonical error codes: `policy_denied`, `unavailable`, `validation_error`, `runtime_error`, `not_active`, `already_active`
 
 Use these helpers to validate inbound commands and shape outbound response/event envelopes consistently across HTTP, SSE, WebSocket, and in-process SDK surfaces.
@@ -257,7 +264,10 @@ Supported WebSocket command types map directly to protocol v1 commands:
 - `enqueue_event`
 - `dispatch_ingress`
 - `call_inspector_execute`
+- `submit_candidate`
+- `promote_candidate`
 - `snapshot`
+- `definition_status`
 - `subscribe`
 - `unsubscribe`
 
@@ -550,7 +560,7 @@ const eventBus = createEventBus()
 const controller = createNextVRuntimeController({ eventBus, /* ...resolvers */ })
 
 // MQTT client (control surface): sends commands to controller
-mqttClient.subscribe('nerve/command', async (msg) => {
+mqttClient.subscribe('nextv/command', async (msg) => {
   const command = validateHostProtocolCommand(JSON.parse(msg))
   if (command.type === 'start') await controller.start(command.payload)
   if (command.type === 'enqueue_event') controller.enqueue(command.payload)
@@ -577,6 +587,8 @@ When the web UI closes, the runtime continues executing and the MQTT surface rem
 - Event bus handler errors are caught and isolated; failing handler is removed automatically
 
 See `src/host_core/README.md` for "Multi-Surface Attachment Model" design principles.
+
+For detailed architecture patterns and attachment/detachment scenarios, see `docs/examples/multi-surface-attachment-pattern.md`.
 
 ## Reference implementation
 

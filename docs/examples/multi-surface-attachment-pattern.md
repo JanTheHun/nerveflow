@@ -57,7 +57,7 @@ const controller = createNextVRuntimeController({ eventBus, /* ...resolvers */ }
 ```js
 mqttClient.on('connect', () => {
   // Subscribe to command topic
-  mqttClient.subscribe('nerve/command', async (msg) => {
+  mqttClient.subscribe('nextv/command', async (msg) => {
     const command = JSON.parse(msg)
     
     if (command.type === 'start') {
@@ -185,14 +185,21 @@ for (const handler of handlers) {
 
 ## Protocol Commands and Events
 
+Command support is host-dependent. The list below is the protocol v1 command surface; a specific host may return an unavailable/runtime error for commands it does not implement.
+
 ### Commands (sent to runtime controller)
 
 | Command | Purpose | Example |
 |---------|---------|---------|
 | `start` | Initialize and start runtime | `{ type: 'start', payload: { workspaceDir: '...' } }` |
 | `stop` | Halt runtime | `{ type: 'stop' }` |
-| `enqueue_event` | Feed input event to runtime | `{ type: 'enqueue_event', payload: { type: 'user_input', value: 'hello' } }` |
+| `enqueue_event` | Feed input event to runtime | `{ type: 'enqueue_event', payload: { eventType: 'user_message', value: 'hello' } }` |
+| `dispatch_ingress` | Dispatch ingress output into runtime queue | `{ type: 'dispatch_ingress', payload: { name: 'webhook', body: { ... } } }` |
+| `call_inspector_execute` | Execute a structured direct model/agent call (runtime command router hosts) | `{ type: 'call_inspector_execute', payload: { targetKind: 'agent', agent: 'router', prompt: 'route this', mode: 'call' } }` |
+| `submit_candidate` | Validate current active workspace/config as candidate | `{ type: 'submit_candidate' }` |
+| `promote_candidate` | Promote current validated candidate to active runtime | `{ type: 'promote_candidate' }` |
 | `snapshot` | Get current state | `{ type: 'snapshot' }` |
+| `definition_status` | Get active and candidate definition status | `{ type: 'definition_status' }` |
 | `subscribe` | Request event subscription | `{ type: 'subscribe' }` |
 | `unsubscribe` | Request event unsubscription | `{ type: 'unsubscribe' }` |
 
@@ -208,6 +215,12 @@ for (const handler of handlers) {
 | `nextv_runtime_event` | Input event received | `{ event: { type, value, source, ... } }` |
 | `nextv_timer_pulse` | Timer fired | `{ event: { type, value, ... } }` |
 | `nextv_event_queued` | Event added to queue | `{ event: { ... }, queueLength }` |
+| `nextv_ingress_dispatched` | Ingress dispatch routed and enqueued | `{ ingressName, dispatchedCount, ... }` |
+| `nextv_effect_realized` | Declared effect channel realized by host | `{ effectChannelId, output, ... }` |
+| `nextv_candidate_validation_started` | Candidate validation pipeline started | `{ candidateId, ... }` |
+| `nextv_candidate_validation_failed` | Candidate failed validation | `{ candidateId, errors, ... }` |
+| `nextv_candidate_promotable` | Candidate validated as promotable | `{ candidateId, ... }` |
+| `nextv_candidate_promoted` | Candidate promoted to active runtime | `{ candidateId, activeDefinitionId, ... }` |
 
 ## Surface Role Patterns
 

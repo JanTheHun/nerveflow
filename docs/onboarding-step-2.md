@@ -124,3 +124,5 @@ ollama pull llama3.2:latest
 ```bash
 npx nerve-model-check --model llama3.2:latest
 ```
+
+Next: continue with [onboarding-step-3.md](onboarding-step-3.md) to introduce Nerve Studio.

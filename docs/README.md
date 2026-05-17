@@ -6,6 +6,8 @@ This documentation is for **users building workflows with Nerveflow**.
 
 - [01-what-is-nerve.md](01-what-is-nerve.md)
 - [02-getting-started.md](02-getting-started.md)
+- [onboarding-step-2.md](onboarding-step-2.md)
+- [onboarding-step-3.md](onboarding-step-3.md)
 - [03-language-reference.md](03-language-reference.md)
 - [04-host-integration.md](04-host-integration.md)
 - [05-platform-vision.md](05-platform-vision.md)

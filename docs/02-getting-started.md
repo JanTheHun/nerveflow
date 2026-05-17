@@ -215,13 +215,19 @@ For command semantics and transport details, see the host integration guide.
 
 ## 7. Attach Studio UI to the standalone runtime (optional)
 
-Nerve Studio is not bundled in the `nerveflow` npm package. To run Studio, clone the GitHub repository and run the `nerve-studio` files from that checkout.
+Launch Studio from your workspace:
 
-With the runtime process running, attach Studio in remote WS full-control mode:
+```bash
+npx nerve-studio --remote-ws ws://127.0.0.1:4190/api/runtime/ws
+```
+
+Repository-local alternative:
 
 ```bash
 node nerve-studio/preview-server.js --remote-ws ws://127.0.0.1:4190/api/runtime/ws
 ```
+
+With the runtime process running, Studio attaches in remote WS full-control mode.
 
 Open:
 

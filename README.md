@@ -49,6 +49,11 @@ npx nerve-send <wsUrl> <eventType> [message]
 
 ## Nerve Studio
 
-Nerve Studio is not bundled in the npm package.
-Use a repository checkout to run files under [nerve-studio/](nerve-studio/).
+Launch with:
+
+```bash
+npx nerve-studio
+```
+
+Repository-local alternative: run files under [nerve-studio/](nerve-studio/).
 

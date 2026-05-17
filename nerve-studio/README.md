@@ -54,6 +54,14 @@ These are intentionally left out to keep the host boundary explicit.
 
 ## Run locally
 
+Installable path (preferred):
+
+```bash
+npx nerve-studio
+```
+
+Repository-local alternative:
+
 ```bash
 node nerve-studio/preview-server.js
 ```
@@ -69,10 +77,22 @@ http://localhost:4173
 Remote mode is explicit per launch.
 
 ```bash
+npx nerve-studio --remote --remote-mqtt mqtt://localhost:1883
+```
+
+Repository-local alternative:
+
+```bash
 node nerve-studio/preview-server.js --remote --remote-mqtt mqtt://localhost:1883
 ```
 
 Optional topic prefix override:
+
+```bash
+npx nerve-studio --remote --remote-mqtt mqtt://localhost:1883 --remote-mqtt-topic-prefix nextv/event
+```
+
+Repository-local alternative:
 
 ```bash
 node nerve-studio/preview-server.js --remote --remote-mqtt mqtt://localhost:1883 --remote-mqtt-topic-prefix nextv/event
@@ -82,7 +102,7 @@ You can also use environment fallback for the broker URL:
 
 ```powershell
 $env:NERVE_STUDIO_REMOTE_MQTT = 'mqtt://localhost:1883'
-node nerve-studio/preview-server.js --remote
+npx nerve-studio --remote
 ```
 
 Notes:
@@ -95,6 +115,12 @@ Notes:
 Attach Studio directly to a standalone runtime websocket endpoint:
 
 ```bash
+npx nerve-studio --remote-ws ws://127.0.0.1:4190/api/runtime/ws
+```
+
+Repository-local alternative:
+
+```bash
 node nerve-studio/preview-server.js --remote-ws ws://127.0.0.1:4190/api/runtime/ws
 ```
 
@@ -102,7 +128,7 @@ Or use env fallback:
 
 ```powershell
 $env:NERVE_STUDIO_REMOTE_WS = 'ws://127.0.0.1:4190/api/runtime/ws'
-node nerve-studio/preview-server.js --remote
+npx nerve-studio --remote
 ```
 
 Notes:

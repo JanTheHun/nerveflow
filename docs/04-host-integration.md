@@ -244,21 +244,27 @@ Examples:
 
 ```powershell
 # local mode
-node nerve-studio/preview-server.js
+npx nerve-studio
 
 # remote mode with explicit broker URL
-node nerve-studio/preview-server.js --remote --remote-mqtt mqtt://localhost:1883
+npx nerve-studio --remote --remote-mqtt mqtt://localhost:1883
 
 # remote mode with env fallback
 $env:NERVE_STUDIO_REMOTE_MQTT = 'mqtt://localhost:1883'
-node nerve-studio/preview-server.js --remote
+npx nerve-studio --remote
 
 # remote ws full-control mode
-node nerve-studio/preview-server.js --remote-ws ws://127.0.0.1:4190/api/runtime/ws
+npx nerve-studio --remote-ws ws://127.0.0.1:4190/api/runtime/ws
 
 # remote ws mode with env fallback
 $env:NERVE_STUDIO_REMOTE_WS = 'ws://127.0.0.1:4190/api/runtime/ws'
-node nerve-studio/preview-server.js --remote
+npx nerve-studio --remote
+```
+
+Repository-local alternative for any command above:
+
+```bash
+node nerve-studio/preview-server.js [same flags]
 ```
 
 The studio preview host supports HTTP and SSE surfaces. WebSocket transport is provided by the dedicated `ws-simple-host` example.

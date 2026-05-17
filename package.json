@@ -10,7 +10,8 @@
     "nerve-attach": "bin/nerve-attach.js",
     "nerve-model-check": "bin/nerve-model-check.js",
     "nerve-compose": "bin/nerve-compose.js",
-    "nerve-send": "bin/nerve-send.js"
+    "nerve-send": "bin/nerve-send.js",
+    "nerve-studio": "bin/nerve-studio.js"
   },
   "exports": {
     ".": "./src/index.js",
@@ -34,12 +35,12 @@
     "packages/*"
   ],
   "dependencies": {
+    "mqtt": "^5.15.1",
     "pg": "^8.13.1",
     "ws": "^8.18.3"
   },
   "devDependencies": {
-    "aedes": "^1.0.2",
-    "mqtt": "^5.15.1"
+    "aedes": "^1.0.2"
   },
   "homepage": "https://github.com/janthehun/nerveflow",
   "repository": {
@@ -65,7 +66,12 @@
     "bin/nerve-model-check.js",
     "bin/nerve-compose.js",
     "bin/nerve-send.js",
+    "bin/nerve-studio.js",
     "docs/",
+    "nerve-studio/preview-server.js",
+    "nerve-studio/mqtt-remote-bridge.js",
+    "nerve-studio/ws-remote-bridge.js",
+    "nerve-studio/public/",
     "examples/minimal-web-host/server.js",
     "examples/minimal-web-host/README.md",
     "examples/minimal-web-host/workflow.nrv",

@@ -136,6 +136,39 @@ test('runtime command router returns validation_error for malformed JSON', async
   assert.equal(response.error.code, 'validation_error')
 })
 
+test('runtime command router returns validation_error for undeclared external enqueue event', async () => {
+  const runtime = createRuntimeCore({
+    resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
+  })
+
+  const router = createRuntimeCommandRouter({
+    runtimeCore: runtime,
+    sessionId: 'runtime-test-session',
+  })
+
+  const startResponse = await router.handleRawCommand({
+    type: 'start',
+    requestId: 'start-undeclared-1',
+    payload: { workspaceDir: 'examples/mqtt-simple-host' },
+  })
+  assert.equal(startResponse.ok, true)
+
+  const enqueueResponse = await router.handleRawCommand({
+    type: 'enqueue_event',
+    requestId: 'enqueue-undeclared-1',
+    payload: { eventType: 'user_message', value: 'hello' },
+  })
+  assert.equal(enqueueResponse.ok, false)
+  assert.equal(enqueueResponse.error.code, 'validation_error')
+
+  const stopResponse = await router.handleRawCommand({
+    type: 'stop',
+    requestId: 'stop-undeclared-1',
+    payload: {},
+  })
+  assert.equal(stopResponse.ok, true)
+})
+
 test('runtime command router handles dispatch_ingress command', async () => {
   const runtime = {
     dispatchIngressCalls: [],

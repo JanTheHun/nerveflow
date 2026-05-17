@@ -9,7 +9,8 @@
     "nerve-runtime": "bin/nerve-runtime.js",
     "nerve-attach": "bin/nerve-attach.js",
     "nerve-model-check": "bin/nerve-model-check.js",
-    "nerve-compose": "bin/nerve-compose.js"
+    "nerve-compose": "bin/nerve-compose.js",
+    "nerve-send": "bin/nerve-send.js"
   },
   "exports": {
     ".": "./src/index.js",
@@ -63,6 +64,7 @@
     "bin/nerve-attach.js",
     "bin/nerve-model-check.js",
     "bin/nerve-compose.js",
+    "bin/nerve-send.js",
     "docs/",
     "examples/minimal-web-host/server.js",
     "examples/minimal-web-host/README.md",

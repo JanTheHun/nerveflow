@@ -788,6 +788,16 @@ export function createNextVRuntimeController({
     }
 
     const event = normalizeInputEvent(rawEvent)
+    const eventType = String(event?.type ?? '').trim()
+    const eventSource = String(event?.source ?? 'external').trim() || 'external'
+    const externalsConfigured = Array.isArray(nextVWorkspaceConfig?.nextv?.config?.externals)
+    const declaredExternals = getDeclaredExternals(nextVWorkspaceConfig)
+
+    // Preserve compatibility for workspaces that do not explicitly configure externals.
+    if (eventSource === 'external' && externalsConfigured && eventType && !declaredExternals.includes(eventType)) {
+      throw new Error(`invalid event type "${eventType}": not declared in workspace externals`)
+    }
+
     return enqueueNormalizedEvent(event)
   }
 

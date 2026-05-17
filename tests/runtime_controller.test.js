@@ -82,6 +82,7 @@ function createController(options = {}) {
     validateConfigReferences = () => [],
     validateNoForbiddenAgentFields = () => [],
     loadWorkspaceConfig = () => workspaceConfig,
+    getDeclaredExternals = () => [],
   } = options
 
   const controller = createNextVRuntimeController({
@@ -103,7 +104,7 @@ function createController(options = {}) {
     getConfiguredModules,
     validateEffectBindings,
     validateCapabilityBindings,
-    getDeclaredExternals: () => [],
+    getDeclaredExternals,
     normalizeEffectsPolicy,
     validateDeclaredEffectBindings,
     validateRequiredCapabilityBindings,
@@ -172,6 +173,77 @@ test('controller enqueue publishes queued event and snapshot while active', asyn
 
   assert.equal(queued.snapshot.running, true)
   assert.equal(published.some((entry) => entry.eventName === 'nextv_event_queued'), true)
+})
+
+test('controller enqueue rejects undeclared external events when externals are configured', async () => {
+  const { controller } = createController({
+    workspaceConfig: {
+      agents: { status: 'missing', source: '' },
+      tools: { status: 'missing', source: '' },
+      nextv: {
+        status: 'loaded',
+        file: 'nextv.json',
+        config: { externals: ['user_message'] },
+        timers: [],
+        timersSource: '',
+      },
+      operators: { status: 'missing', source: '' },
+    },
+    getDeclaredExternals: () => ['user_message'],
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+
+  assert.throws(
+    () => controller.enqueue({ type: 'random_channel', value: 'ping' }),
+    /invalid event type .*workspace externals/i,
+  )
+})
+
+test('controller enqueue allows declared external events when externals are configured', async () => {
+  const { controller } = createController({
+    workspaceConfig: {
+      agents: { status: 'missing', source: '' },
+      tools: { status: 'missing', source: '' },
+      nextv: {
+        status: 'loaded',
+        file: 'nextv.json',
+        config: { externals: ['user_message'] },
+        timers: [],
+        timersSource: '',
+      },
+      operators: { status: 'missing', source: '' },
+    },
+    getDeclaredExternals: () => ['user_message'],
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+
+  const queued = controller.enqueue({ type: 'user_message', value: 'ping' })
+  assert.equal(queued.snapshot.running, true)
+})
+
+test('controller enqueue remains permissive when externals are not explicitly configured', async () => {
+  const { controller } = createController({
+    workspaceConfig: {
+      agents: { status: 'missing', source: '' },
+      tools: { status: 'missing', source: '' },
+      nextv: {
+        status: 'loaded',
+        file: 'nextv.json',
+        config: {},
+        timers: [],
+        timersSource: '',
+      },
+      operators: { status: 'missing', source: '' },
+    },
+    getDeclaredExternals: () => ['user_message'],
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+
+  const queued = controller.enqueue({ type: 'random_channel', value: 'ping' })
+  assert.equal(queued.snapshot.running, true)
 })
 
 test('controller enqueue throws when runtime is inactive', () => {

@@ -9,6 +9,13 @@ npm install nerveflow
 ## 2. Write your first script
 
 ```nrv
+if state.total_messages == null
+  state.total_messages = 0
+end
+if state.last_message == null
+  state.last_message = ""
+end
+
 state.total_messages = state.total_messages + 1
 state.last_message = event.value
 
@@ -167,6 +174,8 @@ node bin/nerve-compose.js init
 
 This creates `nerve.json` (preferred config filename), `workflow.nrv`, and `state.init.json` (baseline state) when they are missing. If only `nextv.json` already exists, `init` leaves it unchanged for compatibility.
 
+For the generated demo workflow, `state.init.json` seeds `{ "count": 0 }`, so the first non-matching `user_message` returns `(no output, 1)`.
+
 Start the runtime process:
 
 ```bash
@@ -180,6 +189,8 @@ npx nerve-runtime start --port 4190
 ```
 
 Attach from another terminal:
+
+`nerve-send` syntax: `npx nerve-send <wsUrl> <eventType> [message]`
 
 ```bash
 npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws snapshot
@@ -203,6 +214,8 @@ npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws listen
 For command semantics and transport details, see the host integration guide.
 
 ## 7. Attach Studio UI to the standalone runtime (optional)
+
+Nerve Studio is not bundled in the `nerveflow` npm package. To run Studio, clone the GitHub repository and run the `nerve-studio` files from that checkout.
 
 With the runtime process running, attach Studio in remote WS full-control mode:
 

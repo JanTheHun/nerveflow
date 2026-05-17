@@ -10,7 +10,7 @@ This legacy page is being consolidated.
 
 ## Key concepts (reference)
 
-- Minimum shape: workflow.nrv + nextv.json + contracts/ + prompts/
+- Minimum shape: workflow.nrv + nerve.json (or nextv.json) + contracts/ + prompts/
 - Configuration: transports registry, models registry, agent profiles
 - Build order: external events ? routing ? outputs ? agent calls ? retries ? violations
 - Contract-first: write contracts before prompts

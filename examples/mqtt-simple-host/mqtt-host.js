@@ -17,7 +17,7 @@
  *   OLLAMA_MODEL               - default: '' (agent profile model is used first)
  *   LLAMA_CPP_BASE_URL         - default: http://127.0.0.1:8080 (used when AGENT_TRANSPORT=llama.cpp)
  *   MQTT_AUTOSTART_WORKSPACE   - workspace-relative path to auto-start on connect (e.g. nerve-studio/workspaces-local/chatbot)
- *   MQTT_AUTOSTART_ENTRYPOINT  - entrypoint path relative to workspace; optional if nextv.json declares it
+ *   MQTT_AUTOSTART_ENTRYPOINT  - entrypoint path relative to workspace; optional if nerve.json/nextv.json declares it
  *
  * Command-line flags:
  *   --workspace <path>         - workspace-relative project directory
@@ -155,7 +155,7 @@ function resolvePathFromBaseDirectory(baseDirectoryAbsolutePath, inputPath, kind
 function resolveEntrypoint(workspaceDir, requestedEntrypoint, workspaceConfig) {
   const fromConfig = String(workspaceConfig?.nextv?.config?.entrypointPath ?? '').trim()
   const rawEntrypoint = String(requestedEntrypoint ?? '').trim() || fromConfig
-  if (!rawEntrypoint) throw new Error('entrypointPath required (or set nextv.json entrypointPath)')
+  if (!rawEntrypoint) throw new Error('entrypointPath required (or set nerve.json/nextv.json entrypointPath)')
   const joined = join(
     workspaceDir.relativePath === '.' ? '' : workspaceDir.relativePath,
     rawEntrypoint,

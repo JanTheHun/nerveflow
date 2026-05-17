@@ -20,7 +20,7 @@ curl -X POST http://127.0.0.1:4190/api/runtime/ingress \
 
 ## Files
 
-- `nextv.json` declares the entrypoint and accepted external events
+- `nerve.json` (or `nextv.json`) declares the entrypoint and accepted external events
 - `workflow.nrv` is the deployed workflow app
 - `state.init.json` seeds initial state for the first boot
 

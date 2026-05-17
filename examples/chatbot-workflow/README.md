@@ -9,7 +9,7 @@ Current public scope:
 
 ## Files
 
-- `nextv.json`: workspace config and effect declarations
+- `nerve.json` (or `nextv.json`): workspace config and effect declarations
 - `agents.json`: agent profiles and model mapping for `chat` and `intent`
 - `contracts/`: return contracts for intent, instruction domain, and lighting output
 - `prompts/`: prompt files for intent, subject routing, and lighting instruction parsing

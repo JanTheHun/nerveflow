@@ -10,7 +10,7 @@ One container runs one workspace.
 
 Required workspace files:
 
-- `nextv.json`
+- `nerve.json` (or `nextv.json` for compatibility)
 - one workflow entrypoint such as `workflow.nrv`
 
 Optional workspace files:
@@ -39,7 +39,7 @@ The container entrypoint uses these defaults:
 
 Optional overrides:
 
-- `ENTRYPOINT_PATH` to override `nextv.json#entrypointPath`
+- `ENTRYPOINT_PATH` to override `nerve.json#entrypointPath` (or `nextv.json#entrypointPath`)
 - `NO_AUTOSTART=1` to boot the server without automatically starting the workflow runtime
 
 ## Build The Image

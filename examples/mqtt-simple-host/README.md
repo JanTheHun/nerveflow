@@ -261,7 +261,7 @@ All surfaces that are still connected (MQTT, monitoring) receive events.
 
 ## Configuration
 
-### Workspace Config (nextv.json)
+### Workspace Config (nerve.json preferred)
 
 ```json
 {

@@ -99,7 +99,7 @@ export function createRuntimeResolvers({ repoRoot }) {
   function resolveEntrypoint(workspaceDir, requestedEntrypoint, workspaceConfig) {
     const fromConfig = String(workspaceConfig?.nextv?.config?.entrypointPath ?? '').trim()
     const rawEntrypoint = String(requestedEntrypoint ?? '').trim() || fromConfig
-    if (!rawEntrypoint) throw new Error('entrypointPath required (or set nextv.json entrypointPath)')
+    if (!rawEntrypoint) throw new Error('entrypointPath required (or set nerve.json/nextv.json entrypointPath)')
 
     const joined = join(
       workspaceDir.relativePath === '.' ? '' : workspaceDir.relativePath,

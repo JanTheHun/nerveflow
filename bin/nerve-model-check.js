@@ -362,7 +362,7 @@ async function runSmokeTest({ model, port, timeoutMs, repoRoot }) {
   const workspaceRelPath = relative(repoRoot, tempWorkspace).replace(/\\/g, '/')
 
   writeFileSync(
-    join(tempWorkspace, 'nextv.json'),
+    join(tempWorkspace, 'nerve.json'),
     JSON.stringify({ entrypointPath: 'sanity.nrv', externals: ['test'] }, null, 2),
     'utf8'
   )

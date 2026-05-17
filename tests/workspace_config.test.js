@@ -72,6 +72,63 @@ test('loads tools allow-list and aliases from nextv.json', () => {
   }
 })
 
+test('loads workspace config from nerve.json when nextv.json is absent', () => {
+  const workspaceDir = createWorkspace({
+    'nerve.json': JSON.stringify({
+      tools: {
+        allow: ['tool_from_nerve'],
+      },
+      models: {
+        base: {
+          model: 'llama3.2',
+          transport: 'ollama',
+        },
+      },
+    }),
+  })
+
+  try {
+    const config = loadConfig(workspaceDir)
+    assert.equal(config.nextv.status, 'loaded')
+    assert.equal(config.nextv.file, 'nerve.json')
+    assert.deepEqual(Array.from(config.tools.allow), ['tool_from_nerve'])
+    assert.equal(config.models.map.base.model, 'llama3.2')
+  } finally {
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})
+
+test('prefers nerve.json over nextv.json when both are present', () => {
+  const workspaceDir = createWorkspace({
+    'nerve.json': JSON.stringify({
+      transports: {
+        ollama: {
+          provider: 'ollama',
+          base_url: 'http://nerve:11434',
+        },
+      },
+    }),
+    'nextv.json': JSON.stringify({
+      transports: {
+        ollama: {
+          provider: 'ollama',
+          base_url: 'http://nextv:11434',
+        },
+      },
+    }),
+  })
+
+  try {
+    const config = loadConfig(workspaceDir)
+    const transports = getConfiguredTransportsMap(config)
+    assert.equal(config.nextv.file, 'nerve.json')
+    assert.equal(transports.ollama.base_url, 'http://nerve:11434')
+    assert.match(config.transports.source, /nerve\.json#transports/)
+  } finally {
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})
+
 test('nextv.json toolsConfig overrides inline tools block', () => {
   const workspaceDir = createWorkspace({
     'nextv.json': JSON.stringify({

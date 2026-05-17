@@ -254,7 +254,7 @@ Workflows can reference LLM models and agent profiles through a centralized thre
 
 ### Transports Registry
 
-Define transport endpoints in `nextv.json#transports` or a separate `transports.json` file.
+Define transport endpoints in `nerve.json#transports` (preferred) or `nextv.json#transports` (compatibility), or in a separate `transports.json` file.
 `transports.json` is environment-specific and should not be committed to version control.
 
 ```json
@@ -287,11 +287,11 @@ Each transport entry requires a `provider` field (non-empty string). All other f
 }
 ```
 
-Loading precedence: `nextv.json#transports` → `nextv.json#transportsConfig` (external file reference) → `transports.json` (auto-discovered in workspace root).
+Loading precedence: `nerve.json#transports` → `nextv.json#transports` → `nerve.json#transportsConfig`/`nextv.json#transportsConfig` (external file reference) → `transports.json` (auto-discovered in workspace root).
 
 ### Models Registry
 
-Define models in `nextv.json#models` or a separate `models.json` file:
+Define models in `nerve.json#models` (preferred) or `nextv.json#models` (compatibility), or a separate `models.json` file:
 
 ```json
 {
@@ -312,7 +312,7 @@ The `transport` field must match an entry in the transports registry (or a built
 
 ### Agent Profiles
 
-Define agent profiles in `nextv.json#agents` or a separate `agents.json` file:
+Define agent profiles in `nerve.json#agents` (preferred) or `nextv.json#agents` (compatibility), or a separate `agents.json` file:
 
 ```json
 {
@@ -492,14 +492,14 @@ Built-in output channels:
 
 Declared output channels:
 
-- workspaces may declare additional channels in `nextv.json#effects`
+- workspaces may declare additional channels in `nerve.json#effects` (preferred) or `nextv.json#effects` (compatibility)
 - declared channels are emitted through the same `output` statement
 - if a declared channel omits `format`, runtime defaults emitted formatting to `json`
 
 Examples:
 
 - `output text "hello"`
-- `output heartbeat "tick"` (when `heartbeat` is declared in `nextv.json#effects`)
+- `output heartbeat "tick"` (when `heartbeat` is declared in `nerve.json#effects` or `nextv.json#effects`)
 
 Recommendations:
 

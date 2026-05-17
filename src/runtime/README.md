@@ -51,7 +51,7 @@ Builds the filesystem and path resolver bundle used by the runtime.
 Responsibilities:
 
 - resolve workspace-relative paths
-- load `nextv.json`
+- load `nerve.json` (preferred) or `nextv.json` (compatibility)
 - resolve entrypoint files
 - normalize workspace display paths
 - reject paths outside the repo root

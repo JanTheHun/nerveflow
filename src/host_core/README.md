@@ -74,7 +74,7 @@ Behavior highlights:
 
 Startup effect policy behavior:
 
-- reads `nextv.json#effectsPolicy` (`warn` default, `strict` optional)
+- reads `nerve.json#effectsPolicy` (`warn` default, `strict` optional; `nextv.json` compatibility is preserved)
 - validates declared effect channels that define `kind` via optional `validateEffectBindings` hook
 - `warn` mode publishes `nextv_warning` with `code: "UNSUPPORTED_EFFECT_BINDING"` and continues startup
 - `strict` mode fails startup when unsupported bindings are detected
@@ -89,8 +89,8 @@ Startup effect policy behavior:
 
 Loads nextV workspace config from:
 
-1. nextv.json inline blocks
-2. nextv.json external refs (agentsConfig/toolsConfig/operatorsConfig)
+1. nerve.json inline blocks (preferred) with nextv.json fallback
+2. nerve.json/nextv.json external refs (agentsConfig/toolsConfig/operatorsConfig)
 3. fallback files (agents.json/tools.json/operators.json)
 
 Includes tools alias cycle validation and normalized config source reporting.

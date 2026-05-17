@@ -6,7 +6,6 @@ Nerveflow gives AI workflows an explicit execution spine: declared events, inspe
 
 ## Quick Onboarding
 
-Step 1: Runtime + deterministic state check
 
 ```bash
 # 1) Install

@@ -168,9 +168,16 @@ Attach from another terminal:
 
 ```bash
 npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws snapshot
-npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws enqueue user_message hello
-npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws stop
+npx nerve-send ping --event-type random_channel
+npx nerve-send ping --event-type user_message
+npx nerve-send "hello nerve" --event-type user_message
 ```
+
+Expected behavior:
+
+- undeclared channel (`random_channel`) is rejected because it is not in workspace externals
+- declared channel (`user_message`) with non-matching input increments state and returns `(no output, 1)`
+- declared channel (`user_message`) with `hello nerve` returns `hello world!`
 
 To watch runtime events continuously:
 

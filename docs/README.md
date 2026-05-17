@@ -9,6 +9,7 @@ This documentation is for **users building workflows with Nerveflow**.
 - [03-language-reference.md](03-language-reference.md)
 - [04-host-integration.md](04-host-integration.md)
 - [05-platform-vision.md](05-platform-vision.md)
+- [13-user-handbook.md](13-user-handbook.md)
 - [10-host-db-connectors.md](10-host-db-connectors.md)
 
 ## Agent docs

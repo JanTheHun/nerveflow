@@ -147,21 +147,27 @@ Exit code 0 means all required checks passed. Exit code 1 means something is mis
 Start the runtime process:
 
 ```bash
-node bin/nerve-runtime.js start examples/mqtt-simple-host --port 4190
+npx nerve-runtime start examples/mqtt-simple-host --port 4190
+```
+
+From within a valid workspace directory (contains `nextv.json`), you can start directly in the current folder:
+
+```bash
+npx nerve-runtime start --port 4190
 ```
 
 Attach from another terminal:
 
 ```bash
-node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws snapshot
-node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws enqueue user_message hello
-node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws stop
+npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws snapshot
+npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws enqueue user_message hello
+npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws stop
 ```
 
 To watch runtime events continuously:
 
 ```bash
-node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws listen
+npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws listen
 ```
 
 For command semantics and transport details, see the host integration guide.

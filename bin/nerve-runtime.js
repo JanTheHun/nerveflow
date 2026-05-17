@@ -31,7 +31,7 @@ import {
 function parseCliOptions(argv) {
   const options = {
     command: '',
-    workspaceDir: '',
+    workspaceDir: '.',
     entrypointPath: '',
     port: 4190,
     wsPath: '/api/runtime/ws',
@@ -39,12 +39,19 @@ function parseCliOptions(argv) {
   }
 
   const [command, maybeWorkspace] = argv
+  let firstFlagIndex = 2
   if (command === 'start') {
     options.command = 'start'
-    options.workspaceDir = String(maybeWorkspace ?? '').trim()
+    const workspaceRaw = String(maybeWorkspace ?? '').trim()
+    if (!workspaceRaw || workspaceRaw.startsWith('--')) {
+      options.workspaceDir = '.'
+      firstFlagIndex = 1
+    } else {
+      options.workspaceDir = workspaceRaw
+    }
   }
 
-  for (let index = 2; index < argv.length; index += 1) {
+  for (let index = firstFlagIndex; index < argv.length; index += 1) {
     const token = String(argv[index] ?? '').trim()
     if (token === '--entrypoint') {
       const value = String(argv[index + 1] ?? '').trim()
@@ -75,11 +82,7 @@ function parseCliOptions(argv) {
   }
 
   if (options.command !== 'start') {
-    throw new Error('Usage: nerve-runtime start <workspaceDir> [--entrypoint <path>] [--port <n>] [--ws-path <path>] [--no-autostart]')
-  }
-
-  if (!options.workspaceDir) {
-    throw new Error('start requires <workspaceDir>')
+    throw new Error('Usage: nerve-runtime start [workspaceDir] [--entrypoint <path>] [--port <n>] [--ws-path <path>] [--no-autostart]')
   }
 
   return options

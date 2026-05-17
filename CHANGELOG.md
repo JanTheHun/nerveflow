@@ -26,6 +26,9 @@ All notable changes to this project are documented in this file.
 - Published CLI boundary now focuses on standalone runtime tools (`nerve-runtime`, `nerve-attach`, `nerve-model-check`); `nerve-dev-remote` remains repository-only.
 - Publish gate CI workflow now enforces editor-core sync and pack checks before runtime packed-artifact smoke.
 - Call inspector execution now accepts optional `tools` policy payloads for direct model/agent invocations in both runtime-core and Studio preview host surfaces.
+- `nerve-runtime start` now defaults workspace resolution to the current directory when no workspace path is provided.
+- Current-directory workspace paths (`.` and `.\`) now resolve correctly for runtime startup instead of failing path-boundary validation.
+- Standalone runtime docs now use npm-first CLI examples (`npx nerve-runtime`, `npx nerve-attach`) for package users.
 
 ### Notes
 

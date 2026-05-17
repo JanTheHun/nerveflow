@@ -205,10 +205,10 @@ Then open `http://127.0.0.1:4173`.
 ### Path C: Run standalone runtime + attach
 
 ```bash
-node bin/nerve-runtime.js start examples/mqtt-simple-host --port 4190
-node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws snapshot
-node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws enqueue user_message hello
-node bin/nerve-attach.js ws://127.0.0.1:4190/api/runtime/ws listen
+npx nerve-runtime start examples/mqtt-simple-host --port 4190
+npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws snapshot
+npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws enqueue user_message hello
+npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws listen
 ```
 
 ## Public APIs
@@ -222,6 +222,14 @@ import { createRuntimeCore, createRuntimeResolvers } from 'nerveflow/runtime'
 
 Top-level runtime helper imports remain in a compatibility window, but new integrations should use `nerveflow/runtime`.
 
+### Naming transition
+
+Nerveflow and nerve are the canonical public names going forward.
+
+Some APIs, config filenames, and protocol identifiers still use legacy nextv naming as part of a compatibility transition. For new integrations, prefer nerve and nerveflow terminology in docs, code, and host surface naming.
+
+Legacy nextv names remain supported during this transition window. We plan to continue cleaning up legacy nextv terminology in future releases, with explicit migration guidance before compatibility removals.
+
 ## Docs map
 
 Start here:
@@ -231,6 +239,7 @@ Start here:
 - [Getting started](./docs/02-getting-started.md)
 - [Language reference](./docs/03-language-reference.md)
 - [Host integration guide](./docs/04-host-integration.md)
+- [Multi-surface attachment pattern](./docs/examples/multi-surface-attachment-pattern.md)
 - [Platform vision](./docs/05-platform-vision.md)
 
 Workflow generation docs:

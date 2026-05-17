@@ -66,14 +66,15 @@ export function createRuntimeResolvers({ repoRoot }) {
 
     const absolutePath = resolve(repoRoot, candidate)
     const rel = relative(repoRoot, absolutePath)
-    if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+    if (rel.startsWith('..') || isAbsolute(rel)) {
       throw new Error('Path is outside workspace')
     }
     if (!existsSync(absolutePath)) {
       throw new Error(`Workspace directory not found: ${candidate.replace(/\\/g, '/')}`)
     }
 
-    return { absolutePath, relativePath: rel.replace(/\\/g, '/') }
+    const relativePath = rel ? rel.replace(/\\/g, '/') : '.'
+    return { absolutePath, relativePath }
   }
 
   function resolvePathFromBaseDirectory(baseDirectoryAbsolutePath, inputPath, kindRaw = 'editor') {

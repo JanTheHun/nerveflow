@@ -147,6 +147,158 @@ test('nerve-runtime exits with usage error when arguments are missing', async ()
   assert.equal(result.stderr.includes('nerve-runtime argument error'), true)
 })
 
+test('nerve-runtime start without workspace argument defaults to current workspace', async () => {
+  const port = await findOpenPort()
+  const child = spawn(process.execPath, [
+    'bin/nerve-runtime.js',
+    'start',
+    '--entrypoint',
+    'examples/mqtt-simple-host/workflow.nrv',
+    '--port',
+    String(port),
+  ], {
+    cwd: process.cwd(),
+    env: { ...process.env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  try {
+    await waitForOutput(child, 'nerve-runtime listening at')
+
+    const response = await fetch(`http://127.0.0.1:${port}/health`)
+    const payload = await response.json()
+
+    assert.equal(response.ok, true)
+    assert.equal(payload.ok, true)
+    assert.equal(payload.mode, 'runtime')
+  } finally {
+    await new Promise((resolveExit) => {
+      const timer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL')
+        } catch {
+          // ignore
+        }
+        resolveExit()
+      }, 5000)
+
+      child.once('exit', () => {
+        clearTimeout(timer)
+        resolveExit()
+      })
+
+      try {
+        child.kill('SIGTERM')
+      } catch {
+        clearTimeout(timer)
+        resolveExit()
+      }
+    })
+  }
+})
+
+test('nerve-runtime start accepts explicit dot workspace path', async () => {
+  const port = await findOpenPort()
+  const child = spawn(process.execPath, [
+    'bin/nerve-runtime.js',
+    'start',
+    '.',
+    '--entrypoint',
+    'examples/mqtt-simple-host/workflow.nrv',
+    '--port',
+    String(port),
+  ], {
+    cwd: process.cwd(),
+    env: { ...process.env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  try {
+    await waitForOutput(child, 'nerve-runtime listening at')
+
+    const response = await fetch(`http://127.0.0.1:${port}/health`)
+    const payload = await response.json()
+
+    assert.equal(response.ok, true)
+    assert.equal(payload.ok, true)
+    assert.equal(payload.mode, 'runtime')
+  } finally {
+    await new Promise((resolveExit) => {
+      const timer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL')
+        } catch {
+          // ignore
+        }
+        resolveExit()
+      }, 5000)
+
+      child.once('exit', () => {
+        clearTimeout(timer)
+        resolveExit()
+      })
+
+      try {
+        child.kill('SIGTERM')
+      } catch {
+        clearTimeout(timer)
+        resolveExit()
+      }
+    })
+  }
+})
+
+test('nerve-runtime start accepts dot-backslash workspace path on Windows-style input', async () => {
+  const port = await findOpenPort()
+  const child = spawn(process.execPath, [
+    'bin/nerve-runtime.js',
+    'start',
+    '.\\',
+    '--entrypoint',
+    'examples/mqtt-simple-host/workflow.nrv',
+    '--port',
+    String(port),
+  ], {
+    cwd: process.cwd(),
+    env: { ...process.env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  try {
+    await waitForOutput(child, 'nerve-runtime listening at')
+
+    const response = await fetch(`http://127.0.0.1:${port}/health`)
+    const payload = await response.json()
+
+    assert.equal(response.ok, true)
+    assert.equal(payload.ok, true)
+    assert.equal(payload.mode, 'runtime')
+  } finally {
+    await new Promise((resolveExit) => {
+      const timer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL')
+        } catch {
+          // ignore
+        }
+        resolveExit()
+      }, 5000)
+
+      child.once('exit', () => {
+        clearTimeout(timer)
+        resolveExit()
+      })
+
+      try {
+        child.kill('SIGTERM')
+      } catch {
+        clearTimeout(timer)
+        resolveExit()
+      }
+    })
+  }
+})
+
 test('nerve-attach exits with usage error when arguments are missing', async () => {
   const result = await runProcess(['bin/nerve-attach.js'])
   assert.equal(result.code, 1)

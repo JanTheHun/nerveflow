@@ -210,6 +210,14 @@ Bootstrap a minimal workspace first (creates `nerve.json` and `workflow.nrv` whe
 node bin/nerve-compose.js init
 ```
 
+Optional: scaffold transport and model registry entries for LLM calls:
+
+```bash
+node bin/nerve-compose.js add transport ollama
+node bin/nerve-compose.js add model llama3.2 --transport ollama
+npm run model:doctor -- --model llama3.2
+```
+
 Then run runtime + attach:
 
 ```bash

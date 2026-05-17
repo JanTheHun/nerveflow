@@ -140,6 +140,21 @@ npm run model:doctor -- --model llama3.2 --ping
 
 Exit code 0 means all required checks passed. Exit code 1 means something is missing; the output includes the exact install step to run next.
 
+### Compose-assisted model setup (optional, onboarding-friendly)
+
+You can scaffold transport and model registry entries directly in workspace config:
+
+```bash
+node bin/nerve-compose.js add transport ollama
+node bin/nerve-compose.js add model llama3.2 --transport ollama
+```
+
+Then run the canonical doctor check:
+
+```bash
+npm run model:doctor -- --model llama3.2
+```
+
 ---
 
 ## 6. Run as a standalone runtime (optional)

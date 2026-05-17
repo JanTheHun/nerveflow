@@ -163,6 +163,8 @@ Current commands:
 - `node bin/nerve-compose.js init [workspaceDir] [--json]`
 - `node bin/nerve-compose.js modules [workspaceDir] [--json] [--builtin-only]`
 - `node bin/nerve-compose.js doctor [workspaceDir] [--json] [--strict]`
+- `node bin/nerve-compose.js add transport <name> [workspaceDir] [--json]`
+- `node bin/nerve-compose.js add model <name> --transport <transportName> [workspaceDir] [--json]`
 - `node bin/nerve-compose.js add memory-pgvector [workspaceDir] [--json]`
 - `node bin/nerve-compose.js add speech [workspaceDir] [--json]`
 
@@ -185,6 +187,10 @@ Current commands:
 - creates or updates `.env.example` with `VOICE_*`, `WHISPER_*`, `PIPER_*`, and runtime endpoint placeholders
 - updates `nerve.json` `requires.speech` and `modules.speech` when present (falls back to `nextv.json` for compatibility)
 - creates `speech-surface/` with record/stop SPA assets and a bridge server (`/api/voice-command`, `/api/output/stream`)
+
+`add transport <name>` registers a transport entry in workspace config and appends transport-specific `.env.example` placeholders when available.
+
+`add model <name> --transport <transportName>` registers a model entry and links it to an existing transport. The command fails when the referenced transport is missing so model-to-transport links stay valid.
 
 Behavior and boundaries:
 

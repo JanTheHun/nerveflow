@@ -75,9 +75,7 @@ end
 
 ## 5. Chat from CLI
 
-Use the standalone Nerveflow runtime WS endpoint (default: `ws://127.0.0.1:4190/api/runtime/ws`).
-If you target another websocket server, `nerve-send` may connect but time out waiting for protocol responses.
-If your runtime is on port 8000, use `ws://127.0.0.1:8000/api/runtime/ws` in the commands below.
+Use the standalone runtime WS endpoint (default: `ws://127.0.0.1:4190/api/runtime/ws`).
 
 Quick connectivity check:
 
@@ -99,29 +97,30 @@ npx nerve-send <wsUrl> <eventType> [message]
 
 If you have not started the runtime yet, return to Step 1 in [02-getting-started.md](02-getting-started.md) and run `npx nerve-runtime start --port 4190`.
 
-## Troubleshooting: model not found
+## If chat fails
 
-If runtime shows an error like `Ollama chat failed (404): {"error":"model 'llama3.2:latest' not found"}`:
+Run these checks in order:
 
-1. Confirm Ollama is running and list installed models:
+1. Verify runtime WS connectivity:
+
+```bash
+npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws snapshot
+```
+
+2. Verify the model label is installed:
 
 ```bash
 ollama list
 ```
 
-2. Pull the model label you want to call:
+3. Ensure the expected label exists locally:
 
 ```bash
 ollama pull llama3.2:latest
 ```
 
-3. Re-run model preflight:
+4. Re-run model preflight:
 
 ```bash
 npx nerve-model-check --model llama3.2:latest
 ```
-
-4. Always use the exact label shown in `ollama list` and written in `nerve.json` models map (for this guide: `llama3.2:latest`):
-
-- `workflow.nrv`: `model("llama3.2:latest", messages=state.conversation)`
-- compose registry: `npx nerve-compose add model llama3.2:latest --transport ollama`

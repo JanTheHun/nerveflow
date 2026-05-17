@@ -204,6 +204,14 @@ Then open `http://127.0.0.1:4173`.
 
 ### Path C: Run standalone runtime + attach
 
+Bootstrap a minimal workspace first (creates `nerve.json` and `workflow.nrv` when missing):
+
+```bash
+node bin/nerve-compose.js init
+```
+
+Then run runtime + attach:
+
 ```bash
 npx nerve-runtime start examples/mqtt-simple-host --port 4190
 npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws snapshot
@@ -226,7 +234,7 @@ Top-level runtime helper imports remain in a compatibility window, but new integ
 
 Nerveflow and nerve are the canonical public names going forward.
 
-Some APIs, config filenames, and protocol identifiers still use legacy nextv naming as part of a compatibility transition. For new integrations, prefer nerve and nerveflow terminology in docs, code, and host surface naming.
+Some APIs, config filenames, and protocol identifiers still use legacy nextv naming as part of a compatibility transition. For new integrations, prefer nerve and nerveflow terminology in docs, code, and host surface naming, including `nerve.json` as the preferred workspace config filename (`nextv.json` remains supported for compatibility).
 
 Legacy nextv names remain supported during this transition window. We plan to continue cleaning up legacy nextv terminology in future releases, with explicit migration guidance before compatibility removals.
 

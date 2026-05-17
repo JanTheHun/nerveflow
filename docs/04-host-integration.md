@@ -160,21 +160,30 @@ Compatibility note:
 
 Current commands:
 
+- `node bin/nerve-compose.js init [workspaceDir] [--json]`
 - `node bin/nerve-compose.js modules [workspaceDir] [--json] [--builtin-only]`
 - `node bin/nerve-compose.js doctor [workspaceDir] [--json] [--strict]`
 - `node bin/nerve-compose.js add memory-pgvector [workspaceDir] [--json]`
 - `node bin/nerve-compose.js add speech [workspaceDir] [--json]`
 
+`init` scaffolds a minimal workspace baseline for new projects:
+
+- creates `nerve.json` (with `entrypointPath` and `externals`) when no root config exists
+- creates the configured workflow entrypoint file when it does not already exist
+- defaults to the current directory when `workspaceDir` is omitted
+- does not overwrite existing `nerve.json` or existing workflow files
+- does not auto-migrate `nextv.json` to `nerve.json`; legacy config remains supported for compatibility
+
 `add memory-pgvector` scaffolds workspace wiring using the existing host-modules loading path:
 
 - creates or updates `host_modules/index.js` (generated provider wiring)
 - creates or updates `.env.example` with `MEMORY_*` placeholders
-- updates `nextv.json` `requires.memory` and `modules.memory` when `nextv.json` exists
+- updates `nerve.json` `requires.memory` and `modules.memory` when present (falls back to `nextv.json` for compatibility)
 
 `add speech` scaffolds a reference speech ingress surface from the voice-spa template:
 
 - creates or updates `.env.example` with `VOICE_*`, `WHISPER_*`, `PIPER_*`, and runtime endpoint placeholders
-- updates `nextv.json` `requires.speech` and `modules.speech` when `nextv.json` exists
+- updates `nerve.json` `requires.speech` and `modules.speech` when present (falls back to `nextv.json` for compatibility)
 - creates `speech-surface/` with record/stop SPA assets and a bridge server (`/api/voice-command`, `/api/output/stream`)
 
 Behavior and boundaries:
@@ -402,7 +411,7 @@ Runtime output events continue to emit `type: "output"` with legacy fields (`for
 
 - `channel` output channel name used by script (`output <channel> ...`)
 - `payload` raw expression value before formatting
-- `effectChannelId` optional declared effect id when channel is declared in `nextv.json#effects`
+- `effectChannelId` optional declared effect id when channel is declared in `nerve.json#effects` (or `nextv.json#effects`)
 
 Compatibility notes:
 
@@ -504,8 +513,9 @@ Hosts validate declared effect bindings during startup when channels include a `
 
 `effectsPolicy` is validated while loading workspace config; unsupported values fail fast before runtime startup.
 
-- `nextv.json#effectsPolicy: "warn"` (default) publishes a `nextv_warning` event and continues startup.
-- `nextv.json#effectsPolicy: "strict"` rejects startup when unsupported bindings are detected.
+- `nerve.json#effectsPolicy: "warn"` (default) publishes a `nextv_warning` event and continues startup.
+- `nerve.json#effectsPolicy: "strict"` rejects startup when unsupported bindings are detected.
+- Compatibility: `nextv.json#effectsPolicy` remains supported during transition.
 
 Example:
 
@@ -604,7 +614,7 @@ Host-side shared modules are documented in `src/host_core/README.md`.
 
 `examples/mqtt-simple-host/mqtt-host.js` is a minimal headless host that connects to an MQTT broker, listens for protocol commands, and publishes runtime lifecycle and execution events back to the broker. It has no HTTP server or UI — its purpose is outer-world manipulation from a running nerve project.
 
-The same host automatically loads workspace-declared effects from `nextv.json#effects` and forwards additive output channel metadata in `nextv_execution` event payloads.
+The same host automatically loads workspace-declared effects from `nerve.json#effects` (or `nextv.json#effects`) and forwards additive output channel metadata in `nextv_execution` event payloads.
 
 ### Topic contract
 

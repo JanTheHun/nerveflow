@@ -13,6 +13,7 @@ All notable changes to this project are documented in this file.
 - Call inspector now supports governed tools policy controls (mode, max rounds, timeout, unknown-tool policy), per-tool checkbox allow-list toggles, and extra per-call tools input.
 - Call inspector now auto-populates available tools from workspace config, using agent profile tools when targeting an agent.
 - Packaged runtime smoke automation command (`npm run test:pack-smoke`) to validate packed artifact install, runtime boot, attach snapshot, and ingress endpoint behavior.
+- New `nerve-compose init` command for minimal workspace bootstrap; it creates `nerve.json` and starter workflow files when absent and preserves legacy `nextv.json` workspaces without auto-migration.
 - Editor-core publish guards:
 	- `npm run verify:editor-core-sync` validates package source and Studio mirror parity.
 	- `npm run verify:editor-core-pack` validates `@nerveflow/editor-core` dry-run packed file allowlist and required entry points.

@@ -144,13 +144,21 @@ Exit code 0 means all required checks passed. Exit code 1 means something is mis
 
 ## 6. Run as a standalone runtime (optional)
 
+Bootstrap a minimal workspace in your current directory:
+
+```bash
+node bin/nerve-compose.js init
+```
+
+This creates `nerve.json` (preferred config filename) and `workflow.nrv` when they are missing. If only `nextv.json` already exists, `init` leaves it unchanged for compatibility.
+
 Start the runtime process:
 
 ```bash
 npx nerve-runtime start examples/mqtt-simple-host --port 4190
 ```
 
-From within a valid workspace directory (contains `nextv.json`), you can start directly in the current folder:
+From within a valid workspace directory (contains `nerve.json` or `nextv.json`), you can start directly in the current folder:
 
 ```bash
 npx nerve-runtime start --port 4190

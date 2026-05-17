@@ -165,7 +165,7 @@ Bootstrap a minimal workspace in your current directory:
 node bin/nerve-compose.js init
 ```
 
-This creates `nerve.json` (preferred config filename) and `workflow.nrv` when they are missing. If only `nextv.json` already exists, `init` leaves it unchanged for compatibility.
+This creates `nerve.json` (preferred config filename), `workflow.nrv`, and `state.init.json` (baseline state) when they are missing. If only `nextv.json` already exists, `init` leaves it unchanged for compatibility.
 
 Start the runtime process:
 
@@ -183,9 +183,9 @@ Attach from another terminal:
 
 ```bash
 npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws snapshot
-npx nerve-send ping --event-type random_channel
-npx nerve-send ping --event-type user_message
-npx nerve-send "hello nerve" --event-type user_message
+npx nerve-send ws://127.0.0.1:4190/api/runtime/ws random_channel ping
+npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message ping
+npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "hello nerve"
 ```
 
 Expected behavior:

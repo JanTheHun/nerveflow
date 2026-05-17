@@ -2,14 +2,13 @@
 import { randomUUID } from 'node:crypto'
 import WebSocket from 'ws'
 
-const DEFAULT_WS_URL = 'ws://127.0.0.1:4190/api/runtime/ws'
 const DEFAULT_TIMEOUT_MS = 10000
 
 function parseCliOptions(argv) {
   const options = {
     message: '',
     eventType: '',
-    wsUrl: DEFAULT_WS_URL,
+    wsUrl: '',
     timeoutMs: DEFAULT_TIMEOUT_MS,
     json: false,
   }
@@ -21,22 +20,6 @@ function parseCliOptions(argv) {
 
     if (token === '--json') {
       options.json = true
-      continue
-    }
-
-    if (token === '--event-type') {
-      const value = String(argv[index + 1] ?? '').trim()
-      if (!value || value.startsWith('--')) throw new Error('--event-type requires a value')
-      options.eventType = value
-      index += 1
-      continue
-    }
-
-    if (token === '--ws') {
-      const value = String(argv[index + 1] ?? '').trim()
-      if (!value || value.startsWith('--')) throw new Error('--ws requires a value')
-      options.wsUrl = value
-      index += 1
       continue
     }
 
@@ -55,11 +38,14 @@ function parseCliOptions(argv) {
     positionals.push(token)
   }
 
-  options.message = positionals.join(' ')
-  if (!options.eventType) {
-    throw new Error('Missing required --event-type <name>. nerve-send is channel-agnostic and does not assume a default channel.')
+  if (positionals.length < 2) {
+    throw new Error('Usage: nerve-send <wsUrl> <eventType> [message] [--timeout-ms <n>] [--json]')
   }
-  if (!options.wsUrl) throw new Error('--ws must be non-empty')
+
+  options.wsUrl = positionals[0]
+  options.eventType = positionals[1]
+  options.message = positionals.slice(2).join(' ')
+
   return options
 }
 

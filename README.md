@@ -224,7 +224,7 @@ Then run runtime + attach:
 npx nerve-runtime start examples/mqtt-simple-host --port 4190
 npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws snapshot
 npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws enqueue user_message hello
-npx nerve-send "hello nerve" --event-type user_message
+npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "hello nerve"
 npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws listen
 ```
 

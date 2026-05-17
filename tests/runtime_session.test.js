@@ -273,6 +273,117 @@ test('callAgent resolves direct model aliases through models.map and transports.
   })
 })
 
+test('callAgent resolves untagged direct model to unique tagged configured model', async () => {
+  const calls = []
+  const adapter = createHostAdapter({
+    workspaceDir: {
+      absolutePath: '/workspace',
+      relativePath: '.',
+    },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: {} },
+      models: {
+        map: {
+          'llama3.2:latest': { model: 'llama3.2:latest', transport: 'ollama' },
+        },
+      },
+      transports: {
+        map: {
+          ollama: {
+            provider: 'ollama',
+            baseUrl: 'http://127.0.0.1:11434',
+          },
+        },
+      },
+      operators: { map: {} },
+    },
+    callAgent: async ({ model, messages, transport }) => {
+      calls.push({ model, messages, transport })
+      return 'pong'
+    },
+    defaultModel: 'default-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({
+      absolutePath: `${baseDir}/${pathRaw}`,
+      relativePath: pathRaw,
+    }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  const response = await adapter.callAgent({
+    model: 'llama3.2',
+    prompt: 'ping',
+  })
+
+  assert.deepEqual(response, { value: 'pong', metadata: null })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].model, 'llama3.2:latest')
+  assert.equal(calls[0].messages.length, 1)
+  assert.equal(calls[0].messages[0].role, 'user')
+  assert.equal(calls[0].messages[0].content, 'ping')
+  assert.deepEqual(calls[0].transport, {
+    provider: 'ollama',
+    baseUrl: 'http://127.0.0.1:11434',
+  })
+})
+
+test('callAgent leaves untagged direct model unresolved when tagged matches are ambiguous', async () => {
+  const calls = []
+  const adapter = createHostAdapter({
+    workspaceDir: {
+      absolutePath: '/workspace',
+      relativePath: '.',
+    },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: {} },
+      models: {
+        map: {
+          'llama3.2:1b': { model: 'llama3.2:1b', transport: 'ollama' },
+          'llama3.2:3b': { model: 'llama3.2:3b', transport: 'ollama' },
+        },
+      },
+      transports: {
+        map: {
+          ollama: {
+            provider: 'ollama',
+            baseUrl: 'http://127.0.0.1:11434',
+          },
+        },
+      },
+      operators: { map: {} },
+    },
+    callAgent: async ({ model, messages, transport }) => {
+      calls.push({ model, messages, transport })
+      return 'pong'
+    },
+    defaultModel: 'default-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({
+      absolutePath: `${baseDir}/${pathRaw}`,
+      relativePath: pathRaw,
+    }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  const response = await adapter.callAgent({
+    model: 'llama3.2',
+    prompt: 'ping',
+  })
+
+  assert.deepEqual(response, { value: 'pong', metadata: null })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].model, 'llama3.2')
+  assert.equal(calls[0].transport, undefined)
+})
+
 test('callAgent includes images when event payload provides images', async () => {
   const calls = []
   const adapter = createHostAdapter({

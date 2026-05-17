@@ -669,6 +669,127 @@ function buildModelConfig(modelName, transportName) {
   }
 }
 
+function resolveEnvPlaceholderValue(valueRaw) {
+  const value = String(valueRaw ?? '').trim()
+  const envMatch = value.match(/^\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/)
+  if (!envMatch) return value
+  const envValue = String(process.env[envMatch[1]] ?? '').trim()
+  return envValue
+}
+
+function normalizeBaseUrlForLookup(valueRaw, fallbackUrl) {
+  const resolved = resolveEnvPlaceholderValue(valueRaw)
+  if (resolved) return resolved
+  return fallbackUrl
+}
+
+async function fetchOllamaModelNames(baseUrl) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 4000)
+  if (typeof timeout?.unref === 'function') timeout.unref()
+
+  try {
+    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/tags`, {
+      signal: controller.signal,
+    })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    const payload = await response.json().catch(() => null)
+    if (!Array.isArray(payload?.models)) return []
+
+    return payload.models
+      .map((entry) => String(entry?.name ?? entry?.model ?? entry ?? '').trim())
+      .filter(Boolean)
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function resolveExactModelNameForAdd({
+  configPath,
+  configLabel,
+  modelName,
+  transportName,
+}) {
+  const requestedModelName = String(modelName ?? '').trim()
+  const transportKey = String(transportName ?? '').trim()
+  if (!requestedModelName || !transportKey) {
+    return { ok: true, modelName: requestedModelName, message: '' }
+  }
+
+  if (requestedModelName.includes(':')) {
+    return { ok: true, modelName: requestedModelName, message: '' }
+  }
+
+  if (!existsSync(configPath)) {
+    return { ok: true, modelName: requestedModelName, message: '' }
+  }
+
+  let parsed
+  try {
+    parsed = JSON.parse(readFileSync(configPath, 'utf8'))
+  } catch {
+    return { ok: true, modelName: requestedModelName, message: '' }
+  }
+
+  const transportsMap = parsed?.transports && typeof parsed.transports === 'object' && !Array.isArray(parsed.transports)
+    ? parsed.transports
+    : {}
+  const transportConfig = transportsMap[transportKey]
+  if (!transportConfig || typeof transportConfig !== 'object' || Array.isArray(transportConfig)) {
+    return { ok: true, modelName: requestedModelName, message: '' }
+  }
+
+  const provider = String(transportConfig.provider ?? '').trim().toLowerCase()
+  if (provider !== 'ollama') {
+    return { ok: true, modelName: requestedModelName, message: '' }
+  }
+
+  const baseUrl = normalizeBaseUrlForLookup(
+    transportConfig.baseUrl,
+    String(process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434').trim() || 'http://127.0.0.1:11434',
+  )
+
+  let availableModelNames = []
+  try {
+    availableModelNames = await fetchOllamaModelNames(baseUrl)
+  } catch {
+    // Best effort: when lookup is unavailable, keep requested label unchanged.
+    return { ok: true, modelName: requestedModelName, message: '' }
+  }
+
+  if (availableModelNames.includes(requestedModelName)) {
+    return { ok: true, modelName: requestedModelName, message: '' }
+  }
+
+  const prefixedMatches = availableModelNames.filter((name) => name.startsWith(`${requestedModelName}:`))
+  if (prefixedMatches.length === 1) {
+    return {
+      ok: true,
+      modelName: prefixedMatches[0],
+      message: `resolved model "${requestedModelName}" to exact label "${prefixedMatches[0]}" from Ollama tags`,
+    }
+  }
+
+  if (prefixedMatches.length > 1) {
+    const preview = prefixedMatches.slice(0, 5).join(', ')
+    const tail = prefixedMatches.length > 5 ? ` (+ ${prefixedMatches.length - 5} more)` : ''
+    return {
+      ok: false,
+      modelName: requestedModelName,
+      message: `model "${requestedModelName}" is ambiguous for transport "${transportKey}" in ${configLabel}; use exact label: ${preview}${tail}`,
+    }
+  }
+
+  return {
+    ok: false,
+    modelName: requestedModelName,
+    message: `model "${requestedModelName}" not found in Ollama tags for ${baseUrl}; pull the model or use an exact label`,
+  }
+}
+
 function scaffoldSpeechSurface(workspaceDir) {
   const surfaceRoot = path.join(workspaceDir, 'speech-surface')
   const surfaceRootExisted = existsSync(surfaceRoot)
@@ -756,16 +877,39 @@ async function runAddCommand(options) {
       upsertEnvExampleLines(path.join(workspaceDir, '.env.example'), buildTransportEnvLines(options.addName)),
     ]
   } else if (options.capability === 'model') {
+    loadWorkspaceEnvFile(workspaceDir)
     const { path: configPath, label: configLabel } = resolveWorkspaceConfigPath(workspaceDir)
-    fileResults = [
-      upsertNextVModelConfigByName(
+    const resolvedModel = await resolveExactModelNameForAdd({
+      configPath,
+      configLabel,
+      modelName: options.addName,
+      transportName: options.modelTransport,
+    })
+
+    if (!resolvedModel.ok) {
+      fileResults = [
+        {
+          action: 'skipped',
+          path: configPath,
+          message: resolvedModel.message,
+        },
+      ]
+    } else {
+      const modelResult = upsertNextVModelConfigByName(
         configPath,
         configLabel,
-        options.addName,
+        resolvedModel.modelName,
         options.modelTransport,
-        buildModelConfig(options.addName, options.modelTransport),
-      ),
-    ]
+        buildModelConfig(resolvedModel.modelName, options.modelTransport),
+      )
+      if (resolvedModel.message && modelResult.action !== 'skipped') {
+        modelResult.message = resolvedModel.message
+      }
+      fileResults = [modelResult]
+      if (resolvedModel.modelName !== options.addName) {
+        options.addName = resolvedModel.modelName
+      }
+    }
   } else {
     throw new Error(`Unsupported capability: ${options.capability}`)
   }
@@ -784,7 +928,8 @@ async function runAddCommand(options) {
   })
 
   const hasSkipError = payload.files.some((entry) => entry.action === 'skipped' && String(entry.message ?? '').includes('transport "'))
-  if (hasSkipError) payload.ok = false
+  const hasModelResolutionError = payload.files.some((entry) => entry.action === 'skipped' && String(entry.message ?? '').includes('model "'))
+  if (hasSkipError || hasModelResolutionError) payload.ok = false
 
   if (options.json) {
     console.log(JSON.stringify(payload, null, 2))

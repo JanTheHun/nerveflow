@@ -6,6 +6,8 @@ Nerveflow gives AI workflows an explicit execution spine: declared events, inspe
 
 ## Quick Onboarding
 
+Step 1: Runtime + deterministic state check
+
 ```bash
 # 1) Install
 npm install nerveflow
@@ -27,6 +29,10 @@ npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message ping
 # right channel, right message -> expected result
 npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "hello nerve"
 ```
+
+Next step: add an LLM and run a stateful chatbot from CLI.
+
+See [Onboarding Step 2](docs/onboarding-step-2.md) for the Step 2 walkthrough.
 
 `nerve-send` syntax:
 

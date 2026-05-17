@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto'
 import WebSocket from 'ws'
 
-const DEFAULT_TIMEOUT_MS = 10000
+const DEFAULT_TIMEOUT_MS = 30000
 
 function parseCliOptions(argv) {
   const options = {
@@ -142,9 +142,7 @@ async function main() {
     executionResolver = resolve
   })
 
-  const timeoutError = (label) => {
-    throw new Error(`Timed out waiting for ${label} after ${options.timeoutMs}ms`)
-  }
+  const timeoutError = (label) => new Error(`Timed out waiting for ${label} after ${options.timeoutMs}ms`)
 
   try {
     const subscribeRequestId = randomUUID()
@@ -155,14 +153,20 @@ async function main() {
       payload: {},
     }))
 
+    const subscribeTimeoutToken = Symbol('subscribe-timeout')
     const subscribeResponse = await Promise.race([
       subscribePromise,
-      new Promise((_, reject) => setTimeout(() => reject(timeoutError('subscribe response')), options.timeoutMs)),
+      new Promise((resolve) => setTimeout(() => resolve(subscribeTimeoutToken), options.timeoutMs)),
     ])
 
-    if (!subscribeResponse?.ok) {
+    if (subscribeResponse !== subscribeTimeoutToken && !subscribeResponse?.ok) {
       const message = String(subscribeResponse?.error?.message ?? 'subscribe failed')
       throw new Error(message)
+    }
+
+    if (subscribeResponse === subscribeTimeoutToken) {
+      // Some runtime surfaces auto-subscribe but do not always ack subscribe promptly.
+      pendingResponses.delete(subscribeRequestId)
     }
 
     const enqueueRequestId = randomUUID()

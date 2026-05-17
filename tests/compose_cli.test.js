@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { createServer } from 'node:http'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -27,6 +28,30 @@ function runProcess(args, options = {}) {
       resolveRun({ code, signal, stdout, stderr })
     })
   })
+}
+
+async function startMockOllamaTagsServer(models) {
+  const server = createServer((req, res) => {
+    if (req.url === '/api/tags') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ models: models.map((name) => ({ name })) }))
+      return
+    }
+
+    res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ ok: false }))
+  })
+
+  await new Promise((resolveListen) => {
+    server.listen(0, '127.0.0.1', resolveListen)
+  })
+
+  const address = server.address()
+  const port = typeof address === 'object' && address ? address.port : 0
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    close: () => new Promise((resolveClose) => server.close(resolveClose)),
+  }
 }
 
 test('nerve-compose exits with argument error when subcommand is missing', async () => {
@@ -345,6 +370,7 @@ test('nerve-compose add model registers model with existing transport', async ()
     transports: {
       ollama: {
         provider: 'ollama',
+        baseUrl: 'http://127.0.0.1:65535',
       },
     },
   }, null, 2), 'utf8')
@@ -372,6 +398,53 @@ test('nerve-compose add model registers model with existing transport', async ()
       transport: 'ollama',
     })
   } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('nerve-compose add model resolves unique ollama prefix to exact label', async () => {
+  const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-model-'))
+  const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')
+  const mockServer = await startMockOllamaTagsServer(['llama3.2:latest'])
+
+  await writeFile(path.join(workspaceRoot, 'nerve.json'), JSON.stringify({
+    entrypointPath: 'workflow.nrv',
+    transports: {
+      ollama: {
+        provider: 'ollama',
+        baseUrl: mockServer.baseUrl,
+      },
+    },
+  }, null, 2), 'utf8')
+
+  try {
+    const result = await runProcess([
+      'bin/nerve-compose.js',
+      'add',
+      'model',
+      'llama3.2',
+      '--transport',
+      'ollama',
+      workspaceRelativePath,
+      '--json',
+    ])
+    assert.equal(result.code, 0)
+
+    const payload = JSON.parse(result.stdout)
+    assert.equal(payload.ok, true)
+    assert.equal(payload.capability, 'model:llama3.2:latest')
+
+    const modelEntry = payload.files.find((entry) => String(entry.message || '').includes('resolved model'))
+    assert.equal(Boolean(modelEntry), true)
+
+    const nerve = JSON.parse(await readFile(path.join(workspaceRoot, 'nerve.json'), 'utf8'))
+    assert.deepEqual(nerve.models?.['llama3.2:latest'], {
+      model: 'llama3.2:latest',
+      transport: 'ollama',
+    })
+    assert.equal(nerve.models?.['llama3.2'], undefined)
+  } finally {
+    await mockServer.close()
     await rm(workspaceRoot, { recursive: true, force: true })
   }
 })

@@ -186,7 +186,7 @@ async function runPreflightChecks({ transport, baseUrl, model }) {
   } else if (modelList === null) {
     warn(`Model list not available for this server build — cannot verify '${model}'`)
   } else {
-    const found = modelList.some((m) => m === model || m.startsWith(`${model}:`))
+    const found = modelList.some((m) => m === model)
     if (found) {
       pass(`Model '${model}' is available`)
     } else {
@@ -195,6 +195,12 @@ async function runPreflightChecks({ transport, baseUrl, model }) {
         hint(`→ Run: ollama pull ${model}`)
       } else {
         hint(`→ Load the model with: llama-server --model /path/to/${model}.gguf --port 8080`)
+      }
+      const closeMatches = modelList.filter((m) => m.startsWith(`${model}:`))
+      if (closeMatches.length > 0) {
+        const previewClose = closeMatches.slice(0, 5).join(', ')
+        const tailClose = closeMatches.length > 5 ? ` (+ ${closeMatches.length - 5} more)` : ''
+        hint(`Close matches (use exact label): ${previewClose}${tailClose}`)
       }
       if (modelList.length > 0) {
         const preview = modelList.slice(0, 5).join(', ')
@@ -542,7 +548,7 @@ async function main() {
   } else if (modelList === null) {
     warn(`Model list not available for this server build — cannot verify '${model}'`)
   } else {
-    const found = modelList.some((m) => m === model || m.startsWith(`${model}:`))
+    const found = modelList.some((m) => m === model)
     if (found) {
       pass(`Model '${model}' is available`)
     } else {
@@ -551,6 +557,12 @@ async function main() {
         hint(`→ Run: ollama pull ${model}`)
       } else {
         hint(`→ Load the model with: llama-server --model /path/to/${model}.gguf --port 8080`)
+      }
+      const closeMatches = modelList.filter((m) => m.startsWith(`${model}:`))
+      if (closeMatches.length > 0) {
+        const previewClose = closeMatches.slice(0, 5).join(', ')
+        const tailClose = closeMatches.length > 5 ? ` (+ ${closeMatches.length - 5} more)` : ''
+        hint(`Close matches (use exact label): ${previewClose}${tailClose}`)
       }
       if (modelList.length > 0) {
         const preview = modelList.slice(0, 5).join(', ')

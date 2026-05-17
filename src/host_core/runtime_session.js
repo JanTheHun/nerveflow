@@ -346,17 +346,44 @@ export function createHostAdapter({
     const config = readWorkspaceConfig()
     const modelsMap = config?.models?.map ?? {}
     const transportsMap = config?.transports?.map ?? {}
-    const modelConfig = modelsMap[modelName]
-    if (!modelConfig || typeof modelConfig !== 'object') return null
-
-    const transportLabel = String(modelConfig?.transport ?? '').trim()
-    const modelId = String(modelConfig?.model ?? '').trim() || modelName
-    return {
-      name: modelName,
-      id: modelId,
-      transport: transportLabel,
-      transportConfig: transportLabel ? (transportsMap[transportLabel] ?? null) : null,
+    const asResolved = (aliasName, modelConfig) => {
+      if (!modelConfig || typeof modelConfig !== 'object' || Array.isArray(modelConfig)) return null
+      const transportLabel = String(modelConfig?.transport ?? '').trim()
+      const modelId = String(modelConfig?.model ?? '').trim() || String(aliasName ?? '').trim() || modelName
+      return {
+        name: String(aliasName ?? '').trim() || modelName,
+        id: modelId,
+        transport: transportLabel,
+        transportConfig: transportLabel ? (transportsMap[transportLabel] ?? null) : null,
+      }
     }
+
+    const exactByAlias = asResolved(modelName, modelsMap[modelName])
+    if (exactByAlias) return exactByAlias
+
+    const modelEntries = Object.entries(modelsMap)
+      .map(([aliasName, entryConfig]) => ({ aliasName, entryConfig }))
+      .filter(({ aliasName, entryConfig }) => String(aliasName ?? '').trim() && entryConfig && typeof entryConfig === 'object' && !Array.isArray(entryConfig))
+
+    const exactByIdEntry = modelEntries.find(({ entryConfig }) => String(entryConfig?.model ?? '').trim() === modelName)
+    if (exactByIdEntry) {
+      return asResolved(exactByIdEntry.aliasName, exactByIdEntry.entryConfig)
+    }
+
+    if (!modelName.includes(':')) {
+      const prefixedMatches = modelEntries.filter(({ aliasName, entryConfig }) => {
+        const alias = String(aliasName ?? '').trim()
+        const configuredId = String(entryConfig?.model ?? '').trim()
+        return alias.startsWith(`${modelName}:`) || configuredId.startsWith(`${modelName}:`)
+      })
+
+      if (prefixedMatches.length === 1) {
+        const [match] = prefixedMatches
+        return asResolved(match.aliasName, match.entryConfig)
+      }
+    }
+
+    return null
   }
 
   const adapter = {

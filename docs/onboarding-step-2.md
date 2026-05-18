@@ -1,9 +1,32 @@
 # Onboarding Step 2
 
-Step 2 of onboarding: add an LLM and run a stateful chatbot from the command line.
+Add an LLM and run a stateful chatbot from the command line.
 
-## 1. Register transport and model
+To run this step, you need a model endpoint you can call. Choose one path:
 
+1. Local path: run a model on your machine (recommended for this tutorial: Ollama)
+2. External API path: use a hosted provider with an API key (example in this tutorial: OpenAI)
+
+## Local path (Ollama)
+
+### 1. Install Ollama
+Download and install Ollama:
+https://ollama.com/download
+
+### 2. Pull a model
+Run:
+
+```bash
+ollama pull llama3.2:latest
+```
+
+Verify the model is available:
+
+```bash
+ollama list
+```
+
+### 3. Register local transport and model
 From your workspace root:
 
 ```bash
@@ -18,17 +41,40 @@ node bin/nerve-compose.js add transport ollama
 node bin/nerve-compose.js add model llama3.2:latest --transport ollama
 ```
 
-## 2. Ensure the model server is ready
+## External API path (OpenAI-compatible)
+
+### 1. Register transport and model
+From your workspace root:
 
 ```bash
-ollama serve
-ollama pull llama3.2:latest
-npx nerve-model-check --model llama3.2:latest
+npx nerve-compose add transport openai
+npx nerve-compose add model gpt-4o-mini --transport openai
 ```
 
-## 3. Seed conversation state
+### 2. Configure transport provider in nerve.json
+Set the openai transport provider to openai_compat and read API key from environment:
 
-Create or replace `state.init.json`:
+```json
+{
+  "transports": {
+    "openai": {
+      "provider": "openai_compat",
+      "baseUrl": "https://api.openai.com",
+      "apiKey": "${env:OPENAI_API_KEY}"
+    }
+  }
+}
+```
+
+### 3. Add API key to .env
+
+```bash
+OPENAI_API_KEY=your_api_key_here
+```
+
+## Seed conversation state
+
+Replace state.init.json with:
 
 ```json
 {
@@ -41,41 +87,83 @@ Create or replace `state.init.json`:
 }
 ```
 
-## 4. Paste chatbot workflow
+## Paste chatbot workflow
 
-Create or replace `workflow.nrv`:
+Replace workflow.nrv with:
 
 ```nrv
 on external "user_message"
-  state.conversation = state.conversation + [
-    {
-      role: "user",
-      content: event.value
-    }
-  ]
-
-  reply = model("llama3.2:latest", messages=state.conversation)
-
-  if reply.content
-    assistant_text = reply.content
+  if event.value == "hello nerve"
+    output text "hello world!"
   else
-    assistant_text = reply
+    state.conversation = state.conversation + [
+      {
+        role: "user",
+        content: event.value
+      }
+    ]
+
+    reply = model("llama3.2:latest", messages=state.conversation)
+
+    if reply.content
+      assistant_text = reply.content
+    else
+      assistant_text = reply
+    end
+
+    state.conversation = state.conversation + [
+      {
+        role: "assistant",
+        content: assistant_text
+      }
+    ]
+
+    output text assistant_text
   end
-
-  state.conversation = state.conversation + [
-    {
-      role: "assistant",
-      content: assistant_text
-    }
-  ]
-
-  output text assistant_text
 end
 ```
 
-## 5. Chat from CLI
+Set the model label in that workflow based on your path:
 
-Use the standalone runtime WS endpoint (default: `ws://127.0.0.1:4190/api/runtime/ws`).
+1. Local path:
+reply = model("llama3.2:latest", messages=state.conversation)
+2. External API path:
+reply = model("gpt-4o-mini", messages=state.conversation)
+
+Expected behavior:
+
+1. `hello nerve` still prints `hello world!`.
+2. Everything else is routed to the chatbot branch.
+
+## Model variability (important)
+
+Behavior depends strongly on model choice and hardware.
+
+Try these experiments:
+
+1. Cloud path:
+Use openai_compat with API key and run a remote model.
+2. Fast local path:
+Run a local model on a capable GPU.
+3. Constrained local path:
+Run local on CPU or limited hardware and compare with a smaller model.
+
+What to expect:
+
+1. Quality and latency can vary significantly.
+2. Some events may fail if model or transport is unavailable or overloaded.
+3. The runtime process remains active and can process later events.
+
+## Chat from CLI
+
+If runtime is not started yet:
+
+```bash
+npx nerve-runtime start --port 4190
+```
+
+Use the runtime WS endpoint:
+ws://127.0.0.1:4190/api/runtime/ws
 
 Quick connectivity check:
 
@@ -83,46 +171,18 @@ Quick connectivity check:
 npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws snapshot
 ```
 
+Send test messages:
+
 ```bash
 npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "hello there"
 npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "remember my favorite color is green"
 npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "what is my favorite color?"
 ```
 
-`nerve-send` syntax:
+nerve-send syntax:
 
 ```bash
 npx nerve-send <wsUrl> <eventType> [message]
 ```
 
-If you have not started the runtime yet, return to Step 1 in [02-getting-started.md](02-getting-started.md) and run `npx nerve-runtime start --port 4190`.
-
-## If chat fails
-
-Run these checks in order:
-
-1. Verify runtime WS connectivity:
-
-```bash
-npx nerve-attach ws://127.0.0.1:4190/api/runtime/ws snapshot
-```
-
-2. Verify the model label is installed:
-
-```bash
-ollama list
-```
-
-3. Ensure the expected label exists locally:
-
-```bash
-ollama pull llama3.2:latest
-```
-
-4. Re-run model preflight:
-
-```bash
-npx nerve-model-check --model llama3.2:latest
-```
-
-Next: continue with [onboarding-step-3.md](onboarding-step-3.md) to introduce Nerve Studio.
+Next: continue with onboarding-step-3.md to introduce Nerve Studio.

@@ -185,4 +185,4 @@ nerve-send syntax:
 npx nerve-send <wsUrl> <eventType> [message]
 ```
 
-Next: continue with onboarding-step-3.md to introduce Nerve Studio.
+Next: continue with [Onboarding Step 3](onboarding-step-3.md) to introduce Nerve Studio.

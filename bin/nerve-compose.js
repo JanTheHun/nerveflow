@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  createComposableHost,
   getConfiguredModules,
   getDeclaredEffectChannels,
   getRequiredCapabilities,
@@ -67,6 +68,21 @@ const TRANSPORT_ENV_TEMPLATES = Object.freeze({
   'llama.cpp': [
     '# transport: llama.cpp',
     'LLAMA_CPP_BASE_URL=http://127.0.0.1:8080',
+  ],
+  openai: [
+    '# transport: openai',
+    'OPENAI_BASE_URL=https://api.openai.com',
+    'OPENAI_API_KEY=',
+  ],
+  groq: [
+    '# transport: groq',
+    'GROQ_BASE_URL=https://api.groq.com/openai',
+    'GROQ_API_KEY=',
+  ],
+  gemini: [
+    '# transport: gemini',
+    'GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai',
+    'GEMINI_API_KEY=',
   ],
 })
 
@@ -204,7 +220,7 @@ function parseCliOptions(argv) {
   const [subcommandRaw, ...rest] = argv
   const subcommand = String(subcommandRaw ?? '').trim().toLowerCase()
   if (!subcommand) {
-    throw new Error('Usage: nerve-compose <modules|doctor|add|init> [workspaceDir] [--json] [--builtin-only] [--strict]')
+    throw new Error('Usage: nerve-compose <modules|doctor|validate|add|init> [workspaceDir] [--json] [--builtin-only] [--strict]')
   }
 
   const options = {
@@ -271,6 +287,7 @@ function parseCliOptions(argv) {
   if (
     options.subcommand !== 'modules'
     && options.subcommand !== 'doctor'
+    && options.subcommand !== 'validate'
     && options.subcommand !== 'add'
     && options.subcommand !== 'init'
   ) {
@@ -306,6 +323,64 @@ function parseCliOptions(argv) {
   }
 
   return options
+}
+
+function printValidateSummary(payload) {
+  console.log(`workspace: ${payload.workspaceDir}`)
+  console.log(`summary: capabilities=${payload.summary.capabilities}, tools=${payload.summary.toolProviders}, connectors=${payload.summary.ingressConnectors}, realizers=${payload.summary.effectRealizers}`)
+  if (Array.isArray(payload.resolvedCapabilities) && payload.resolvedCapabilities.length > 0) {
+    for (const entry of payload.resolvedCapabilities) {
+      console.log(`resolved capability=${entry.capabilityName} module=${entry.moduleName} provider=${entry.provider} mode=${entry.mode}`)
+    }
+  }
+  if (payload.error) {
+    console.log(`ERROR validate ${payload.error}`)
+  }
+}
+
+async function runValidateCommand(options) {
+  const cwd = process.cwd()
+  const workspaceDirAbsolutePath = options.workspaceDir
+    ? path.resolve(cwd, options.workspaceDir)
+    : cwd
+
+  loadWorkspaceEnvFile(workspaceDirAbsolutePath)
+
+  let summary = null
+  let error = null
+
+  try {
+    const workspaceDirRelativePath = toRelativePath(workspaceDirAbsolutePath, cwd)
+    const host = createComposableHost({
+      workspaceDir: workspaceDirRelativePath,
+      autoAttachCapabilitiesFromWorkspace: true,
+    })
+    summary = await host.validateWorkspaceCapabilities()
+  } catch (err) {
+    error = err
+  }
+
+  const payload = {
+    ok: !error,
+    command: 'validate',
+    workspaceDir: toRelativePath(workspaceDirAbsolutePath, cwd),
+    summary: summary || {
+      capabilities: 0,
+      toolProviders: 0,
+      ingressConnectors: 0,
+      effectRealizers: 0,
+    },
+    resolvedCapabilities: Array.isArray(summary?.workspaceCapabilities) ? summary.workspaceCapabilities : [],
+    error: error ? String(error?.message ?? error) : null,
+  }
+
+  if (options.json) {
+    console.log(JSON.stringify(payload, null, 2))
+  } else {
+    printValidateSummary(payload)
+  }
+
+  return { ok: payload.ok }
 }
 
 function buildInitPayload({ workspaceDir, fileResults }) {
@@ -441,6 +516,50 @@ function upsertEnvExample(envExamplePath) {
 
 function upsertSpeechEnvExample(envExamplePath) {
   return upsertEnvExampleLines(envExamplePath, SPEECH_ENV_LINES)
+}
+
+function parseEnvKeyFromLine(lineRaw) {
+  const line = String(lineRaw ?? '').trim()
+  if (!line || line.startsWith('#')) return ''
+  const cleaned = line.startsWith('export ') ? line.slice(7).trim() : line
+  const eqIndex = cleaned.indexOf('=')
+  if (eqIndex <= 0) return ''
+  const key = cleaned.slice(0, eqIndex).trim()
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return ''
+  return key
+}
+
+function upsertEnvLines(envPath, envLines) {
+  const existing = readTextFileIfExists(envPath)
+  const assignmentLines = envLines.filter((line) => parseEnvKeyFromLine(line))
+
+  if (existing == null) {
+    ensureParentDir(envPath)
+    writeFileSync(envPath, `${assignmentLines.join('\n')}\n`, 'utf8')
+    return { action: 'created', path: envPath }
+  }
+
+  const existingKeys = new Set(
+    existing
+      .split(/\r?\n/)
+      .map((line) => parseEnvKeyFromLine(line))
+      .filter(Boolean)
+  )
+
+  const linesToAppend = assignmentLines.filter((line) => {
+    const key = parseEnvKeyFromLine(line)
+    return key && !existingKeys.has(key)
+  })
+
+  if (linesToAppend.length === 0) {
+    return { action: 'unchanged', path: envPath }
+  }
+
+  const separator = existing.trim() ? '\n' : ''
+  const nextContent = `${normalizeTrailingNewline(existing).trimEnd()}${separator}\n${linesToAppend.join('\n')}\n`
+    .replace(/^\n/, '')
+  writeFileSync(envPath, nextContent, 'utf8')
+  return { action: 'updated', path: envPath }
 }
 
 function upsertGeneratedHostModules(workspaceDir) {
@@ -657,6 +776,27 @@ function buildTransportConfig(transportName) {
       baseUrl: '${env:LLAMA_CPP_BASE_URL}',
     }
   }
+  if (normalized === 'openai') {
+    return {
+      provider: 'openai_compat',
+      baseUrl: '${env:OPENAI_BASE_URL}',
+      apiKey: '${env:OPENAI_API_KEY}',
+    }
+  }
+  if (normalized === 'groq') {
+    return {
+      provider: 'openai_compat',
+      baseUrl: '${env:GROQ_BASE_URL}',
+      apiKey: '${env:GROQ_API_KEY}',
+    }
+  }
+  if (normalized === 'gemini') {
+    return {
+      provider: 'openai_compat',
+      baseUrl: '${env:GEMINI_BASE_URL}',
+      apiKey: '${env:GEMINI_API_KEY}',
+    }
+  }
   return {
     provider: transportName,
   }
@@ -836,12 +976,48 @@ function buildAddPayload({ capability, workspaceDir, fileResults }) {
   }
 }
 
+function buildComposableGuidance(options) {
+  if (options.capability === 'memory-pgvector') {
+    return {
+      providerLabel: 'memory-pgvector',
+      host: 'composable-reference-host',
+      autoAttach: true,
+      steps: [
+        'Declare memory capability in workspace config (requires/modules).',
+        'Set MEMORY_DB_URL and related env values.',
+        'Start composable-reference-host with WORKSPACE_DIR pointing to the workspace.',
+      ],
+    }
+  }
+
+  if (options.capability === 'speech') {
+    return {
+      providerLabel: 'speech-surface',
+      host: 'composable-reference-host',
+      autoAttach: true,
+      steps: [
+        'Declare speech capability in workspace config (requires/modules).',
+        'Set Whisper/Piper env values as needed.',
+        'Start composable-reference-host with WORKSPACE_DIR pointing to the workspace.',
+      ],
+    }
+  }
+
+  return null
+}
+
 function printAddSummary(payload) {
   console.log(`workspace: ${payload.workspaceDir}`)
   console.log(`capability: ${payload.capability}`)
   for (const result of payload.files) {
     const message = result.message ? ` message=${result.message}` : ''
     console.log(`file=${result.path} action=${result.action}${message}`)
+  }
+
+  if (payload.composable?.providerLabel) {
+    console.log(`composable_provider=${payload.composable.providerLabel}`)
+    console.log('composable_host=composable-reference-host')
+    console.log('composable_auto_attach=true')
   }
 }
 
@@ -867,15 +1043,21 @@ async function runAddCommand(options) {
     ]
   } else if (options.capability === 'transport') {
     const { path: configPath, label: configLabel } = resolveWorkspaceConfigPath(workspaceDir)
-    fileResults = [
-      upsertNextVTransportConfigByName(
-        configPath,
-        configLabel,
-        options.addName,
-        buildTransportConfig(options.addName),
-      ),
-      upsertEnvExampleLines(path.join(workspaceDir, '.env.example'), buildTransportEnvLines(options.addName)),
-    ]
+    const transportEnvLines = buildTransportEnvLines(options.addName)
+    const transportConfigResult = upsertNextVTransportConfigByName(
+      configPath,
+      configLabel,
+      options.addName,
+      buildTransportConfig(options.addName),
+    )
+
+    fileResults = [transportConfigResult]
+    if (transportConfigResult.action !== 'skipped') {
+      fileResults.push(
+        upsertEnvExampleLines(path.join(workspaceDir, '.env.example'), transportEnvLines),
+        upsertEnvLines(path.join(workspaceDir, '.env'), transportEnvLines),
+      )
+    }
   } else if (options.capability === 'model') {
     loadWorkspaceEnvFile(workspaceDir)
     const { path: configPath, label: configLabel } = resolveWorkspaceConfigPath(workspaceDir)
@@ -926,6 +1108,8 @@ async function runAddCommand(options) {
     workspaceDir: toRelativePath(workspaceDir, cwd),
     fileResults,
   })
+
+  payload.composable = buildComposableGuidance(options)
 
   const hasSkipError = payload.files.some((entry) => entry.action === 'skipped' && String(entry.message ?? '').includes('transport "'))
   const hasModelResolutionError = payload.files.some((entry) => entry.action === 'skipped' && String(entry.message ?? '').includes('model "'))
@@ -1225,6 +1409,11 @@ async function main() {
 
     if (options.subcommand === 'doctor') {
       const result = await runDoctorCommand(options)
+      process.exit(result.ok ? 0 : 1)
+    }
+
+    if (options.subcommand === 'validate') {
+      const result = await runValidateCommand(options)
       process.exit(result.ok ? 0 : 1)
     }
 

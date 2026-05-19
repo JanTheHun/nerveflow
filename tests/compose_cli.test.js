@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
+import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -210,6 +211,92 @@ test('nerve-compose doctor --json returns health report for example workspace', 
   assert.equal(typeof payload.config?.nextv, 'string')
 })
 
+test('nerve-compose validate --json succeeds for workspace without required capabilities', async () => {
+  const result = await runProcess(['bin/nerve-compose.js', 'validate', 'examples/mqtt-simple-host', '--json'])
+  assert.equal(result.code, 0)
+
+  const payload = JSON.parse(result.stdout)
+  assert.equal(payload.ok, true)
+  assert.equal(payload.command, 'validate')
+  assert.equal(typeof payload.summary?.capabilities, 'number')
+})
+
+test('nerve-compose validate fails when required module provider is unsupported', async () => {
+  const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-validate-'))
+  const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')
+
+  await writeFile(path.join(workspaceRoot, 'nextv.json'), JSON.stringify({
+    entrypointPath: 'entry.nrv',
+    requires: {
+      memory: {
+        required: true,
+        provider: 'memory',
+      },
+    },
+    modules: {
+      memory: {
+        provider: 'unknown-provider',
+        mode: 'embedded',
+      },
+    },
+  }, null, 2), 'utf8')
+
+  await writeFile(path.join(workspaceRoot, 'entry.nrv'), 'on external "user_message"\n  output text "ok"\nend\n', 'utf8')
+
+  try {
+    const result = await runProcess(['bin/nerve-compose.js', 'validate', workspaceRelativePath, '--json'])
+    assert.equal(result.code, 1)
+
+    const payload = JSON.parse(result.stdout)
+    assert.equal(payload.ok, false)
+    assert.equal(payload.command, 'validate')
+    assert.equal(String(payload.error || '').includes('Unsupported workspace module provider'), true)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('nerve-compose validate reports resolved workspace capability bindings', async () => {
+  const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-validate-'))
+  const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')
+
+  await writeFile(path.join(workspaceRoot, 'nextv.json'), JSON.stringify({
+    entrypointPath: 'entry.nrv',
+    requires: {
+      speech: {
+        required: true,
+        provider: 'speech',
+      },
+    },
+    modules: {
+      speech: {
+        provider: 'speech-surface',
+        mode: 'embedded',
+      },
+    },
+  }, null, 2), 'utf8')
+
+  await writeFile(path.join(workspaceRoot, 'entry.nrv'), 'on external "user_message"\n  output text "ok"\nend\n', 'utf8')
+
+  try {
+    const result = await runProcess(['bin/nerve-compose.js', 'validate', workspaceRelativePath, '--json'])
+    assert.equal(result.code, 0)
+
+    const payload = JSON.parse(result.stdout)
+    assert.equal(payload.ok, true)
+    assert.equal(Array.isArray(payload.resolvedCapabilities), true)
+    assert.equal(payload.resolvedCapabilities.length, 1)
+    assert.deepEqual(payload.resolvedCapabilities[0], {
+      capabilityName: 'speech',
+      moduleName: 'speech',
+      provider: 'speech-surface',
+      mode: 'embedded',
+    })
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
 test('nerve-compose doctor fails strict capability checks for missing bindings', async () => {
   const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-doctor-'))
   const nextvPath = path.join(workspaceRoot, 'nextv.json')
@@ -257,6 +344,9 @@ test('nerve-compose add memory-pgvector scaffolds workspace files', async () => 
     assert.equal(payload.command, 'add')
     assert.equal(payload.capability, 'memory-pgvector')
     assert.equal(Array.isArray(payload.files), true)
+    assert.equal(payload.composable?.providerLabel, 'memory-pgvector')
+    assert.equal(payload.composable?.host, 'composable-reference-host')
+    assert.equal(payload.composable?.autoAttach, true)
 
     const hostModulesSource = await readFile(path.join(workspaceRoot, 'host_modules', 'index.js'), 'utf8')
     const expectedImportPathRaw = path.relative(
@@ -335,6 +425,136 @@ test('nerve-compose add transport ollama registers transport and env placeholder
 
     const envExample = await readFile(path.join(workspaceRoot, '.env.example'), 'utf8')
     assert.equal(envExample.includes('OLLAMA_BASE_URL='), true)
+
+    const env = await readFile(path.join(workspaceRoot, '.env'), 'utf8')
+    assert.equal(env.includes('OLLAMA_BASE_URL='), true)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('nerve-compose add transport appends missing .env keys without overwriting existing values', async () => {
+  const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-transport-'))
+  const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')
+
+  await writeFile(path.join(workspaceRoot, 'nerve.json'), JSON.stringify({ entrypointPath: 'workflow.nrv' }, null, 2), 'utf8')
+  await writeFile(path.join(workspaceRoot, '.env'), 'OLLAMA_BASE_URL=http://localhost:12345\n', 'utf8')
+
+  try {
+    const ollamaResult = await runProcess(['bin/nerve-compose.js', 'add', 'transport', 'ollama', workspaceRelativePath, '--json'])
+    assert.equal(ollamaResult.code, 0)
+
+    const openaiResult = await runProcess(['bin/nerve-compose.js', 'add', 'transport', 'openai', workspaceRelativePath, '--json'])
+    assert.equal(openaiResult.code, 0)
+
+    const env = await readFile(path.join(workspaceRoot, '.env'), 'utf8')
+    assert.equal(env.includes('OLLAMA_BASE_URL=http://localhost:12345'), true)
+    assert.equal(env.includes('OPENAI_BASE_URL=https://api.openai.com'), true)
+    assert.equal(env.includes('OPENAI_API_KEY='), true)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('nerve-compose add transport openai scaffolds env-backed config with only api key blank in .env', async () => {
+  const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-transport-'))
+  const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')
+
+  await writeFile(path.join(workspaceRoot, 'nerve.json'), JSON.stringify({ entrypointPath: 'workflow.nrv' }, null, 2), 'utf8')
+
+  try {
+    const result = await runProcess(['bin/nerve-compose.js', 'add', 'transport', 'openai', workspaceRelativePath, '--json'])
+    assert.equal(result.code, 0)
+
+    const payload = JSON.parse(result.stdout)
+    assert.equal(payload.ok, true)
+    assert.equal(payload.capability, 'transport:openai')
+
+    const nerve = JSON.parse(await readFile(path.join(workspaceRoot, 'nerve.json'), 'utf8'))
+    assert.deepEqual(nerve.transports?.openai, {
+      provider: 'openai_compat',
+      baseUrl: '${env:OPENAI_BASE_URL}',
+      apiKey: '${env:OPENAI_API_KEY}',
+    })
+
+    const env = await readFile(path.join(workspaceRoot, '.env'), 'utf8')
+    assert.equal(env.includes('OPENAI_BASE_URL=https://api.openai.com'), true)
+    assert.equal(env.includes('OPENAI_API_KEY='), true)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('nerve-compose add transport groq scaffolds env-backed config with only api key blank in .env', async () => {
+  const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-transport-'))
+  const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')
+
+  await writeFile(path.join(workspaceRoot, 'nerve.json'), JSON.stringify({ entrypointPath: 'workflow.nrv' }, null, 2), 'utf8')
+
+  try {
+    const result = await runProcess(['bin/nerve-compose.js', 'add', 'transport', 'groq', workspaceRelativePath, '--json'])
+    assert.equal(result.code, 0)
+
+    const payload = JSON.parse(result.stdout)
+    assert.equal(payload.ok, true)
+    assert.equal(payload.capability, 'transport:groq')
+
+    const nerve = JSON.parse(await readFile(path.join(workspaceRoot, 'nerve.json'), 'utf8'))
+    assert.deepEqual(nerve.transports?.groq, {
+      provider: 'openai_compat',
+      baseUrl: '${env:GROQ_BASE_URL}',
+      apiKey: '${env:GROQ_API_KEY}',
+    })
+
+    const env = await readFile(path.join(workspaceRoot, '.env'), 'utf8')
+    assert.equal(env.includes('GROQ_BASE_URL=https://api.groq.com/openai'), true)
+    assert.equal(env.includes('GROQ_API_KEY='), true)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('nerve-compose add transport gemini scaffolds env-backed config with only api key blank in .env', async () => {
+  const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-transport-'))
+  const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')
+
+  await writeFile(path.join(workspaceRoot, 'nerve.json'), JSON.stringify({ entrypointPath: 'workflow.nrv' }, null, 2), 'utf8')
+
+  try {
+    const result = await runProcess(['bin/nerve-compose.js', 'add', 'transport', 'gemini', workspaceRelativePath, '--json'])
+    assert.equal(result.code, 0)
+
+    const payload = JSON.parse(result.stdout)
+    assert.equal(payload.ok, true)
+    assert.equal(payload.capability, 'transport:gemini')
+
+    const nerve = JSON.parse(await readFile(path.join(workspaceRoot, 'nerve.json'), 'utf8'))
+    assert.deepEqual(nerve.transports?.gemini, {
+      provider: 'openai_compat',
+      baseUrl: '${env:GEMINI_BASE_URL}',
+      apiKey: '${env:GEMINI_API_KEY}',
+    })
+
+    const env = await readFile(path.join(workspaceRoot, '.env'), 'utf8')
+    assert.equal(env.includes('GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai'), true)
+    assert.equal(env.includes('GEMINI_API_KEY='), true)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('nerve-compose add transport skips .env changes when workspace config is missing', async () => {
+  const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-transport-'))
+  const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')
+
+  try {
+    const result = await runProcess(['bin/nerve-compose.js', 'add', 'transport', 'ollama', workspaceRelativePath, '--json'])
+    assert.equal(result.code, 0)
+
+    const payload = JSON.parse(result.stdout)
+    assert.equal(payload.ok, true)
+    assert.equal(payload.files.some((entry) => String(entry.path || '').endsWith('.env')), false)
+    assert.equal(existsSync(path.join(workspaceRoot, '.env')), false)
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true })
   }
@@ -550,6 +770,9 @@ test('nerve-compose add speech scaffolds env, nextv config, and speech surface',
     assert.equal(payload.ok, true)
     assert.equal(payload.capability, 'speech')
     assert.equal(Array.isArray(payload.files), true)
+    assert.equal(payload.composable?.providerLabel, 'speech-surface')
+    assert.equal(payload.composable?.host, 'composable-reference-host')
+    assert.equal(payload.composable?.autoAttach, true)
 
     const hostModulesSource = await readFile(path.join(workspaceRoot, 'host_modules', 'index.js'), 'utf8')
     assert.equal(hostModulesSource.includes('Generated by nerve-compose add speech'), true)

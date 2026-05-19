@@ -44,32 +44,65 @@ node bin/nerve-compose.js add model llama3.2:latest --transport ollama
 ## External API path (OpenAI-compatible)
 
 ### 1. Register transport and model
-From your workspace root:
+From your workspace root, choose one provider:
+
+OpenAI:
 
 ```bash
 npx nerve-compose add transport openai
 npx nerve-compose add model gpt-4o-mini --transport openai
 ```
 
-### 2. Configure transport provider in nerve.json
-Set the openai transport provider to openai_compat and read API key from environment:
+Groq:
+
+```bash
+npx nerve-compose add transport groq
+npx nerve-compose add model llama-3.3-70b-versatile --transport groq
+```
+
+Gemini:
+
+```bash
+npx nerve-compose add transport gemini
+npx nerve-compose add model gemini-2.5-flash-lite --transport gemini
+```
+
+### 2. Verify generated transport config in nerve.json
+`nerve-compose add transport <name>` now scaffolds OpenAI-compatible transport config automatically.
+
+Examples:
 
 ```json
 {
   "transports": {
     "openai": {
       "provider": "openai_compat",
-      "baseUrl": "https://api.openai.com",
+      "baseUrl": "${env:OPENAI_BASE_URL}",
       "apiKey": "${env:OPENAI_API_KEY}"
+    },
+    "groq": {
+      "provider": "openai_compat",
+      "baseUrl": "${env:GROQ_BASE_URL}",
+      "apiKey": "${env:GROQ_API_KEY}"
+    },
+    "gemini": {
+      "provider": "openai_compat",
+      "baseUrl": "${env:GEMINI_BASE_URL}",
+      "apiKey": "${env:GEMINI_API_KEY}"
     }
   }
 }
 ```
 
 ### 3. Add API key to .env
+Set the key for the provider you chose:
 
 ```bash
 OPENAI_API_KEY=your_api_key_here
+# or
+GROQ_API_KEY=your_api_key_here
+# or
+GEMINI_API_KEY=your_api_key_here
 ```
 
 ## Seed conversation state
@@ -129,6 +162,8 @@ Set the model label in that workflow based on your path:
 reply = model("llama3.2:latest", messages=state.conversation)
 2. External API path:
 reply = model("gpt-4o-mini", messages=state.conversation)
+or reply = model("llama-3.3-70b-versatile", messages=state.conversation)
+or reply = model("gemini-2.5-flash-lite", messages=state.conversation)
 
 Expected behavior:
 
@@ -186,3 +221,5 @@ npx nerve-send <wsUrl> <eventType> [message]
 ```
 
 Next: continue with onboarding-step-3.md to introduce Nerve Studio.
+
+If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../MANIFESTO.md).

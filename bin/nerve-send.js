@@ -86,6 +86,33 @@ function extractTextOutputFromExecution(payload) {
   return textOutputs[textOutputs.length - 1]
 }
 
+function formatExecutionErrorFromEvent(message) {
+  const payload = message?.payload && typeof message.payload === 'object' ? message.payload : {}
+  const baseMessage = String(payload.message ?? 'Unknown nextV runtime error').trim()
+  const code = String(payload.code ?? '').trim()
+  const kind = String(payload.kind ?? '').trim()
+  const sourcePath = String(payload.sourcePath ?? '').trim()
+  const sourceLineRaw = Number(payload.sourceLine)
+  const sourceLine = Number.isFinite(sourceLineRaw) && sourceLineRaw > 0 ? sourceLineRaw : null
+  const statement = String(payload.statement ?? '').trim()
+
+  const tags = [code, kind].filter(Boolean)
+  const location = sourcePath
+    ? (sourceLine != null ? `${sourcePath}:${sourceLine}` : sourcePath)
+    : (sourceLine != null ? `line ${sourceLine}` : '')
+
+  const detailParts = []
+  if (tags.length > 0) detailParts.push(tags.join('/'))
+  if (location) detailParts.push(`at ${location}`)
+  if (statement) detailParts.push(`statement: ${statement}`)
+
+  const detailText = detailParts.length > 0 ? ` (${detailParts.join(' | ')})` : ''
+  const err = new Error(`${baseMessage}${detailText}`)
+  err.code = code || 'runtime_error'
+  err.kind = kind || ''
+  return err
+}
+
 async function main() {
   let options
   try {
@@ -105,6 +132,7 @@ async function main() {
 
   const pendingResponses = new Map()
   let executionResolver = null
+  let executionRejecter = null
 
   ws.on('message', (raw) => {
     let message
@@ -118,7 +146,18 @@ async function main() {
       if (executionResolver) {
         const resolveExecution = executionResolver
         executionResolver = null
+        executionRejecter = null
         resolveExecution(message)
+      }
+      return
+    }
+
+    if (message?.type === 'event' && String(message.eventName ?? '') === 'nextv_error') {
+      if (executionRejecter) {
+        const rejectExecution = executionRejecter
+        executionResolver = null
+        executionRejecter = null
+        rejectExecution(formatExecutionErrorFromEvent(message))
       }
       return
     }
@@ -138,8 +177,9 @@ async function main() {
     pendingResponses.set(requestId, resolve)
   })
 
-  const waitForExecution = () => new Promise((resolve) => {
+  const waitForExecution = () => new Promise((resolve, reject) => {
     executionResolver = resolve
+    executionRejecter = reject
   })
 
   const timeoutError = (label) => new Error(`Timed out waiting for ${label} after ${options.timeoutMs}ms`)

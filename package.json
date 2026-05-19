@@ -35,6 +35,7 @@
     "packages/*"
   ],
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "mqtt": "^5.15.1",
     "pg": "^8.13.1",
     "ws": "^8.18.3"
@@ -77,6 +78,8 @@
     "examples/minimal-web-host/workflow.nrv",
     "examples/minimal-web-host/package.json",
     "examples/minimal-web-host/public/index.html",
+    "examples/composable-reference-host/server.js",
+    "examples/composable-reference-host/README.md",
     "LICENSE",
     "README.md",
     "NERVEFLOW_AGENT_RULES.md",

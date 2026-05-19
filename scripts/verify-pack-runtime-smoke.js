@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { createServer as createNetServer } from 'node:net'
@@ -202,9 +203,29 @@ async function main() {
     await runNpm(['install', '--no-package-lock', '--no-audit', '--fund=false', tarballPath], { cwd: tempRoot })
 
     const installedBinDir = path.join(tempRoot, 'node_modules', 'nerveflow', 'bin')
+    const installedRoot = path.join(tempRoot, 'node_modules', 'nerveflow')
     const runtimeScript = path.join(installedBinDir, 'nerve-runtime.js')
     const attachScript = path.join(installedBinDir, 'nerve-attach.js')
+    const composeScript = path.join(installedBinDir, 'nerve-compose.js')
     const workspaceDir = path.join('node_modules', 'nerveflow', 'examples', 'minimal-web-host')
+
+    const composableServerPath = path.join(installedRoot, 'examples', 'composable-reference-host', 'server.js')
+    const composableReadmePath = path.join(installedRoot, 'examples', 'composable-reference-host', 'README.md')
+    if (!existsSync(composableServerPath) || !existsSync(composableReadmePath)) {
+      throw new Error('Composable reference host assets are missing from installed npm artifact')
+    }
+
+    console.log('[pack-smoke] validating installed nerve-compose validate command')
+    const validateResult = await runCommand(process.execPath, [
+      composeScript,
+      'validate',
+      'examples/minimal-web-host',
+      '--json',
+    ], { cwd: installedRoot })
+    const validatePayload = JSON.parse(String(validateResult.stdout || '{}'))
+    if (validatePayload?.ok !== true || validatePayload?.command !== 'validate') {
+      throw new Error(`Validate command failed in installed package: ${JSON.stringify(validatePayload)}`)
+    }
 
     console.log('[pack-smoke] booting installed runtime artifact')
     runtimeChild = spawn(process.execPath, [

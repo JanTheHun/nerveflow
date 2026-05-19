@@ -51,6 +51,32 @@ export {
 } from './runtime_controller.js'
 
 export {
+  createComposableHost,
+} from './composable_host.js'
+
+export {
+  storageCapability,
+} from './capabilities/storage.js'
+
+export {
+  speechCapability,
+} from './capabilities/speech.js'
+
+export {
+  mcpCapability,
+} from './capabilities/mcp.js'
+
+export {
+  localVectorProvider,
+  localVectorProviderFromEnv,
+  resolveLocalVectorConfig,
+} from './providers/local_vector.js'
+
+export {
+  fileStoreProvider,
+} from './providers/file_store.js'
+
+export {
   HOST_COMMAND_TYPES,
   HOST_ERROR_CODES,
   HOST_EVENT_NAMES,

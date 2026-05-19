@@ -1,186 +1,67 @@
 # Host DB Connectors
 
-This page describes how we added a real PostgreSQL + pgvector capability to Nerveflow without pushing database concerns into the runtime core.
+This page focuses on the recommended package-first path for database-backed capabilities: composable host auto-attach using the composable reference host.
 
-The result is a useful proof point for the platform architecture: the runtime stayed deterministic, the host substrate stayed generic, and the database behavior lived in host modules where it belongs.
+If you need manual provider wiring and low-level host-modules composition, see [10-host-db-connectors-low-level.md](10-host-db-connectors-low-level.md).
 
-## Architectural split
+## Recommended path: composable reference host
 
-The implementation used three layers:
+The composable path keeps workflow semantics deterministic while moving infrastructure binding into workspace configuration and host capability factories.
 
-1. `host_core`
-2. `host-modules`
-3. a workspace host module composition layer
+Typical flow:
 
-Each layer had a different job.
+```bash
+# 1) Declare capability in workspace config
+npx nerve-compose add memory-pgvector <workspaceDir>
 
-## 1. host_core: execution substrate, not database logic
+# 2) Validate resolved bindings before host startup
+npx nerve-compose validate <workspaceDir> --json
 
-`host_core` was not turned into a database framework.
-
-It already provided the execution substrate we needed:
-
-- tool runtime composition
-- host adapter boundaries
-- event and execution transport
-- runtime command routing and surface plumbing
-
-That separation mattered. The database connector did not require special cases in the runtime evaluator or workflow language. The workflow still called tools through the existing `tool(...)` boundary.
-
-Conceptually:
-
-```js
-import { createToolRuntime } from 'nerveflow/host_core'
-import { loadHostModules } from 'nerveflow/host-modules'
-
-const providers = await loadHostModules({ workspaceDir })
-const toolRuntime = createToolRuntime({ providers })
+# 3) Run host against your workflow workspace
+WORKSPACE_DIR=<workspaceDir> node node_modules/nerveflow/examples/composable-reference-host/server.js
 ```
 
-The important point is that `host_core` stayed responsible for orchestration, not persistence semantics.
+## Workspace contract
 
-## 2. host-modules: capability composition layer
+`nerve-compose add memory-pgvector` writes capability declarations into workspace config (`nerve.json`, or `nextv.json` fallback), including:
 
-The database integration was implemented as a public host module provider in [src/host_modules/public/memory_provider.js](../src/host_modules/public/memory_provider.js).
+- `requires.memory`
+- `modules.memory.provider = memory-pgvector`
 
-That provider exports `createMemoryProvider(config)`, which returns two workflow-callable tools:
+At startup, the composable host resolves module provider labels into capability factories and attaches tool providers/connectors/realizers.
 
-- `memory_store`
-- `memory_retrieve`
+## Stable provider labels
 
-This is the key architectural move: the connector is expressed as a host capability, not as a runtime feature.
+Current composable auto-attach provider labels:
 
-Responsibilities inside the provider:
+- `memory-pgvector`
+- `speech-surface`
+- `mcp` (alias: `mcp-client`)
 
-- open a lazy PostgreSQL pool with `pg`
-- create the `vector` extension if needed
-- create the `memory` table and indexes idempotently
-- turn text into embeddings through Ollama
-- insert text, embedding, and metadata
-- run similarity search with optional metadata filters
+## Validation and failure model
 
-Because this is a provider, any workspace can opt in by composing it, and the runtime does not need to know anything about PostgreSQL, `pgvector`, connection strings, or embedding APIs.
+Use `nerve-compose validate` as the preflight gate for package workflows:
 
-## 3. Workspace composition: bind concrete infrastructure
+- confirms required capabilities are resolvable
+- reports resolved capability bindings
+- fails early on unsupported provider labels or missing workspace setup
 
-The example workspace in [examples/memory-agent/host_modules/index.js](../examples/memory-agent/host_modules/index.js) is where generic capability became a real connector.
+For memory capability, `MEMORY_DB_URL` must be provided through workspace environment before runtime use.
 
-That file does three things:
+## Architecture boundary (unchanged)
 
-1. loads workspace-local environment values
-2. instantiates `createMemoryProvider(...)`
-3. binds concrete infrastructure settings like DB URL, embedding model, and embedding dimensions
+The composable path still follows the same boundary:
 
-Example shape:
+- workflows express intent through stable tool contracts
+- host capability adapters handle infrastructure behavior
+- runtime execution remains deterministic and inspectable
 
-```js
-export function createProviders() {
-  return [
-    createMemoryProvider({
-      pgUrl: process.env.MEMORY_DB_URL,
-      embeddingModel: process.env.MEMORY_EMBEDDING_MODEL,
-      embeddingBaseUrl: process.env.MEMORY_EMBEDDING_BASE_URL,
-      embeddingDimensions: Number(process.env.MEMORY_EMBEDDING_DIMENSIONS ?? 768),
-    }),
-  ]
-}
-```
+## References
 
-This is where host-specific reality belongs.
-
-The runtime remains portable; the workspace chooses which infrastructure to attach.
-
-## Tool contract at the workflow layer
-
-The workflow in [examples/memory-agent/entry.nrv](../examples/memory-agent/entry.nrv) does not know about SQL or driver APIs.
-
-It just calls tools:
-
-```nrv
-stored = tool("memory_store", {
-  text: event.value,
-  metadata: {
-    category: "fact"
-  }
-})
-
-results = tool("memory_retrieve", {
-  query_text: event.value,
-  limit: 5
-})
-```
-
-This is exactly the boundary we want:
-
-- workflows express intent
-- host modules implement capability
-- host_core executes deterministically
-
-## What we had to solve in reality
-
-This implementation was useful because it forced the architecture through real integration friction.
-
-### Environment and workspace binding
-
-We added workspace-local `.env` loading in the example workspace so local DB credentials and embedding settings stay outside the runtime core and outside committed shared config.
-
-### Provider input normalization
-
-Tool providers needed to handle the actual runtime call shape (`positional` and `named`) as well as direct test invocation shape. That normalization belongs in the provider boundary, not in the runtime language.
-
-### Embedding API compatibility
-
-Different Ollama setups exposed different embedding routes. The provider now probes compatible endpoint shapes:
-
-- `/api/embed`
-- `/api/embeddings`
-- `/v1/embeddings`
-
-Again, this logic stays in the capability adapter where transport differences belong.
-
-### Embedding dimension mismatch
-
-The first default assumption was `384`, but the installed embedding model returned `768` dimensions. The fix was not to weaken the contract. The fix was to make dimensions configurable and let the workspace bind the correct value.
-
-That preserved explicitness and surfaced bad assumptions early.
-
-## Why this validates the platform
-
-This connector is a concrete example of the platform surviving contact with real infrastructure.
-
-We had to deal with:
-
-- Docker Postgres credentials
-- `pgvector` schema bootstrapping
-- embedding model availability
-- endpoint/version differences in Ollama
-- real similarity search output and runtime traces
-
-The architecture held up because responsibilities were separated correctly:
-
-- `host_core` handled orchestration
-- `host-modules` handled capability composition
-- the workspace handled local infrastructure binding
-- the workflow remained declarative and deterministic
-
-## Files involved
-
-- [src/host_modules/public/memory_provider.js](../src/host_modules/public/memory_provider.js)
-- [src/host_modules/public/index.js](../src/host_modules/public/index.js)
-- [tests/memory_provider.test.js](../tests/memory_provider.test.js)
-- [examples/memory-agent/host_modules/index.js](../examples/memory-agent/host_modules/index.js)
-- [examples/memory-agent/entry.nrv](../examples/memory-agent/entry.nrv)
-- [examples/memory-agent/.env](../examples/memory-agent/.env)
-
-## Design takeaway
-
-If you want to add a database, queue, vector store, filesystem adapter, or external API to Nerveflow, the pattern is:
-
-1. keep `host_core` generic
-2. implement the capability as a host module provider
-3. bind infrastructure details in workspace composition
-4. expose only stable tool contracts to workflows
-
-That gives you real integrations without contaminating the deterministic runtime with infrastructure-specific code.
-
-This is an example of capability growth around a stable execution core, not feature growth inside the core.
+- [examples/composable-reference-host/server.js](../examples/composable-reference-host/server.js)
+- [src/host_core/composable_host.js](../src/host_core/composable_host.js)
+- [src/host_core/capabilities/storage.js](../src/host_core/capabilities/storage.js)
+- [src/host_core/providers/local_vector.js](../src/host_core/providers/local_vector.js)
+- [tests/composable_host.test.js](../tests/composable_host.test.js)
+- [tests/composable_reference_host_example.test.js](../tests/composable_reference_host_example.test.js)
+- [10-host-db-connectors-low-level.md](10-host-db-connectors-low-level.md)

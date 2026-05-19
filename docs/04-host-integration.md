@@ -88,7 +88,8 @@ Compatibility timeline:
 
 The `host-modules` layer provides tool capability composition separate from the runtime authority, keeping host-core substrate-clean while enabling domain-specific tool providers.
 
-For a concrete example of building a real PostgreSQL + pgvector capability with this split, see [10-host-db-connectors.md](10-host-db-connectors.md).
+For a package-first PostgreSQL + pgvector flow, see [10-host-db-connectors.md](10-host-db-connectors.md).
+For manual host-modules wiring and provider internals, see [10-host-db-connectors-low-level.md](10-host-db-connectors-low-level.md).
 
 `nerveflow/host-modules` is a supported npm subpath export.
 
@@ -188,7 +189,7 @@ Current commands:
 - updates `nerve.json` `requires.speech` and `modules.speech` when present (falls back to `nextv.json` for compatibility)
 - creates `speech-surface/` with record/stop SPA assets and a bridge server (`/api/voice-command`, `/api/output/stream`)
 
-`add transport <name>` registers a transport entry in workspace config and appends transport-specific `.env.example` placeholders when available.
+`add transport <name>` registers a transport entry in workspace config, appends transport-specific `.env.example` placeholders, and safely upserts missing transport keys in `.env` (without overwriting existing values).
 
 `add model <name> --transport <transportName>` registers a model entry and links it to an existing transport. The command fails when the referenced transport is missing so model-to-transport links stay valid.
 

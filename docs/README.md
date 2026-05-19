@@ -13,6 +13,7 @@ This documentation is for **users building workflows with Nerveflow**.
 - [05-platform-vision.md](05-platform-vision.md)
 - [13-user-handbook.md](13-user-handbook.md)
 - [10-host-db-connectors.md](10-host-db-connectors.md)
+- [10-host-db-connectors-low-level.md](10-host-db-connectors-low-level.md)
 
 ## Agent docs
 

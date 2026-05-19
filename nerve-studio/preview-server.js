@@ -2121,6 +2121,7 @@ async function handleApi(req, res, url) {
         getWorkspaceConfig: () => workspaceConfig,
         callAgent: ollamaTransport,
         defaultModel: process.env.OLLAMA_MODEL ?? '',
+        modelResolutionMode: String(process.env.AGENT_MODEL_RESOLUTION ?? 'strict').trim().toLowerCase() || 'strict',
         captureAgentRequestPayload: true,
         slowAgentWarningMs: SLOW_AGENT_WARNING_MS,
         resolvePathFromBaseDirectory,

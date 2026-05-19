@@ -33,6 +33,30 @@ Next step: add an LLM and run a stateful chatbot from CLI.
 
 See [Onboarding Step 2](docs/onboarding-step-2.md) for the Step 2 walkthrough.
 
+## Composable Capability Flow (Package-First)
+
+When using Nerveflow from npm, the recommended capability setup flow is:
+
+```bash
+# 1) Declare capabilities in your workspace config
+npx nerve-compose add memory-pgvector <workspaceDir>
+npx nerve-compose add speech <workspaceDir>
+
+# 2) Validate workspace capability bindings
+npx nerve-compose validate <workspaceDir> --json
+
+# 3) Run composable reference host against that workspace
+WORKSPACE_DIR=<workspaceDir> node node_modules/nerveflow/examples/composable-reference-host/server.js
+```
+
+Stable module provider labels for composable auto-attach:
+
+- `memory-pgvector`
+- `speech-surface`
+- `mcp` (and `mcp-client`)
+
+If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](MANIFESTO.md).
+
 `nerve-send` syntax:
 
 ```bash

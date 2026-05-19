@@ -60,3 +60,5 @@ Next onboarding step:
 For advanced Studio modes and remote options, see:
 
 - [../nerve-studio/README.md](../nerve-studio/README.md)
+
+If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../MANIFESTO.md).

@@ -172,7 +172,7 @@ test('callTool enforces allow-list before tool runtime dispatch', async () => {
   assert.equal(called, 0)
 })
 
-test('callAgent supports direct model calls without profile lookup', async () => {
+test('callAgent rejects unresolved direct model calls by default', async () => {
   const calls = []
   const adapter = createHostAdapter({
     workspaceDir: {
@@ -189,6 +189,45 @@ test('callAgent supports direct model calls without profile lookup', async () =>
       return 'pong'
     },
     defaultModel: 'default-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({
+      absolutePath: `${baseDir}/${pathRaw}`,
+      relativePath: pathRaw,
+    }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  await assert.rejects(
+    () => adapter.callAgent({
+      model: 'phi3:mini-128k',
+      prompt: 'ping',
+    }),
+    /is not configured in workspace models map/,
+  )
+  assert.equal(calls.length, 0)
+})
+
+test('callAgent allows unresolved direct model calls when modelResolutionMode=legacy', async () => {
+  const calls = []
+  const adapter = createHostAdapter({
+    workspaceDir: {
+      absolutePath: '/workspace',
+      relativePath: '.',
+    },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: {} },
+      operators: { map: {} },
+    },
+    callAgent: async ({ model, messages }) => {
+      calls.push({ model, messages })
+      return 'pong'
+    },
+    defaultModel: 'default-model',
+    modelResolutionMode: 'legacy',
     resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({
       absolutePath: `${baseDir}/${pathRaw}`,
       relativePath: pathRaw,
@@ -331,7 +370,7 @@ test('callAgent resolves untagged direct model to unique tagged configured model
   })
 })
 
-test('callAgent leaves untagged direct model unresolved when tagged matches are ambiguous', async () => {
+test('callAgent rejects ambiguous untagged direct model when not configured uniquely', async () => {
   const calls = []
   const adapter = createHostAdapter({
     workspaceDir: {
@@ -373,15 +412,14 @@ test('callAgent leaves untagged direct model unresolved when tagged matches are 
     normalizeAgentFormattedOutput: (value) => value,
   })
 
-  const response = await adapter.callAgent({
-    model: 'llama3.2',
-    prompt: 'ping',
-  })
-
-  assert.deepEqual(response, { value: 'pong', metadata: null })
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].model, 'llama3.2')
-  assert.equal(calls[0].transport, undefined)
+  await assert.rejects(
+    () => adapter.callAgent({
+      model: 'llama3.2',
+      prompt: 'ping',
+    }),
+    /is not configured in workspace models map/,
+  )
+  assert.equal(calls.length, 0)
 })
 
 test('callAgent includes images when event payload provides images', async () => {

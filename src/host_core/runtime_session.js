@@ -213,6 +213,7 @@ function extractTransportToolCalls(transportResult) {
  * @param {function} opts.appendAgentFormatInstructions - prompt formatter
  * @param {function} opts.normalizeAgentFormattedOutput - output normalizer
  * @param {function} opts.buildAgentRetryPrompt  - retry error formatter
+ * @param {string}  [opts.modelResolutionMode] - direct model resolution mode: strict (default) | legacy
  * @param {object|null} opts.toolRuntime  - optional tool runtime with call(payload)
  */
 export function createHostAdapter({
@@ -236,8 +237,12 @@ export function createHostAdapter({
   buildDecideRetryPrompt = null,
   validateDecideOutput = null,
   captureAgentRequestPayload = false,
+  modelResolutionMode = 'strict',
   toolRuntime = null,
 }) {
+  const normalizedModelResolutionMode = String(modelResolutionMode ?? '').trim().toLowerCase() || 'strict'
+  const allowLegacyDirectModelFallback = normalizedModelResolutionMode === 'legacy'
+
   const readWorkspaceConfig = () => {
     if (typeof getWorkspaceConfig === 'function') {
       const liveConfig = getWorkspaceConfig()
@@ -468,6 +473,12 @@ export function createHostAdapter({
           resolvedTransportConfig = resolvedDirectModel.transportConfig
           resolvedTransportName = resolvedDirectModel.transport
           configSource = 'config'
+        } else if (!allowLegacyDirectModelFallback) {
+          throw new Error(
+            `model("${directModel}") is not configured in workspace models map. `
+            + 'Add it with nerve-compose add model <name> --transport <transportName>, '
+            + 'or set AGENT_MODEL_RESOLUTION=legacy to allow unresolved direct model labels.'
+          )
         }
       }
 

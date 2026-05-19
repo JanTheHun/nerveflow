@@ -342,15 +342,15 @@ When you call `agent("qa_bot", ...)` in a script:
 6. Profile instructions and tools are merged with call-time arguments
 7. Full resolved config (`model`, `transport`) is passed to the transport adapter
 
-If the agent or model is not found in config, the runtime falls back to treating the name as a direct model identifier (for backward compatibility) or uses environment variables (`OLLAMA_MODEL`, `AGENT_TRANSPORT`).
+If a direct `model("...")` label is not found in configured models, runtime now fails by default with a resolution error. To allow unresolved direct model labels for compatibility, set `AGENT_MODEL_RESOLUTION=legacy`.
 
 Transport labels that appear in `models.map` but are absent from `transports.map` are flagged as `TRANSPORT_NOT_FOUND` at startup — this is always a fatal error regardless of `effectsPolicy`.
 
 ### Backward Compatibility
 
-- Existing scripts using `agent("modelname", ...)` without configuration still work
-- Direct `model("llama3.2", ...)` calls bypass configuration entirely
-- Environment variables (`OLLAMA_MODEL`, `AGENT_TRANSPORT`) still apply as fallback
+- Existing scripts using configured `agents.profiles` + `models.map` + `transports.map` continue to work
+- Direct `model("...")` calls should reference configured models; unresolved labels are rejected by default
+- Set `AGENT_MODEL_RESOLUTION=legacy` to restore unresolved direct-model fallback behavior when needed
 
 ## Cardinality Constraints
 

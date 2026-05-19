@@ -534,6 +534,7 @@ export function createRuntimeCore({
       getWorkspaceConfig: () => workspaceConfig,
       callAgent,
       defaultModel,
+      modelResolutionMode: String(process.env.AGENT_MODEL_RESOLUTION ?? 'strict').trim().toLowerCase() || 'strict',
       captureAgentRequestPayload: true,
       resolvePathFromBaseDirectory: resolvers.resolvePathFromBaseDirectory,
       existsSync: resolvers.existsSync,

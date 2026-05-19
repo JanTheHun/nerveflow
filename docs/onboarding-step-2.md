@@ -220,6 +220,6 @@ nerve-send syntax:
 npx nerve-send <wsUrl> <eventType> [message]
 ```
 
-Next: continue with onboarding-step-3.md to introduce Nerve Studio.
+Next: continue with [onboarding-step-3.md](onboarding-step-3.md) to introduce Nerve Studio.
 
 If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../MANIFESTO.md).

@@ -49,13 +49,14 @@
     "url": "git+https://github.com/janthehun/nerveflow.git"
   },
   "keywords": [
-    "nextv",
     "nerveflow",
-    "workflow",
-    "deterministic",
+    "workflow-runtime",
+    "llm-orchestration",
+    "deterministic-ai",
+    "agent-runtime",
     "event-driven",
     "state-machine",
-    "runtime"
+    "bounded-agents"
   ],
   "engines": {
     "node": ">=18.0.0"

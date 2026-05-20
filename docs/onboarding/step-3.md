@@ -43,7 +43,7 @@ http://localhost:4173
 
 ## 4. Verify the integration
 
-In Studio, open the **Input Panel** (usually at the bottom or side—if not visible, look for an input icon in the toolbar) and confirm this flow:
+In Studio, click on the **"show input"** button to open the Input Panel, then confirm this flow:
 
 1. A runtime snapshot is visible.
 2. In the Input Panel, select the `user_message` channel.

@@ -1,6 +1,6 @@
 # Language Reference (v1)
 
-This document defines the current user-facing language surface for Nerveflow scripts (`.nrv` preferred, `.wfs` compatible).
+This document defines the current user-facing language surface for Nerveflow scripts (`.nrv`).
 
 Execution model summary:
 

@@ -69,6 +69,7 @@
     "bin/nerve-send.js",
     "bin/nerve-studio.js",
     "docs/guide/",
+    "docs/project-generation/",
     "nerve-studio/preview-server.js",
     "nerve-studio/attach-session.js",
     "nerve-studio/mqtt-remote-bridge.js",

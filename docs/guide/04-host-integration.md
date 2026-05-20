@@ -168,6 +168,7 @@ Current commands:
 - `node bin/nerve-compose.js add model <name> --transport <transportName> [workspaceDir] [--json]`
 - `node bin/nerve-compose.js add memory-pgvector [workspaceDir] [--json]`
 - `node bin/nerve-compose.js add speech [workspaceDir] [--json]`
+- `node bin/nerve-compose.js add docs <minimal|ai> [workspaceDir] [--json]`
 
 `init` scaffolds a minimal workspace baseline for new projects:
 
@@ -192,6 +193,17 @@ Current commands:
 `add transport <name>` registers a transport entry in workspace config, appends transport-specific `.env.example` placeholders, and safely upserts missing transport keys in `.env` (without overwriting existing values).
 
 `add model <name> --transport <transportName>` registers a model entry and links it to an existing transport. The command fails when the referenced transport is missing so model-to-transport links stay valid.
+
+`add docs <minimal|ai>` copies documentation profiles into repo-style paths in the target workspace:
+
+- `minimal` copies `docs/guide` to `docs/guide`
+- `ai` copies `NERVEFLOW_AGENT_RULES.md` to the workspace root and `docs/project-generation` to `docs/project-generation`
+- in interactive terminals, `add docs ai` prompts for permission to scaffold managed instruction blocks in `.github/copilot-instructions.md`, `CLAUDE.md`, and `AGENTS.md`
+- `add docs ai --with-agent-instructions` scaffolds instruction files without prompting
+- `add docs ai --no-prompts` disables prompting and skips instruction scaffolding
+- `add docs ai --instructions-only --with-agent-instructions` scaffolds instruction files without copying docs
+- defaults to the current directory when `workspaceDir` is omitted
+- non-destructive by default: existing files with different content are reported as manual-merge skips
 
 Behavior and boundaries:
 

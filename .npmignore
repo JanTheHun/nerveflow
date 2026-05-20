@@ -6,3 +6,5 @@ examples/minimal-web-host/package-lock.json
 docs/*
 !docs/guide/
 !docs/guide/**
+!docs/project-generation/
+!docs/project-generation/**

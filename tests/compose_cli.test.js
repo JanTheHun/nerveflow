@@ -703,6 +703,228 @@ test('nerve-compose add model requires --transport flag', async () => {
   assert.equal(result.stderr.includes('add model requires --transport <transportName>'), true)
 })
 
+test('nerve-compose add docs requires profile', async () => {
+  const result = await runProcess(['bin/nerve-compose.js', 'add', 'docs', '--json'])
+  assert.equal(result.code, 2)
+  assert.equal(result.stderr.includes('add docs requires <profile>'), true)
+})
+
+test('nerve-compose add docs rejects invalid profile', async () => {
+  const result = await runProcess(['bin/nerve-compose.js', 'add', 'docs', 'invalid', '--json'])
+  assert.equal(result.code, 2)
+  assert.equal(result.stderr.includes('add docs profile must be one of: minimal, ai'), true)
+})
+
+test('nerve-compose add docs minimal copies guide docs into docs/guide', async () => {
+  const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-docs-'))
+  const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')
+
+  try {
+    const result = await runProcess(['bin/nerve-compose.js', 'add', 'docs', 'minimal', workspaceRelativePath, '--json'])
+    assert.equal(result.code, 0)
+
+    const payload = JSON.parse(result.stdout)
+    assert.equal(payload.ok, true)
+    assert.equal(payload.capability, 'docs:minimal')
+
+    const copiedGuidePath = path.join(workspaceRoot, 'docs', 'guide', '01-what-is-nerve.md')
+    const copiedGuide = await readFile(copiedGuidePath, 'utf8')
+    assert.equal(copiedGuide.includes('# What Is Nerveflow'), true)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('nerve-compose add docs ai copies project-generation docs and rules file', async () => {
+  const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-docs-'))
+  const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')
+
+  try {
+    const result = await runProcess(['bin/nerve-compose.js', 'add', 'docs', 'ai', workspaceRelativePath, '--json'])
+    assert.equal(result.code, 0)
+
+    const payload = JSON.parse(result.stdout)
+    assert.equal(payload.ok, true)
+    assert.equal(payload.capability, 'docs:ai')
+
+    const projectGuidePath = path.join(workspaceRoot, 'docs', 'project-generation', 'project-generator-guide.md')
+    const projectGuide = await readFile(projectGuidePath, 'utf8')
+    assert.equal(projectGuide.includes('# Project Generator Guide'), true)
+
+    const rulesPath = path.join(workspaceRoot, 'NERVEFLOW_AGENT_RULES.md')
+    const rules = await readFile(rulesPath, 'utf8')
+    assert.equal(rules.includes('# Nerveflow Agent Rules'), true)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('nerve-compose add docs rerun is non-destructive for diverged files', async () => {
+  const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-docs-'))
+  const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')
+
+  try {
+    const first = await runProcess(['bin/nerve-compose.js', 'add', 'docs', 'minimal', workspaceRelativePath, '--json'])
+    assert.equal(first.code, 0)
+
+    const targetFilePath = path.join(workspaceRoot, 'docs', 'guide', '01-what-is-nerve.md')
+    await writeFile(targetFilePath, '# user custom copy\n', 'utf8')
+
+    const second = await runProcess(['bin/nerve-compose.js', 'add', 'docs', 'minimal', workspaceRelativePath, '--json'])
+    assert.equal(second.code, 1)
+
+    const payload = JSON.parse(second.stdout)
+    assert.equal(payload.ok, false)
+    const skippedEntry = payload.files.find(
+      (entry) => String(entry.path || '').replace(/\\/g, '/').endsWith('docs/guide/01-what-is-nerve.md')
+    )
+    assert.equal(Boolean(skippedEntry), true)
+    assert.equal(skippedEntry.action, 'skipped_manual_merge')
+
+    const preserved = await readFile(targetFilePath, 'utf8')
+    assert.equal(preserved, '# user custom copy\n')
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('nerve-compose add docs ai --with-agent-instructions scaffolds instruction files', async () => {
+  const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-docs-'))
+  const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')
+
+  try {
+    const result = await runProcess([
+      'bin/nerve-compose.js',
+      'add',
+      'docs',
+      'ai',
+      '--with-agent-instructions',
+      workspaceRelativePath,
+      '--json',
+    ])
+    assert.equal(result.code, 0)
+
+    const payload = JSON.parse(result.stdout)
+    assert.equal(payload.ok, true)
+
+    const copilotPath = path.join(workspaceRoot, '.github', 'copilot-instructions.md')
+    const claudePath = path.join(workspaceRoot, 'CLAUDE.md')
+    const agentsPath = path.join(workspaceRoot, 'AGENTS.md')
+
+    const copilot = await readFile(copilotPath, 'utf8')
+    const claude = await readFile(claudePath, 'utf8')
+    const agents = await readFile(agentsPath, 'utf8')
+
+    assert.equal(copilot.includes('BEGIN NERVEFLOW AI INSTRUCTIONS'), true)
+    assert.equal(claude.includes('BEGIN NERVEFLOW AI INSTRUCTIONS'), true)
+    assert.equal(agents.includes('BEGIN NERVEFLOW AI INSTRUCTIONS'), true)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('nerve-compose add docs ai --instructions-only --with-agent-instructions skips docs copy', async () => {
+  const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-docs-'))
+  const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')
+
+  try {
+    const result = await runProcess([
+      'bin/nerve-compose.js',
+      'add',
+      'docs',
+      'ai',
+      '--instructions-only',
+      '--with-agent-instructions',
+      workspaceRelativePath,
+      '--json',
+    ])
+    assert.equal(result.code, 0)
+
+    const payload = JSON.parse(result.stdout)
+    assert.equal(payload.ok, true)
+
+    assert.equal(existsSync(path.join(workspaceRoot, 'docs', 'project-generation')), false)
+    assert.equal(existsSync(path.join(workspaceRoot, '.github', 'copilot-instructions.md')), true)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('nerve-compose add docs ai --no-prompts does not scaffold instruction files by default', async () => {
+  const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-docs-'))
+  const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')
+
+  try {
+    const result = await runProcess([
+      'bin/nerve-compose.js',
+      'add',
+      'docs',
+      'ai',
+      '--no-prompts',
+      workspaceRelativePath,
+      '--json',
+    ])
+    assert.equal(result.code, 0)
+
+    assert.equal(existsSync(path.join(workspaceRoot, '.github', 'copilot-instructions.md')), false)
+    assert.equal(existsSync(path.join(workspaceRoot, 'CLAUDE.md')), false)
+    assert.equal(existsSync(path.join(workspaceRoot, 'AGENTS.md')), false)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('nerve-compose add docs ai appends managed block to existing CLAUDE.md', async () => {
+  const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-docs-'))
+  const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')
+  const claudePath = path.join(workspaceRoot, 'CLAUDE.md')
+
+  await writeFile(claudePath, '# custom notes\nkeep this\n', 'utf8')
+
+  try {
+    const first = await runProcess([
+      'bin/nerve-compose.js',
+      'add',
+      'docs',
+      'ai',
+      '--with-agent-instructions',
+      workspaceRelativePath,
+      '--json',
+    ])
+    assert.equal(first.code, 0)
+
+    const afterFirst = await readFile(claudePath, 'utf8')
+    assert.equal(afterFirst.includes('# custom notes'), true)
+    assert.equal(afterFirst.includes('BEGIN NERVEFLOW AI INSTRUCTIONS'), true)
+
+    const second = await runProcess([
+      'bin/nerve-compose.js',
+      'add',
+      'docs',
+      'ai',
+      '--with-agent-instructions',
+      workspaceRelativePath,
+      '--json',
+    ])
+    assert.equal(second.code, 0)
+
+    const afterSecond = await readFile(claudePath, 'utf8')
+    const markerMatches = afterSecond.match(/BEGIN NERVEFLOW AI INSTRUCTIONS/g) || []
+    assert.equal(markerMatches.length, 1)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('nerve-compose add docs ai-only flags are rejected for non-ai profile', async () => {
+  const result = await runProcess(['bin/nerve-compose.js', 'add', 'docs', 'minimal', '--with-agent-instructions', '--json'])
+  assert.equal(result.code, 2)
+  assert.equal(
+    result.stderr.includes('--with-agent-instructions, --no-prompts, and --instructions-only are only valid for add docs ai'),
+    true,
+  )
+})
+
 test('nerve-compose add memory-pgvector is idempotent on rerun', async () => {
   const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-add-'))
   const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')

@@ -119,5 +119,5 @@ All notable changes to this project are documented in this file.
 
 ### Notes
 
-- `.nrv` is preferred for new scripts; `.wfs` remains compatible.
+- `.nrv` is preferred for new scripts; legacy script extension compatibility remains.
 - `interaction` output format is supported for compatibility; prefer `output json` for new workflows.

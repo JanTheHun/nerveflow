@@ -9,6 +9,13 @@ npm install nerveflow
 # 2) Initialize a workspace
 npx nerve-compose init
 
+# 2a) Optional: copy guide docs profile
+npx nerve-compose add docs minimal
+
+# 2b) Optional: copy project-generation + agent-rules docs profile
+# (interactive shells may ask whether to scaffold agent instruction files)
+npx nerve-compose add docs ai
+
 # 3) Start runtime
 npx nerve-runtime start --port 4190
 

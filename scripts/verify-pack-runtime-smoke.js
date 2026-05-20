@@ -222,6 +222,13 @@ async function main() {
       throw new Error('Minimal WS host assets are missing from installed npm artifact')
     }
 
+    const guideDocPath = path.join(installedRoot, 'docs', 'guide', '03-language-reference.md')
+    const projectGenDocPath = path.join(installedRoot, 'docs', 'project-generation', 'project-generator-guide.md')
+    const rulesDocPath = path.join(installedRoot, 'NERVEFLOW_AGENT_RULES.md')
+    if (!existsSync(guideDocPath) || !existsSync(projectGenDocPath) || !existsSync(rulesDocPath)) {
+      throw new Error('Documentation assets required by nerve-compose add docs are missing from installed npm artifact')
+    }
+
     console.log('[pack-smoke] validating installed nerve-compose validate command')
     const validateResult = await runCommand(process.execPath, [
       composeScript,

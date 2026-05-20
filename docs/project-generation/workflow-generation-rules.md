@@ -31,7 +31,7 @@ Do not invent undocumented syntax or runtime semantics.
 
 Reference:
 - agent-language-reference.md
-- ../guide/03-language-reference.md
+- language-semantics-map.md
 
 ## 5. Include fallback behavior
 
@@ -46,7 +46,7 @@ Workflow/project generation consumes platform capabilities.
 Runtime or language-semantic changes belong to platform work.
 
 Related:
-- ../platform/platform-agent-guide.md
+- platform-vision-context.md
 
 ## Generation expectations
 

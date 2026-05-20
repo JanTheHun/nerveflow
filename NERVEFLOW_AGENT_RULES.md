@@ -14,11 +14,16 @@ Before generating or modifying workflows, review the project-generation docs:
 ### Language surface
 
 - docs/project-generation/agent-language-reference.md
+- docs/project-generation/language-semantics-map.md
 
 ### Reliability and safety patterns
 
 - docs/project-generation/workflow-checklists.md
 - docs/project-generation/canonical-snippets.md
+
+### Vision and architecture context
+
+- docs/project-generation/platform-vision-context.md
 
 ## Core Principles
 
@@ -65,6 +70,8 @@ This repository separates:
 - workflow/project generation
 
 Project-generation agents should avoid runtime-semantic changes unless explicitly working on platform tasks.
+If a request implies runtime/compiler/language-semantic changes, switch to platform guidance first:
+- docs/project-generation/platform-vision-context.md
 
 ## One-Line Philosophy
 

@@ -28,7 +28,7 @@ The runtime does not hide this loop. It makes it explicit and inspectable.
 
 A compact workflow language defines exact control flow.
 
-```wfs
+```nrv
 on external "user_message"
   result = agent("classifier", event.value)
 
@@ -55,7 +55,7 @@ Principle: deterministic structure governs execution.
 
 Model calls are not opaque blobs. They are bounded decision points.
 
-```wfs
+```nrv
 light = agent(
   "intent",
   event.value,
@@ -88,14 +88,14 @@ Workflows touch the world through declared interfaces.
 
 Inputs:
 
-```wfs
+```nrv
 external "motion_sensor"
 external "user_message"
 ```
 
 Effects:
 
-```wfs
+```nrv
 output switch light
 output text "What light?"
 ```
@@ -131,7 +131,7 @@ Each leg reinforces the others:
 
 Without boundaries (common pattern):
 
-```wfs
+```nrv
 on external "user_message"
   result = agent("assistant", event.value)
   tool(result.tool_name, result.args)
@@ -146,7 +146,7 @@ Risks:
 
 With Nerveflow boundaries:
 
-```wfs
+```nrv
 on external "user_message"
   decision = agent(
     "router",
@@ -203,7 +203,7 @@ Contract violations are treated as structured runtime events, not hidden prompt 
 
 When configured, violations flow through control logic:
 
-```wfs
+```nrv
 on "contract_violation"
   output text "I did not understand that safely. Please rephrase."
 end
@@ -224,7 +224,7 @@ This enables deterministic recovery paths instead of implicit agent loops.
 
 A tiny declaration:
 
-```wfs
+```nrv
 returns={ action:["ON","OFF","other"] }
 ```
 
@@ -264,13 +264,13 @@ These primitives are small enough to be node-sized and graph-native.
 
 Workflow node:
 
-```wfs
+```nrv
 if light.area != "other"
 ```
 
 Decision contract node:
 
-```wfs
+```nrv
 returns={
   area:[...]
 }
@@ -278,7 +278,7 @@ returns={
 
 Effect node:
 
-```wfs
+```nrv
 output switch light
 ```
 

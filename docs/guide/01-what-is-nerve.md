@@ -15,7 +15,7 @@ LLM output is probabilistic, but workflow control should be deterministic. Nerve
 
 ## What Nerveflow is
 
-- A parser and runtime for nextV scripts (`.nrv` / `.wfs`)
+- A parser and runtime for Nerveflow scripts (`.nrv`)
 - A compiler that lowers scripts to IR for execution
 - An event-driven runner with optional persistence
 - Utilities for extracting event graphs

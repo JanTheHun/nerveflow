@@ -30,7 +30,8 @@ Design center:
 - agent-language-reference.md
 - workflow-checklists.md
 - canonical-snippets.md
-- ../guide/05-platform-vision.md
+- language-semantics-map.md
+- platform-vision-context.md
 
 ## Informational scope
 
@@ -153,4 +154,4 @@ Start with these design anchors before writing workflow code:
 ## Related platform guide
 
 For platform/runtime semantics work, use:
-- ../platform/platform-agent-guide.md
+- platform-vision-context.md

@@ -3,8 +3,8 @@
 This page is the project-generation entrypoint for language usage.
 
 Authoritative language and semantics references:
-- ../guide/03-language-reference.md
-- ../../design/specs/spec-structured-return-contracts.md
+- language-semantics-map.md
+- platform-vision-context.md
 - workflow-generation-rules.md
 
 Use this page as a compact map.
@@ -13,7 +13,7 @@ Use this page as a compact map.
 
 Use explicit control flow primitives documented in:
 - workflow-generation-rules.md (workflow-generation usage)
-- ../guide/03-language-reference.md (full language reference)
+- language-semantics-map.md (project-generation semantics map)
 
 Quick usage guidance:
 - keep effectful behavior inside explicit on/if/else structures
@@ -23,7 +23,7 @@ Quick usage guidance:
 ## Contract-bounded calls
 
 When model output influences routing/effects, use explicit contracts and validation semantics as documented in:
-- ../../design/specs/spec-structured-return-contracts.md
+- language-semantics-map.md
 - workflow-generation-rules.md
 
 Common shape:
@@ -48,7 +48,7 @@ Contract reminders:
 
 Use explicit event/effect semantics documented in:
 - workflow-generation-rules.md
-- ../guide/05-platform-vision.md
+- platform-vision-context.md
 
 Project-generation guidance:
 - use output json for structured payloads
@@ -64,7 +64,7 @@ For project workflows, these calls are the common boundaries:
 - operator(...): host-backed operator integration
 
 Detailed call semantics are defined in:
-- ../guide/03-language-reference.md
+- language-semantics-map.md
 
 ## Quick rule of thumb
 

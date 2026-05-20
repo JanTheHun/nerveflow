@@ -67,5 +67,6 @@ Approve only if all are true:
 
 ## Source alignment
 
-This page mirrors the practical checklist content from:
-- ../08-agent-checklists.md
+This page mirrors and extends project-generation guidance from:
+- workflow-generation-rules.md
+- project-generator-guide.md

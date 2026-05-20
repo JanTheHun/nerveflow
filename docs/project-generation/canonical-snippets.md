@@ -119,5 +119,6 @@ decision = agent(
 
 ## Source alignment
 
-For the full expanded snippet set and additional anti-pattern examples, use:
-- ../09-agent-canonical-snippets.md
+For companion guidance and generation rules, use:
+- project-generator-guide.md
+- workflow-generation-rules.md

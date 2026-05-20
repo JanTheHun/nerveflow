@@ -18,7 +18,6 @@ Shared philosophy:
 Read these first:
 - ../05-platform-vision.md
 - ../guide/03-language-reference.md
-- ../07-agent-language-reference.md
 - ../../design/specs/spec-structured-return-contracts.md
 - ../../design/specs/spec-explicit-runtime-failure-envelopes.md
 - ../../design/specs/spec-decide-contract.md

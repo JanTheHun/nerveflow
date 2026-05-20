@@ -15,7 +15,7 @@
 - [ ] All language features documented in [docs/guide/03-language-reference.md](03-language-reference.md)
 - [ ] Decision contract semantics finalized and tested per [design/specs/spec-structured-return-contracts.md](../../design/specs/spec-structured-return-contracts.md)
 - [ ] Parallel evaluation and bounded control-flow provenance specified in [design/specs/spec-parallel-group-evaluation.md](../../design/specs/spec-parallel-group-evaluation.md) and [design/specs/spec-bounded-control-flow-provenance.md](../../design/specs/spec-bounded-control-flow-provenance.md)
-- [ ] Agent language reference stable per [docs/07-agent-language-reference.md](../07-agent-language-reference.md)
+- [ ] Agent language reference stable per [docs/project-generation/agent-language-reference.md](../project-generation/agent-language-reference.md)
 - [ ] No breaking changes to DSL syntax or semantics without major version bump
 
 ### Fail Criteria
@@ -318,7 +318,7 @@ If product architecture changes (e.g., new export, moved dependency, new safety 
 ## Related Documentation
 
 - [Platform Vision & Operational Guarantees](05-platform-vision.md)
-- [Agent Project Guide](06-agent-project-guide.md)
+- [Project Generator Guide](../project-generation/project-generator-guide.md)
 - [Decision Contract Specification](../../design/specs/spec-structured-return-contracts.md)
 - [Host Integration Guide](04-host-integration.md)
 - [Contributing & Release Checklist](../../CONTRIBUTING.md)

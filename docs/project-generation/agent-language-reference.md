@@ -3,16 +3,16 @@
 This page is the project-generation entrypoint for language usage.
 
 Authoritative language and semantics references:
-- ../07-agent-language-reference.md
 - ../guide/03-language-reference.md
 - ../../design/specs/spec-structured-return-contracts.md
+- workflow-generation-rules.md
 
 Use this page as a compact map.
 
 ## Core statements and flow
 
 Use explicit control flow primitives documented in:
-- ../07-agent-language-reference.md (agent-oriented usage)
+- workflow-generation-rules.md (workflow-generation usage)
 - ../guide/03-language-reference.md (full language reference)
 
 Quick usage guidance:
@@ -23,8 +23,8 @@ Quick usage guidance:
 ## Contract-bounded calls
 
 When model output influences routing/effects, use explicit contracts and validation semantics as documented in:
-- ../07-agent-language-reference.md
 - ../../design/specs/spec-structured-return-contracts.md
+- workflow-generation-rules.md
 
 Common shape:
 
@@ -47,7 +47,7 @@ Contract reminders:
 ## Event and effect surface
 
 Use explicit event/effect semantics documented in:
-- ../07-agent-language-reference.md
+- workflow-generation-rules.md
 - ../guide/05-platform-vision.md
 
 Project-generation guidance:
@@ -64,7 +64,7 @@ For project workflows, these calls are the common boundaries:
 - operator(...): host-backed operator integration
 
 Detailed call semantics are defined in:
-- ../07-agent-language-reference.md
+- ../guide/03-language-reference.md
 
 ## Quick rule of thumb
 

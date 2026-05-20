@@ -38,12 +38,9 @@ After Step 5, choose your path:
 - [project-generation/workflow-checklists.md](project-generation/workflow-checklists.md)
 - [project-generation/canonical-snippets.md](project-generation/canonical-snippets.md)
 
-## Legacy agent docs (transition)
+## Agent docs migration note
 
-- [06-agent-project-guide.md](06-agent-project-guide.md)
-- [07-agent-language-reference.md](07-agent-language-reference.md)
-- [08-agent-checklists.md](08-agent-checklists.md)
-- [09-agent-canonical-snippets.md](09-agent-canonical-snippets.md)
+Legacy transition pages were retired. Use [project-generation/](project-generation/) as the canonical workflow-generation docs set.
 
 ## Specifications
 

@@ -24,12 +24,12 @@ Design center:
 3. workflow-checklists.md
 4. canonical-snippets.md
 
-## Canonical upstream references in this repo
+## Canonical references in this repo
 
-- ../06-agent-project-guide.md
-- ../07-agent-language-reference.md
-- ../08-agent-checklists.md
-- ../09-agent-canonical-snippets.md
+- workflow-generation-rules.md
+- agent-language-reference.md
+- workflow-checklists.md
+- canonical-snippets.md
 - ../guide/05-platform-vision.md
 
 ## Informational scope

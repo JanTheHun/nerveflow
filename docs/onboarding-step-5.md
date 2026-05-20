@@ -9,22 +9,48 @@ A host is the small Node app around runtime execution.
 It is where tool calls become possible.
 
 Reference host for this step:
-`examples/minimal-ws-host/server.js`
+- Repository source path: `examples/minimal-ws-host/server.js`
+- Installed package path: `node_modules/nerveflow/examples/minimal-ws-host/server.js`
 
-## 1. Switch from runtime-only to host-run mode
+## 1. Stop the runtime
 
 Stop the runtime if it is still running.
 
-From repository root, start the reference host pointed at your project workspace:
+## 2. Update your workflow
+
+Update your `workflow.nrv` to call a tool. Inside your `on external "user_message"` handler, change this line:
+
+```nrv
+output text assistant_text
+```
+
+to these two lines:
+
+```nrv
+now = tool("get_time")
+output text "${assistant_text} ${now}"
+```
+
+## 3. Start the host
+
+Use the command that matches your setup:
+
+Repository source checkout (run from repository root):
 
 ```bash
 node examples/minimal-ws-host/server.js path/to/my-project
 ```
 
-If you initialized your workspace with `nerve-compose init`, your project is in the current directory:
+If your workflow files are in the current directory, you can use:
 
 ```bash
-node examples/minimal-ws-host/server.js .
+node examples/minimal-ws-host/server.js
+```
+
+Project installed with npm (run from your project directory after `npm install nerveflow`):
+
+```bash
+node node_modules\nerveflow\examples\minimal-ws-host\server.js
 ```
 
 Host endpoints:
@@ -40,7 +66,7 @@ What changed:
 2. Now: the host process owns runtime execution and tool integrations.
 3. Your event client flow stays the same (`npx nerve-send` over WS).
 
-## 2. Minimal host tool: get_time
+## 4. Minimal host tool: get_time
 
 In `examples/minimal-ws-host/server.js`, the host provides exactly one tool via `createToolRuntime(...)`:
 
@@ -62,22 +88,7 @@ This keeps the concept focused:
 2. host executes the tool
 3. runtime stays deterministic
 
-## 3. Call get_time from your existing workflow
-
-Inside your `on external "user_message"` handler in `workflow.nrv`, change this line:
-
-```nrv
-output text assistant_text
-```
-
-to these two lines:
-
-```nrv
-now = tool("get_time")
-output text "${assistant_text} ${now}"
-```
-
-## 4. Test with nerve-send
+## 5. Test with nerve-send
 
 ```bash
 npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "hello"
@@ -104,7 +115,7 @@ Then open:
 http://localhost:4173
 ```
 
-## 5. What you learned
+## 6. What you learned
 
 1. Host is the capability boundary around runtime execution.
 2. You can keep your existing WS client workflow.

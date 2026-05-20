@@ -177,6 +177,16 @@ Expected behavior:
 1. `hello nerve` still prints `hello world!`.
 2. Everything else is routed to the chatbot branch.
 
+## Start runtime
+
+Now start the runtime to load your workflow and state:
+
+```bash
+npx nerve-runtime start --port 4190
+```
+
+The runtime loads `workflow.nrv` and `state.init.json` on startup.
+
 ## Model variability (important)
 
 Behavior depends strongly on model choice and hardware.

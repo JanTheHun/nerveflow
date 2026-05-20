@@ -11,27 +11,7 @@ Goal:
 2. Bound model output to a small intent enum.
 3. Route each intent explicitly.
 
-## 1. Keep your runtime and Studio running
-
-If needed, start runtime:
-
-```bash
-npx nerve-runtime start --port 4190
-```
-
-If needed, attach Studio:
-
-```bash
-npx nerve-studio --remote-ws ws://127.0.0.1:4190/api/runtime/ws
-```
-
-Open:
-
-```text
-http://localhost:4173
-```
-
-## 2. Replace workflow.nrv with bounded routing
+## 1. Update workflow.nrv with bounded routing
 
 Replace `workflow.nrv` with:
 
@@ -85,19 +65,7 @@ end
 
 If you are using the external API path, replace both model labels with your configured model label (for example `gpt-4o-mini`).
 
-## 3. Other bounded-call patterns
-
-`returns` is one way to bound model behavior. It is not the only way.
-
-Other useful patterns:
-
-1. `decide=[...]` on `agent(...)` for a single bounded scalar decision.
-2. `try ...` to convert supported runtime/model/tool failures into an explicit `{ ok, ... }` envelope.
-3. `format="json"` when you want JSON-shaped output formatting, even without a strict decision contract.
-
-In this step, we use `returns` because it keeps routing explicit with an enum contract.
-
-## 4. Keep or replace state.init.json
+## 2. Keep or replace state.init.json
 
 Ensure `state.init.json` contains:
 
@@ -110,6 +78,28 @@ Ensure `state.init.json` contains:
     }
   ]
 }
+```
+
+## 3. Restart runtime
+
+Stop the runtime if it is running, then restart to load your updated workflow:
+
+```bash
+npx nerve-runtime start --port 4190
+```
+
+## 4. Attach Studio (if needed)
+
+If Studio is not already running, attach it:
+
+```bash
+npx nerve-studio --remote-ws ws://127.0.0.1:4190/api/runtime/ws
+```
+
+Open:
+
+```text
+http://localhost:4173
 ```
 
 ## 5. Verify routing in Studio
@@ -125,7 +115,19 @@ Expected: `Music route selected. (Scaffold)`
 4. `what did I just ask?`
 Expected: chatbot response from the `chat` branch
 
-## 6. What you learned
+## 6. Other bounded-call patterns
+
+`returns` is one way to bound model behavior. It is not the only way.
+
+Other useful patterns:
+
+1. `decide=[...]` on `agent(...)` for a single bounded scalar decision.
+2. `try ...` to convert supported runtime/model/tool failures into an explicit `{ ok, ... }` envelope.
+3. `format="json"` when you want JSON-shaped output formatting, even without a strict decision contract.
+
+In this step, we use `returns` because it keeps routing explicit with an enum contract.
+
+## 7. What you learned
 
 1. Probabilistic output is bounded by a contract.
 2. Workflow routing remains explicit and deterministic.

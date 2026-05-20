@@ -43,13 +43,14 @@ http://localhost:4173
 
 ## 4. Verify the integration
 
-In Studio, confirm this flow:
+In Studio, open the **Input Panel** (usually at the bottom or side) and confirm this flow:
 
 1. A runtime snapshot is visible.
-2. Enqueue `user_message` with `hello nerve` and confirm output is `hello world!`.
-3. Enqueue `user_message` with any other text and confirm chatbot output appears.
-4. Runtime events continue updating in the UI for both branches.
-5. Repeated sends remain deterministic and inspectable.
+2. In the Input Panel, select the `user_message` channel.
+3. Send `hello nerve` and confirm the output is `hello world!`.
+4. Send any other text (e.g., `what time is it?`) and confirm output appears.
+5. Runtime events continue updating in the UI for both branches.
+6. Repeated sends remain deterministic and inspectable.
 
 ## 5. Continue
 

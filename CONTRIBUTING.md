@@ -35,7 +35,7 @@ See `docs/examples/multi-surface-attachment-pattern.md` for architecture pattern
 
 ## Release Checklist
 
-Before publishing to npm, all production readiness gates must **pass**. See [docs/11-production-readiness.md](docs/11-production-readiness.md) for the complete checklist with measurable criteria.
+Before publishing to npm, all production readiness gates must **pass**. See [docs/guide/11-production-readiness.md](docs/guide/11-production-readiness.md) for the complete checklist with measurable criteria.
 
 In summary:
 
@@ -61,4 +61,4 @@ npm publish --dry-run            # Verify contents
 npm publish                       # Publish to npm
 ```
 
-See [docs/11-production-readiness.md](docs/11-production-readiness.md) for the full pre-publish checklist including version bumping and registry verification.
+See [docs/guide/11-production-readiness.md](docs/guide/11-production-readiness.md) for the full pre-publish checklist including version bumping and registry verification.

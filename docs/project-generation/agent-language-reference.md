@@ -4,8 +4,8 @@ This page is the project-generation entrypoint for language usage.
 
 Authoritative language and semantics references:
 - ../07-agent-language-reference.md
-- ../03-language-reference.md
-- ../spec-structured-return-contracts.md
+- ../guide/03-language-reference.md
+- ../../design/specs/spec-structured-return-contracts.md
 
 Use this page as a compact map.
 
@@ -13,7 +13,7 @@ Use this page as a compact map.
 
 Use explicit control flow primitives documented in:
 - ../07-agent-language-reference.md (agent-oriented usage)
-- ../03-language-reference.md (full language reference)
+- ../guide/03-language-reference.md (full language reference)
 
 Quick usage guidance:
 - keep effectful behavior inside explicit on/if/else structures
@@ -24,7 +24,7 @@ Quick usage guidance:
 
 When model output influences routing/effects, use explicit contracts and validation semantics as documented in:
 - ../07-agent-language-reference.md
-- ../spec-structured-return-contracts.md
+- ../../design/specs/spec-structured-return-contracts.md
 
 Common shape:
 
@@ -48,7 +48,7 @@ Contract reminders:
 
 Use explicit event/effect semantics documented in:
 - ../07-agent-language-reference.md
-- ../05-platform-vision.md
+- ../guide/05-platform-vision.md
 
 Project-generation guidance:
 - use output json for structured payloads

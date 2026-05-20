@@ -81,7 +81,7 @@ For full step-by-step onboarding, see [02-getting-started.md](02-getting-started
 
 ### Path C: Use repository host examples
 
-Start with [../examples/minimal-web-host](../examples/minimal-web-host) for a minimal reference host.
+Start with [../../examples/minimal-web-host](../../examples/minimal-web-host) for a minimal reference host.
 
 ## API import guidance
 
@@ -113,11 +113,11 @@ Start here:
 
 Specifications:
 
-- [spec-structured-return-contracts.md](spec-structured-return-contracts.md)
-- [spec-late-contract-binding.md](spec-late-contract-binding.md)
-- [spec-bounded-control-flow-provenance.md](spec-bounded-control-flow-provenance.md)
-- [spec-parallel-group-evaluation.md](spec-parallel-group-evaluation.md)
-- [spec-explicit-runtime-failure-envelopes.md](spec-explicit-runtime-failure-envelopes.md)
+- [../../design/specs/spec-structured-return-contracts.md](../../design/specs/spec-structured-return-contracts.md)
+- [../../design/specs/spec-late-contract-binding.md](../../design/specs/spec-late-contract-binding.md)
+- [../../design/specs/spec-bounded-control-flow-provenance.md](../../design/specs/spec-bounded-control-flow-provenance.md)
+- [../../design/specs/spec-parallel-group-evaluation.md](../../design/specs/spec-parallel-group-evaluation.md)
+- [../../design/specs/spec-explicit-runtime-failure-envelopes.md](../../design/specs/spec-explicit-runtime-failure-envelopes.md)
 
 Operations:
 
@@ -127,4 +127,4 @@ Operations:
 Examples and patterns:
 
 - [examples/multi-surface-attachment-pattern.md](examples/multi-surface-attachment-pattern.md)
-- [../examples/](../examples/)
+- [../../examples/](../../examples/)

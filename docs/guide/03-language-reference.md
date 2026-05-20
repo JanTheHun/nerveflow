@@ -134,7 +134,7 @@ Invalid combinations raise `INVALID_CALL_CONFIG`.
 
 Integration-unavailable failures (for example, `tool(...)` without a host `callTool` implementation) are deterministic runtime availability errors and are raised directly rather than wrapped in a `try` envelope.
 
-See `docs/spec-parallel-group-evaluation.md` for full semantics.
+See `design/specs/spec-parallel-group-evaluation.md` for full semantics.
 
 Collection helper semantics:
 
@@ -549,4 +549,4 @@ For canonical behavior details, align this document with:
 
 - [02-getting-started.md](02-getting-started.md)
 - [04-host-integration.md](04-host-integration.md)
-- runtime tests under [../tests/](../tests/) for executable semantics
+- runtime tests under [../../tests/](../../tests/) for executable semantics

@@ -6,4 +6,4 @@ This step uses the composable-reference-host to integrate speech input/output su
 
 Coming soon.
 
-If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../MANIFESTO.md).
+If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../../MANIFESTO.md).

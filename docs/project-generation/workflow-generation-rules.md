@@ -31,7 +31,7 @@ Do not invent undocumented syntax or runtime semantics.
 
 Reference:
 - agent-language-reference.md
-- ../03-language-reference.md
+- ../guide/03-language-reference.md
 
 ## 5. Include fallback behavior
 

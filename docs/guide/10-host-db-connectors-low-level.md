@@ -43,7 +43,7 @@ The runtime evaluator and workflow language do not need database-specific branch
 
 ## 2. host-modules: capability composition layer
 
-The database integration is implemented as a public provider in [../src/host_modules/public/memory_provider.js](../src/host_modules/public/memory_provider.js).
+The database integration is implemented as a public provider in [../../src/host_modules/public/memory_provider.js](../../src/host_modules/public/memory_provider.js).
 
 `createMemoryProvider(config)` exposes two workflow-callable tools:
 
@@ -61,7 +61,7 @@ This keeps infrastructure semantics in capability adapters, not in runtime core.
 
 ## 3. Workspace composition: bind concrete infrastructure
 
-The example workspace [../examples/memory-agent/host_modules/index.js](../examples/memory-agent/host_modules/index.js) binds real infrastructure.
+The example workspace [../../examples/memory-agent/host_modules/index.js](../../examples/memory-agent/host_modules/index.js) binds real infrastructure.
 
 Typical shape:
 
@@ -109,13 +109,13 @@ results = tool("memory_retrieve", {
 
 ## Files involved
 
-- [../src/host_modules/public/memory_provider.js](../src/host_modules/public/memory_provider.js)
-- [../src/host_modules/public/index.js](../src/host_modules/public/index.js)
-- [../src/host_modules/README.md](../src/host_modules/README.md)
-- [../tests/memory_provider.test.js](../tests/memory_provider.test.js)
-- [../tests/host_modules.test.js](../tests/host_modules.test.js)
-- [../examples/memory-agent/host_modules/index.js](../examples/memory-agent/host_modules/index.js)
-- [../examples/memory-agent/entry.nrv](../examples/memory-agent/entry.nrv)
+- [../../src/host_modules/public/memory_provider.js](../../src/host_modules/public/memory_provider.js)
+- [../../src/host_modules/public/index.js](../../src/host_modules/public/index.js)
+- [../../src/host_modules/README.md](../../src/host_modules/README.md)
+- [../../tests/memory_provider.test.js](../../tests/memory_provider.test.js)
+- [../../tests/host_modules.test.js](../../tests/host_modules.test.js)
+- [../../examples/memory-agent/host_modules/index.js](../../examples/memory-agent/host_modules/index.js)
+- [../../examples/memory-agent/entry.nrv](../../examples/memory-agent/entry.nrv)
 
 ## Design takeaway
 

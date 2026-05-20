@@ -30,7 +30,7 @@ Design center:
 - ../07-agent-language-reference.md
 - ../08-agent-checklists.md
 - ../09-agent-canonical-snippets.md
-- ../05-platform-vision.md
+- ../guide/05-platform-vision.md
 
 ## Informational scope
 

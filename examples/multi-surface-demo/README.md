@@ -230,4 +230,4 @@ mosquitto_sub -t 'nextv/response/cmd-1'
 
 - [examples/mqtt-simple-host/README.md](../mqtt-simple-host/README.md) — MQTT host configuration and topic contract
 - [docs/examples/multi-surface-attachment-pattern.md](../../docs/examples/multi-surface-attachment-pattern.md) — Multi-surface architecture patterns
-- [docs/04-host-integration.md](../../docs/04-host-integration.md) — Protocol v1 command/event reference
+- [docs/guide/04-host-integration.md](../../docs/guide/04-host-integration.md) — Protocol v1 command/event reference

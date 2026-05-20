@@ -54,7 +54,7 @@ All notable changes to this project are documented in this file.
 ### Notes
 
 - Versioning policy: this is a documentation and migration-guidance update only (patch-level change).
-- Migration guidance is intentionally centralized in `docs/04-host-integration.md` (project README is not used for the subpath migration track).
+- Migration guidance is intentionally centralized in `docs/guide/04-host-integration.md` (project README is not used for the subpath migration track).
 - Compatibility window: top-level runtime helper imports from `nerveflow` remain supported for existing integrations.
 
 ## [0.1.2] - 2026-04-22

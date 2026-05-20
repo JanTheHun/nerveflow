@@ -344,5 +344,5 @@ const uiHandler = (eventName, payload) => {
 ## See Also
 
 - [src/host_core/README.md](../../src/host_core/README.md) — Multi-Surface Attachment Model design principles
-- [docs/04-host-integration.md](../04-host-integration.md) — Protocol v1 command/event reference
+- [docs/guide/04-host-integration.md](../guide/04-host-integration.md) — Protocol v1 command/event reference
 - [examples/mqtt-simple-host/mqtt-host.js](../../examples/mqtt-simple-host/mqtt-host.js) — Working multi-surface implementation

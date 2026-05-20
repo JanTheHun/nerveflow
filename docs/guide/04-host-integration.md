@@ -130,7 +130,7 @@ Three tools are provided by default:
 - `http_fetch` — HTTP request with JSON parsing
 - `rss_fetch` — Fetch and parse RSS/Atom feeds
 
-See [host-modules README](../src/host_modules/README.md) for provider semantics, workspace discovery, and custom provider registration.
+See [host-modules README](../../src/host_modules/README.md) for provider semantics, workspace discovery, and custom provider registration.
 
 ### Provider Ordering
 

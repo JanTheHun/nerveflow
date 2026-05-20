@@ -2,7 +2,7 @@
 
 This guide shows the first supported Docker deployment story for a Nerveflow workflow app.
 
-The container runs the standalone runtime from [../bin/nerve-runtime.js](../bin/nerve-runtime.js) and mounts one workflow workspace as the app.
+The container runs the standalone runtime from [../../bin/nerve-runtime.js](../../bin/nerve-runtime.js) and mounts one workflow workspace as the app.
 
 ## Deployment Contract
 
@@ -72,9 +72,9 @@ The workspace mount is also the persistence boundary for state files.
 
 ## Docker Compose
 
-The repository root includes a minimal [../docker-compose.yml](../docker-compose.yml) example.
+The repository root includes a minimal [../../docker-compose.yml](../../docker-compose.yml) example.
 
-It mounts [../examples/docker-runtime-app](../examples/docker-runtime-app) into the container and exposes the runtime on port `4190`.
+It mounts [../../examples/docker-runtime-app](../../examples/docker-runtime-app) into the container and exposes the runtime on port `4190`.
 
 Start it with:
 
@@ -118,4 +118,4 @@ This first Docker deployment slice does not attempt to solve:
 
 ## Example Workspace
 
-Use [../examples/docker-runtime-app](../examples/docker-runtime-app) as the starting point for a workflow app that is meant to be deployed as a containerized service.
+Use [../../examples/docker-runtime-app](../../examples/docker-runtime-app) as the starting point for a workflow app that is meant to be deployed as a containerized service.

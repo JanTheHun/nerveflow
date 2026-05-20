@@ -25,10 +25,10 @@ npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "hello nerve"
 
 ## Start Here
 
-* [Onboarding](docs/onboarding-step-1.md)
-* [User Handbook](docs/13-user-handbook.md)
-* [Language Reference](docs/03-language-reference.md)
-* [Host Integration](docs/04-host-integration.md)
+* [Onboarding](docs/onboarding/step-1.md)
+* [User Handbook](docs/guide/13-user-handbook.md)
+* [Language Reference](docs/guide/03-language-reference.md)
+* [Host Integration](docs/guide/04-host-integration.md)
 
 ---
 

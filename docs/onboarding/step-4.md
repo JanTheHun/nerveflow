@@ -133,6 +133,6 @@ In this step, we use `returns` because it keeps routing explicit with an enum co
 2. Workflow routing remains explicit and deterministic.
 3. You can scale this pattern into specialized multi-agent flows.
 
-Next: continue with [onboarding-step-5.md](onboarding-step-5.md) for a simple home-assistant scaffold.
+Next: continue with [step-5.md](step-5.md) for a simple home-assistant scaffold.
 
-If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../MANIFESTO.md).
+If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../../MANIFESTO.md).

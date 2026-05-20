@@ -58,10 +58,10 @@ The composable path still follows the same boundary:
 
 ## References
 
-- [examples/composable-reference-host/server.js](../examples/composable-reference-host/server.js)
-- [src/host_core/composable_host.js](../src/host_core/composable_host.js)
-- [src/host_core/capabilities/storage.js](../src/host_core/capabilities/storage.js)
-- [src/host_core/providers/local_vector.js](../src/host_core/providers/local_vector.js)
-- [tests/composable_host.test.js](../tests/composable_host.test.js)
-- [tests/composable_reference_host_example.test.js](../tests/composable_reference_host_example.test.js)
+- [examples/composable-reference-host/server.js](../../examples/composable-reference-host/server.js)
+- [src/host_core/composable_host.js](../../src/host_core/composable_host.js)
+- [src/host_core/capabilities/storage.js](../../src/host_core/capabilities/storage.js)
+- [src/host_core/providers/local_vector.js](../../src/host_core/providers/local_vector.js)
+- [tests/composable_host.test.js](../../tests/composable_host.test.js)
+- [tests/composable_reference_host_example.test.js](../../tests/composable_reference_host_example.test.js)
 - [10-host-db-connectors-low-level.md](10-host-db-connectors-low-level.md)

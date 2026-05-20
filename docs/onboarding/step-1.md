@@ -48,14 +48,14 @@ http://localhost:4173
 
 ## Learn More
 
-- [Language Reference](03-language-reference.md)
-- [Host Integration](04-host-integration.md)
-- [User Handbook](13-user-handbook.md)
+- [Language Reference](../guide/03-language-reference.md)
+- [Host Integration](../guide/04-host-integration.md)
+- [User Handbook](../guide/13-user-handbook.md)
 
 ## Next
 
 Add an LLM and run a stateful chatbot from CLI.
 
-See [onboarding-step-2.md](onboarding-step-2.md) for the Step 2 walkthrough.
+See [step-2.md](step-2.md) for the Step 2 walkthrough.
 
-If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../MANIFESTO.md).
+If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../../MANIFESTO.md).

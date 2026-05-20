@@ -224,6 +224,6 @@ This module does not currently implement:
 
 ## Related docs
 
-- `docs/04-host-integration.md`
+- `docs/guide/04-host-integration.md`
 - `README.md`
 - `nerve-studio/README.md`

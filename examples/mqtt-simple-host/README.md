@@ -278,7 +278,7 @@ All surfaces that are still connected (MQTT, monitoring) receive events.
 
 ### Tool & Agent Policies
 
-See [docs/04-host-integration.md](../../docs/04-host-integration.md) for tool allow-lists and agent profiles.
+See [docs/guide/04-host-integration.md](../../docs/guide/04-host-integration.md) for tool allow-lists and agent profiles.
 
 ## Event Filtering
 
@@ -311,5 +311,5 @@ See `tests/mqtt_embedded_host.test.js` for multi-surface attachment scenarios.
 ## See Also
 
 - [docs/examples/multi-surface-attachment-pattern.md](../../docs/examples/multi-surface-attachment-pattern.md) — Multi-surface architecture patterns
-- [docs/04-host-integration.md](../../docs/04-host-integration.md) — Protocol v1 command/event reference
+- [docs/guide/04-host-integration.md](../../docs/guide/04-host-integration.md) — Protocol v1 command/event reference
 - [src/host_core/README.md](../../src/host_core/README.md) — Host core architecture

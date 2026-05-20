@@ -6,7 +6,7 @@ This legacy page is being consolidated.
 
 **For current reference, use:**
 - docs/project-generation/agent-language-reference.md
-- docs/03-language-reference.md (canonical syntax)
+- docs/guide/03-language-reference.md (canonical syntax)
 
 ## Core semantics (reference)
 

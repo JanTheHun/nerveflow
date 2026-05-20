@@ -12,10 +12,10 @@
 
 ### Pass Criteria
 
-- [ ] All language features documented in [docs/03-language-reference.md](03-language-reference.md)
-- [ ] Decision contract semantics finalized and tested per [docs/spec-structured-return-contracts.md](spec-structured-return-contracts.md)
-- [ ] Parallel evaluation and bounded control-flow provenance specified in [docs/spec-parallel-group-evaluation.md](spec-parallel-group-evaluation.md) and [docs/spec-bounded-control-flow-provenance.md](spec-bounded-control-flow-provenance.md)
-- [ ] Agent language reference stable per [docs/07-agent-language-reference.md](07-agent-language-reference.md)
+- [ ] All language features documented in [docs/guide/03-language-reference.md](03-language-reference.md)
+- [ ] Decision contract semantics finalized and tested per [design/specs/spec-structured-return-contracts.md](../../design/specs/spec-structured-return-contracts.md)
+- [ ] Parallel evaluation and bounded control-flow provenance specified in [design/specs/spec-parallel-group-evaluation.md](../../design/specs/spec-parallel-group-evaluation.md) and [design/specs/spec-bounded-control-flow-provenance.md](../../design/specs/spec-bounded-control-flow-provenance.md)
+- [ ] Agent language reference stable per [docs/07-agent-language-reference.md](../07-agent-language-reference.md)
 - [ ] No breaking changes to DSL syntax or semantics without major version bump
 
 ### Fail Criteria
@@ -27,7 +27,7 @@
 ### Validation Command
 
 ```bash
-grep -r "decision\|contract\|determinism" docs/03-language-reference.md docs/spec-*.md
+grep -r "decision\|contract\|determinism" docs/guide/03-language-reference.md design/specs/*.md
 ```
 
 ---
@@ -38,9 +38,9 @@ grep -r "decision\|contract\|determinism" docs/03-language-reference.md docs/spe
 
 ### Pass Criteria
 
-- [ ] Runtime core path established in [src/runtime/index.js](../src/runtime/index.js) exports (createRuntimeResolvers, createRuntimeCore, createRuntimeCommandRouter, createRuntimeWebSocketSurface)
-- [ ] Event graph execution is deterministic per [src/nextv_event_graph.js](../src/nextv_event_graph.js) and [tests/nextv_event_graph.test.js](../tests/nextv_event_graph.test.js)
-- [ ] All runtime tests pass, including [tests/runtime_core.test.js](../tests/runtime_core.test.js), [tests/runtime_cli.test.js](../tests/runtime_cli.test.js), [tests/runtime_ws_surface.test.js](../tests/runtime_ws_surface.test.js)
+- [ ] Runtime core path established in [src/runtime/index.js](../../src/runtime/index.js) exports (createRuntimeResolvers, createRuntimeCore, createRuntimeCommandRouter, createRuntimeWebSocketSurface)
+- [ ] Event graph execution is deterministic per [src/nextv_event_graph.js](../../src/nextv_event_graph.js) and [tests/nextv_event_graph.test.js](../../tests/nextv_event_graph.test.js)
+- [ ] All runtime tests pass, including [tests/runtime_core.test.js](../../tests/runtime_core.test.js), [tests/runtime_cli.test.js](../../tests/runtime_cli.test.js), [tests/runtime_ws_surface.test.js](../../tests/runtime_ws_surface.test.js)
 - [ ] No hidden agent loops or implicit control flow in runtime authority
 - [ ] Effect routing is explicit and auditable per event and contract
 
@@ -66,11 +66,11 @@ grep -n "Math.random\|crypto.*random\|probabilistic" src/runtime/*.js || echo "N
 
 ### Pass Criteria
 
-- [ ] Policy enforcement documented in [docs/05-platform-vision.md](05-platform-vision.md) "Operational Guarantees" section
-- [ ] Host-core protocol auth and policy tested in [tests/host_protocol.test.js](../tests/host_protocol.test.js)
-- [ ] Runtime policy enforcement tested in [tests/runtime_policy.test.js](../tests/runtime_policy.test.js)
-- [ ] Failure model is first-class (not exception-only) per [docs/05-platform-vision.md](05-platform-vision.md)
-- [ ] Tool invocation safety and tool metadata validated per [src/tool_metadata.js](../src/tool_metadata.js) and [tests/tool_runtime.test.js](../tests/tool_runtime.test.js)
+- [ ] Policy enforcement documented in [docs/guide/05-platform-vision.md](05-platform-vision.md) "Operational Guarantees" section
+- [ ] Host-core protocol auth and policy tested in [tests/host_protocol.test.js](../../tests/host_protocol.test.js)
+- [ ] Runtime policy enforcement tested in [tests/runtime_policy.test.js](../../tests/runtime_policy.test.js)
+- [ ] Failure model is first-class (not exception-only) per [docs/guide/05-platform-vision.md](05-platform-vision.md)
+- [ ] Tool invocation safety and tool metadata validated per [src/tool_metadata.js](../../src/tool_metadata.js) and [tests/tool_runtime.test.js](../../tests/tool_runtime.test.js)
 
 ### Fail Criteria
 
@@ -95,19 +95,19 @@ npm test -- --match "*tool*"
 
 ### Pass Criteria
 
-- [ ] All documented subpath exports are declared in [package.json](../package.json):
+- [ ] All documented subpath exports are declared in [package.json](../../package.json):
   - `"."` → `./src/index.js` (main API)
   - `"./runtime"` → `./src/runtime/index.js` (standalone runtime)
   - `"./host_core"` → `./src/host_core/index.js` (runtime substrate)
   - `"./host_core/protocol"` → `./src/host_core/protocol.js` (wire protocol)
   - `"./host-modules"` → `./src/host_modules/index.js` (capability compostion)
 - [ ] Runtime dependencies include all imports used by published binaries and surfaces:
-  - `ws` must be in `dependencies` (used by [src/runtime/ws_surface.js](../src/runtime/ws_surface.js), [bin/nerve-attach.js](../bin/nerve-attach.js))
-  - `pg` in `dependencies` (used by [src/host_core/runtime_session.js](../src/host_core/runtime_session.js) for config caching)
+  - `ws` must be in `dependencies` (used by [src/runtime/ws_surface.js](../../src/runtime/ws_surface.js), [bin/nerve-attach.js](../../bin/nerve-attach.js))
+  - `pg` in `dependencies` (used by [src/host_core/runtime_session.js](../../src/host_core/runtime_session.js) for config caching)
 - [ ] Published CLI boundary is explicit:
   - Include: `nerve-runtime` (start standalone runtime), `nerve-attach` (attach to running instance), `nerve-model-check` (validate workflow)
   - Exclude: `nerve-dev-remote` (requires Studio assets not in published files)
-- [ ] Regression test [tests/packaging_contract.test.js](../tests/packaging_contract.test.js) passes, validating:
+- [ ] Regression test [tests/packaging_contract.test.js](../../tests/packaging_contract.test.js) passes, validating:
   - All documented exports are declared
   - `ws` is in dependencies, not devDependencies
   - `nerve-dev-remote` is not in published bin map
@@ -134,10 +134,10 @@ npm pack --json | jq '.files[] | select(.path | contains("nerve-studio")) | .pat
 
 ### Pass Criteria
 
-- [ ] Automated smoke test [scripts/verify-pack-runtime-smoke.js](../scripts/verify-pack-runtime-smoke.js) passes:
+- [ ] Automated smoke test [scripts/verify-pack-runtime-smoke.js](../../scripts/verify-pack-runtime-smoke.js) passes:
   - `npm pack` succeeds
   - Tarball installs in temp workspace
-  - `nerve-runtime` boots with example workflow ([examples/minimal-web-host/workflow.nrv](../examples/minimal-web-host/workflow.nrv))
+  - `nerve-runtime` boots with example workflow ([examples/minimal-web-host/workflow.nrv](../../examples/minimal-web-host/workflow.nrv))
   - `/health` endpoint responds 200 OK
   - `nerve-attach` connects via WebSocket and retrieves runtime snapshot
   - `/api/runtime/ingress` endpoint returns well-formed error (not missing dependency)
@@ -164,16 +164,16 @@ npm run test:pack-smoke
 
 ### Pass Criteria
 
-- [ ] Studio mirror sync check [scripts/verify-editor-core-sync.js](../scripts/verify-editor-core-sync.js) passes:
+- [ ] Studio mirror sync check [scripts/verify-editor-core-sync.js](../../scripts/verify-editor-core-sync.js) passes:
   - `packages/editor-core/src` and `nerve-studio/public/editor-core` have identical paths and content
   - stale mirror files are rejected
-- [ ] Editor-core pack check [scripts/verify-editor-core-pack.js](../scripts/verify-editor-core-pack.js) passes:
-  - `npm pack --json --dry-run` succeeds for [packages/editor-core/package.json](../packages/editor-core/package.json)
+- [ ] Editor-core pack check [scripts/verify-editor-core-pack.js](../../scripts/verify-editor-core-pack.js) passes:
+  - `npm pack --json --dry-run` succeeds for [packages/editor-core/package.json](../../packages/editor-core/package.json)
   - packed paths are restricted to allowlist (`README.md`, `package.json`, `src/`, `docs/`)
   - required package entry points are present (`src/index.js`, `src/Surface.js`, `src/Renderer.js`, `src/Diagnostics.js`)
 - [ ] Studio build path keeps import strategy stable:
-  - [nerve-studio/public/src-app/15_surface_beta.js](../nerve-studio/public/src-app/15_surface_beta.js) continues importing from `../editor-core/index.js`
-  - [package.json](../package.json) `build:studio` runs sync before [scripts/build-app-js.js](../scripts/build-app-js.js)
+  - [nerve-studio/public/src-app/15_surface_beta.js](../../nerve-studio/public/src-app/15_surface_beta.js) continues importing from `../editor-core/index.js`
+  - [package.json](../../package.json) `build:studio` runs sync before [scripts/build-app-js.js](../../scripts/build-app-js.js)
 
 ### Fail Criteria
 
@@ -197,7 +197,7 @@ npm run build:studio
 
 ### Pass Criteria
 
-- [ ] GitHub Actions workflow [.github/workflows/publish-gate.yml](.github/workflows/publish-gate.yml) configured:
+- [ ] GitHub Actions workflow [.github/workflows/publish-gate.yml](../../.github/workflows/publish-gate.yml) configured:
   - Triggered on: pull_request, push to main, manual dispatch
   - Steps: checkout, setup Node 20, npm ci, npm test, npm run verify:editor-core-sync, npm run verify:editor-core-pack, npm run test:pack-smoke
   - All steps succeed
@@ -227,18 +227,18 @@ git push origin <branch>  # Trigger workflow
 
 ### Pass Criteria
 
-- [ ] Getting started docs current in [docs/02-getting-started.md](02-getting-started.md): npm install examples, CLI usage, first workflow
-- [ ] Host integration docs current in [docs/04-host-integration.md](04-host-integration.md):
-  - Subpath export examples match [package.json](../package.json) declarations
+- [ ] Getting started docs current in [docs/guide/02-getting-started.md](02-getting-started.md): npm install examples, CLI usage, first workflow
+- [ ] Host integration docs current in [docs/guide/04-host-integration.md](04-host-integration.md):
+  - Subpath export examples match [package.json](../../package.json) declarations
   - No references to unreleased experimental features
   - `nerve-dev-remote` documented as repository-only (not in published package)
-- [ ] API reference [docs/03-language-reference.md](03-language-reference.md) aligns with [src/index.js](../src/index.js) and [src/runtime/index.js](../src/runtime/index.js) exports
+- [ ] API reference [docs/guide/03-language-reference.md](03-language-reference.md) aligns with [src/index.js](../../src/index.js) and [src/runtime/index.js](../../src/runtime/index.js) exports
 - [ ] README.md reflects current state:
   - CLI examples use published commands only
   - No auto-opening of Studio or dev tools
-  - Architecture section matches [docs/05-platform-vision.md](05-platform-vision.md)
+  - Architecture section matches [docs/guide/05-platform-vision.md](05-platform-vision.md)
 - [ ] CHANGELOG.md Unreleased section documents all changes: new exports, moved dependencies, removed CLI tools, test automation
-- [ ] Release checklist in [CONTRIBUTING.md](../CONTRIBUTING.md) references production-readiness gates (this document)
+- [ ] Release checklist in [CONTRIBUTING.md](../../CONTRIBUTING.md) references production-readiness gates (this document)
 
 ### Fail Criteria
 
@@ -251,7 +251,7 @@ git push origin <branch>  # Trigger workflow
 ### Validation Commands
 
 ```bash
-grep -n "nerve-dev-remote\|studio\|experimental" docs/02-getting-started.md docs/04-host-integration.md || echo "No unreleased references"
+grep -n "nerve-dev-remote\|studio\|experimental" docs/guide/02-getting-started.md docs/guide/04-host-integration.md || echo "No unreleased references"
 grep -n "npm install" README.md  # Verify install example present
 ```
 
@@ -319,6 +319,6 @@ If product architecture changes (e.g., new export, moved dependency, new safety 
 
 - [Platform Vision & Operational Guarantees](05-platform-vision.md)
 - [Agent Project Guide](06-agent-project-guide.md)
-- [Decision Contract Specification](spec-structured-return-contracts.md)
+- [Decision Contract Specification](../../design/specs/spec-structured-return-contracts.md)
 - [Host Integration Guide](04-host-integration.md)
-- [Contributing & Release Checklist](../CONTRIBUTING.md)
+- [Contributing & Release Checklist](../../CONTRIBUTING.md)

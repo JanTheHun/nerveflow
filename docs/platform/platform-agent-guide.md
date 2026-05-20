@@ -17,11 +17,11 @@ Shared philosophy:
 
 Read these first:
 - ../05-platform-vision.md
-- ../03-language-reference.md
+- ../guide/03-language-reference.md
 - ../07-agent-language-reference.md
-- ../spec-structured-return-contracts.md
-- ../spec-explicit-runtime-failure-envelopes.md
-- ../spec-decide-contract.md
+- ../../design/specs/spec-structured-return-contracts.md
+- ../../design/specs/spec-explicit-runtime-failure-envelopes.md
+- ../../design/specs/spec-decide-contract.md
 
 ## Informational responsibilities
 
@@ -53,9 +53,9 @@ Platform engineering may involve:
 ## Documentation alignment notes
 
 When language behavior changes, align:
-- ../03-language-reference.md
-- ../spec-structured-return-contracts.md
-- any affected spec pages under ../spec-*.md
+- ../guide/03-language-reference.md
+- ../../design/specs/spec-structured-return-contracts.md
+- any affected spec pages under ../../design/specs/
 
 When agent-oriented workflow guidance changes, align with:
 - ../project-generation/project-generator-guide.md

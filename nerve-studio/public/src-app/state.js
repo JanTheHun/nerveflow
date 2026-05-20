@@ -161,7 +161,7 @@ export const tracePanelState = {
 }
 
 export const nextVViewState = {
-  currentView: 'editor',
+  currentView: 'graph',
 }
 
 export const nextVPanelState = {
@@ -240,7 +240,7 @@ export const nextVIngressControlsState = {
 }
 
 export const nextVRuntimeTargetState = {
-  target: 'embedded',
+  target: 'attach',
   attachWsUrl: '',
 }
 

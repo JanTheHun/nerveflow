@@ -72,6 +72,7 @@ import {
 } from '../src/host_modules/index.js'
 import { createOllamaTransport } from '../src/host_core/agent_transports/ollama.js'
 import { createMqttRemoteBridge } from './mqtt-remote-bridge.js'
+import { createAttachSession } from './attach-session.js'
 import { createWsRemoteBridge } from './ws-remote-bridge.js'
 import { connect as mqttConnect } from 'mqtt'
 
@@ -359,66 +360,14 @@ const managedWsRemoteBridge = !isRemoteMode
     eventBus,
   })
   : null
-let attachedWsRemoteBridge = null
-let attachedWsRemoteBridgeUrl = ''
-let managedRuntimeProcess = null
-
-function resolveAttachWsUrl(url) {
-  return String(url?.searchParams?.get('attachWsUrl') ?? ATTACH_RUNTIME_WS_URL_DEFAULT).trim()
-}
-
-function validateAttachWsUrlOrThrow(wsUrlRaw) {
-  const wsUrl = String(wsUrlRaw ?? '').trim()
-  if (!wsUrl) {
-    const err = new Error('attach mode requires attachWsUrl query parameter or NERVE_STUDIO_ATTACH_WS env')
-    err.code = 'validation_error'
-    throw err
-  }
-
-  let parsed
-  try {
-    parsed = new URL(wsUrl)
-  } catch {
-    const err = new Error(`attach ws url is invalid: ${wsUrl}`)
-    err.code = 'validation_error'
-    throw err
-  }
-
-  if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') {
-    const err = new Error(`attach ws url must use ws:// or wss://: ${wsUrl}`)
-    err.code = 'validation_error'
-    throw err
-  }
-
-  return parsed.toString()
-}
-
-function disconnectAttachedWsRemoteBridge() {
-  if (attachedWsRemoteBridge) {
-    try {
-      attachedWsRemoteBridge.disconnect()
-    } catch {
-      // best effort
-    }
-  }
-  attachedWsRemoteBridge = null
-  attachedWsRemoteBridgeUrl = ''
-}
-
-function ensureAttachedWsRemoteBridge(url) {
-  const validatedUrl = validateAttachWsUrlOrThrow(url)
-  if (attachedWsRemoteBridge && attachedWsRemoteBridgeUrl === validatedUrl) {
-    return attachedWsRemoteBridge
-  }
-
-  disconnectAttachedWsRemoteBridge()
-  attachedWsRemoteBridge = createWsRemoteBridge({
-    wsUrl: validatedUrl,
+const attachSession = createAttachSession({
+  defaultWsUrl: ATTACH_RUNTIME_WS_URL_DEFAULT,
+  createBridge: (wsUrl) => createWsRemoteBridge({
+    wsUrl,
     eventBus,
-  })
-  attachedWsRemoteBridgeUrl = validatedUrl
-  return attachedWsRemoteBridge
-}
+  }),
+})
+let managedRuntimeProcess = null
 
 function resolveRuntimeTarget(url) {
   if (isRemoteObserveOnlyMode) return 'remote-observe'
@@ -434,14 +383,7 @@ function getRuntimeControlBridge(runtimeTarget, url = null, options = {}) {
   if (runtimeTarget === 'remote-control') return wsRemoteBridge
   if (runtimeTarget === 'external') return managedWsRemoteBridge
   if (runtimeTarget === 'attach') {
-    const attachWsUrl = resolveAttachWsUrl(url)
-    if (!attachWsUrl) {
-      if (!required) return null
-      const err = new Error('attach mode requires attachWsUrl query parameter or NERVE_STUDIO_ATTACH_WS env')
-      err.code = 'validation_error'
-      throw err
-    }
-    return ensureAttachedWsRemoteBridge(attachWsUrl)
+    return attachSession.getBridge(url, { required })
   }
   return null
 }
@@ -602,6 +544,30 @@ function buildRemoteModeMetadata(runtimeTarget = 'embedded', url = null) {
     remoteRuntimeWorkspaceDir: '',
     remoteRuntimeEntrypointPath: '',
   }
+}
+
+function buildStudioCapabilities(runtimeTarget = 'embedded') {
+  const workspaceFileAccess = runtimeTarget === 'embedded' && !isRemoteMode
+  return {
+    observability: true,
+    runtimeControl: runtimeTarget !== 'remote-observe',
+    workspaceFileTree: workspaceFileAccess,
+    workspaceFileRead: workspaceFileAccess,
+    workspaceFileWrite: workspaceFileAccess,
+  }
+}
+
+function sendWorkspaceFileAccessUnavailable(res, runtimeTarget = 'embedded', url = null) {
+  return sendJson(res, 405, {
+    ok: false,
+    error: 'workspace file APIs are unavailable in observability-only mode',
+    capabilities: buildStudioCapabilities(runtimeTarget),
+    ...buildRemoteModeMetadata(runtimeTarget, url),
+  })
+}
+
+function isWorkspaceFileAccessEnabled(runtimeTarget = 'embedded') {
+  return runtimeTarget === 'embedded' && !isRemoteMode
 }
 
 function buildResolvedCallSummary({
@@ -837,6 +803,96 @@ function sendRemoteCommandResponse(res, response, fallbackMessage, runtimeTarget
   return true
 }
 
+async function requestRemoteDefinitionStatus(runtimeTarget, url = null) {
+  const runtimeBridge = getRuntimeControlBridge(runtimeTarget, url, { required: true })
+  if (!runtimeBridge?.sendCommand) {
+    throw new Error('remote runtime bridge is not configured')
+  }
+
+  const status = runtimeBridge.getStatus()
+  if (!status.connected) {
+    await waitForBridgeConnection(runtimeBridge, 8000)
+  }
+
+  return await runtimeBridge.sendCommand({ type: 'definition_status', payload: {} })
+}
+
+async function requestRemoteGraph(runtimeTarget, url = null, payload = {}) {
+  const runtimeBridge = getRuntimeControlBridge(runtimeTarget, url, { required: true })
+  if (!runtimeBridge?.sendCommand) {
+    throw new Error('remote runtime bridge is not configured')
+  }
+
+  const status = runtimeBridge.getStatus()
+  if (!status.connected) {
+    await waitForBridgeConnection(runtimeBridge, 8000)
+  }
+
+  return await runtimeBridge.sendCommand({ type: 'graph', payload })
+}
+
+async function buildRemoteWorkspaceConfigResponse(runtimeTarget, url = null) {
+  const response = await requestRemoteDefinitionStatus(runtimeTarget, url)
+  if (response?.ok !== true) {
+    const err = new Error(String(response?.error?.message ?? 'failed to load remote definition status'))
+    err.code = String(response?.error?.code ?? 'runtime_error')
+    throw err
+  }
+
+  const runtimeBridge = getRuntimeControlBridge(runtimeTarget, url, { required: true })
+  const bridgeStatus = runtimeBridge?.getStatus?.() ?? null
+  const activeStatus = response?.data?.active && typeof response.data.active === 'object'
+    ? response.data.active
+    : {}
+  const workspaceDir = String(activeStatus.workspaceDir ?? bridgeStatus?.workspaceDir ?? '')
+  const rawEntrypointPath = String(activeStatus.entrypointPath ?? bridgeStatus?.entrypointPath ?? '')
+  const entrypointPath = workspaceDir && rawEntrypointPath.startsWith(`${workspaceDir}/`)
+    ? rawEntrypointPath.slice(workspaceDir.length + 1)
+    : rawEntrypointPath
+
+  return {
+    ok: true,
+    source: 'runtime',
+    runtimeOwned: true,
+    workspaceDir,
+    entrypointPath,
+    baselineStatePath: '',
+    declaredExternals: Array.isArray(activeStatus.declaredExternals) ? activeStatus.declaredExternals : [],
+    declaredEffects: [],
+    configuredAgents: [],
+    configuredModels: [],
+    configuredAgentProfiles: {},
+    configuredModelConfigs: {},
+    configuredTransportProviders: {},
+    configuredAllowedTools: [],
+    configuredToolAliases: {},
+    configuredAgentDeclaredTools: {},
+    timers: [],
+    definitionStatus: response.data,
+    activeDefinitionId: String(activeStatus.activeDefinitionId ?? ''),
+    definitionHash: String(activeStatus.definitionHash ?? ''),
+  }
+}
+
+function normalizeDefinitionStatusPaths(definitionStatus = {}) {
+  const output = definitionStatus && typeof definitionStatus === 'object'
+    ? { ...definitionStatus }
+    : {}
+
+  for (const key of ['active', 'candidate']) {
+    const entry = output[key]
+    if (!entry || typeof entry !== 'object') continue
+    const workspaceDir = String(entry.workspaceDir ?? '').trim()
+    const entrypointPath = String(entry.entrypointPath ?? '').trim()
+    output[key] = { ...entry }
+    if (workspaceDir && entrypointPath.startsWith(`${workspaceDir}/`)) {
+      output[key].entrypointPath = entrypointPath.slice(workspaceDir.length + 1)
+    }
+  }
+
+  return output
+}
+
 const MIME_BY_EXT = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -942,36 +998,57 @@ function getMimeTypeForPath(filePath) {
   return MIME_BY_EXT[getExtensionKey(filePath)] || 'application/octet-stream'
 }
 
+function isPathWithinRepo(absolutePath) {
+  const rel = relative(REPO_ROOT, absolutePath)
+  return Boolean(rel) && !rel.startsWith('..') && !isAbsolute(rel)
+}
+
 function resolveWorkspaceDirectory(inputPath) {
   const candidate = String(inputPath ?? '').trim()
   if (!candidate) {
     return { absolutePath: REPO_ROOT, relativePath: '.' }
   }
-  const absolutePath = isAbsolute(candidate)
+
+  const candidateIsAbsolute = isAbsolute(candidate)
+  const absolutePath = candidateIsAbsolute
     ? resolve(candidate)
     : resolve(REPO_ROOT, candidate)
-  const rel = relative(REPO_ROOT, absolutePath)
-  if (rel.startsWith('..') || isAbsolute(rel)) {
-    throw new Error('Path is outside workspace')
+
+  if (!candidateIsAbsolute) {
+    const rel = relative(REPO_ROOT, absolutePath)
+    if (rel.startsWith('..') || isAbsolute(rel)) {
+      throw new Error('Path is outside workspace')
+    }
   }
+
+  const rel = relative(REPO_ROOT, absolutePath)
+  const relativePath = candidateIsAbsolute || rel.startsWith('..') || isAbsolute(rel)
+    ? absolutePath.replace(/\\/g, '/')
+    : (rel ? rel.replace(/\\/g, '/') : '.')
+
   return {
     absolutePath,
-    relativePath: rel ? rel.replace(/\\/g, '/') : '.',
+    relativePath,
   }
 }
 
 function resolveWorkspaceRelativePath(inputPath, kindRaw = 'editor') {
   const candidate = String(inputPath ?? '').trim()
   if (!candidate) throw new Error('filePath required')
-  if (isAbsolute(candidate)) throw new Error('Only workspace-relative paths are allowed')
 
   const rules = getKindRules(kindRaw)
   if (!rules) throw new Error('Invalid file kind')
 
-  const absolutePath = resolve(REPO_ROOT, candidate)
-  const rel = relative(REPO_ROOT, absolutePath)
-  if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
-    throw new Error('Path is outside workspace')
+  const candidateIsAbsolute = isAbsolute(candidate)
+  const absolutePath = candidateIsAbsolute
+    ? resolve(candidate)
+    : resolve(REPO_ROOT, candidate)
+
+  if (!candidateIsAbsolute) {
+    const rel = relative(REPO_ROOT, absolutePath)
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+      throw new Error('Path is outside workspace')
+    }
   }
 
   const extension = getExtensionKey(absolutePath)
@@ -979,9 +1056,14 @@ function resolveWorkspaceRelativePath(inputPath, kindRaw = 'editor') {
     throw new Error(`Unsupported extension '${extension}' for ${kindRaw || 'editor'}`)
   }
 
+  const rel = relative(REPO_ROOT, absolutePath)
+  const relativePath = candidateIsAbsolute || rel.startsWith('..') || isAbsolute(rel)
+    ? absolutePath.replace(/\\/g, '/')
+    : rel.replace(/\\/g, '/')
+
   return {
     absolutePath,
-    relativePath: rel.replace(/\\/g, '/'),
+    relativePath,
     rules,
   }
 }
@@ -1066,6 +1148,100 @@ function readJsonObjectFile(filePath) {
   return parsed
 }
 
+function buildRawNextVWorkspaceConfig(workspaceDir, toWorkspaceDisplayPath) {
+  const nervePath = join(workspaceDir.absolutePath, 'nerve.json')
+  const nextVPath = join(workspaceDir.absolutePath, 'nextv.json')
+  const rootConfigPath = existsSync(nervePath) ? nervePath : nextVPath
+  if (!existsSync(rootConfigPath)) {
+    throw new Error(`Workspace config not found: ${toWorkspaceDisplayPath(rootConfigPath)}`)
+  }
+
+  const rootConfigLabel = existsSync(nervePath) ? 'nerve.json' : 'nextv.json'
+  const rootConfigDisplayPath = toWorkspaceDisplayPath(rootConfigPath)
+  const rootConfig = readJsonObjectFile(rootConfigPath)
+  const rawTimers = Array.isArray(rootConfig.timers)
+    ? rootConfig.timers
+        .map((timer) => {
+          const event = String(timer?.event ?? '').trim()
+          const interval = Number(timer?.interval)
+          if (!event || !Number.isFinite(interval) || interval <= 0) return null
+          return {
+            event,
+            interval: Math.floor(interval),
+            payload: timer?.payload ?? null,
+            runOnStart: timer?.runOnStart === true,
+          }
+        })
+        .filter(Boolean)
+    : []
+
+  return {
+    models: {
+      status: 'missing',
+      file: toWorkspaceDisplayPath(join(workspaceDir.absolutePath, 'models.json')),
+      source: toWorkspaceDisplayPath(join(workspaceDir.absolutePath, 'models.json')),
+      map: {},
+    },
+    transports: {
+      status: 'missing',
+      file: toWorkspaceDisplayPath(join(workspaceDir.absolutePath, 'transports.json')),
+      source: toWorkspaceDisplayPath(join(workspaceDir.absolutePath, 'transports.json')),
+      map: {},
+    },
+    agents: {
+      status: 'missing',
+      file: toWorkspaceDisplayPath(join(workspaceDir.absolutePath, 'agents.json')),
+      source: toWorkspaceDisplayPath(join(workspaceDir.absolutePath, 'agents.json')),
+      profiles: {},
+    },
+    tools: {
+      status: 'missing',
+      file: toWorkspaceDisplayPath(join(workspaceDir.absolutePath, 'tools.json')),
+      source: toWorkspaceDisplayPath(join(workspaceDir.absolutePath, 'tools.json')),
+      allow: null,
+      aliases: {},
+    },
+    nextv: {
+      status: 'loaded',
+      file: rootConfigDisplayPath,
+      config: rootConfig,
+      timers: rawTimers,
+      timersSource: rawTimers.length > 0 ? `${rootConfigLabel}#timers` : '',
+    },
+    operators: {
+      status: 'missing',
+      file: toWorkspaceDisplayPath(join(workspaceDir.absolutePath, 'operators.json')),
+      source: toWorkspaceDisplayPath(join(workspaceDir.absolutePath, 'operators.json')),
+      map: {},
+    },
+    effects: {
+      status: 'missing',
+      file: `${rootConfigDisplayPath}#effects`,
+      source: `${rootConfigDisplayPath}#effects`,
+      map: {},
+    },
+    requires: {
+      status: 'missing',
+      file: `${rootConfigDisplayPath}#requires`,
+      source: `${rootConfigDisplayPath}#requires`,
+      map: {},
+    },
+    modules: {
+      status: 'missing',
+      file: `${rootConfigDisplayPath}#modules`,
+      source: `${rootConfigDisplayPath}#modules`,
+      map: {},
+    },
+    runtime: {
+      preload: 'none',
+    },
+  }
+}
+
+function loadAttachWorkspaceConfig(workspaceDir, toWorkspaceDisplayPath) {
+  return buildRawNextVWorkspaceConfig(workspaceDir, toWorkspaceDisplayPath)
+}
+
 function resolveEntrypoint(workspaceDir, requestedEntrypoint, workspaceConfig) {
   const fromConfig = String(workspaceConfig?.nextv?.config?.entrypointPath ?? '').trim()
   const rawEntrypoint = String(requestedEntrypoint ?? '').trim() || fromConfig
@@ -1086,25 +1262,27 @@ function resolveEntrypoint(workspaceDir, requestedEntrypoint, workspaceConfig) {
 function resolvePathFromBaseDirectory(baseDirectoryAbsolutePath, inputPath, kindRaw = 'editor') {
   const candidate = String(inputPath ?? '').trim()
   if (!candidate) throw new Error('filePath required')
-  if (isAbsolute(candidate)) throw new Error('Only workspace-relative paths are allowed')
 
   const rules = getKindRules(kindRaw)
   if (!rules) throw new Error('Invalid file kind')
 
-  const absolutePath = resolve(baseDirectoryAbsolutePath, candidate)
-  const rel = relative(REPO_ROOT, absolutePath)
-  if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
-    throw new Error('Path is outside workspace')
-  }
+  const absolutePath = isAbsolute(candidate)
+    ? resolve(candidate)
+    : resolve(baseDirectoryAbsolutePath, candidate)
 
   const extension = getExtensionKey(absolutePath)
   if (!rules.allowedExtensions.has(extension)) {
     throw new Error(`Unsupported extension '${extension}' for ${kindRaw || 'editor'}`)
   }
 
+  const rel = relative(REPO_ROOT, absolutePath)
+  const relativePath = isPathWithinRepo(absolutePath)
+    ? rel.replace(/\\/g, '/')
+    : absolutePath.replace(/\\/g, '/')
+
   return {
     absolutePath,
-    relativePath: rel.replace(/\\/g, '/'),
+    relativePath,
     rules,
   }
 }
@@ -1263,10 +1441,21 @@ const runtimeController = createNextVRuntimeController({
 
 async function handleApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/session') {
-    return sendJson(res, 200, { model: '', imageCount: 0 })
+    const runtimeTarget = resolveRuntimeTarget(url)
+    return sendJson(res, 200, {
+      model: '',
+      imageCount: 0,
+      remoteWsUrl: runtimeTarget === 'remote-control' ? REMOTE_WS_URL : '',
+      capabilities: buildStudioCapabilities(runtimeTarget),
+      ...buildRemoteModeMetadata(runtimeTarget, url),
+    })
   }
 
   if (req.method === 'GET' && url.pathname === '/api/workspace/tree') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (!isWorkspaceFileAccessEnabled(runtimeTarget)) {
+      return sendWorkspaceFileAccessUnavailable(res, runtimeTarget, url)
+    }
     const workspaceDirValue = String(url.searchParams.get('workspaceDir') ?? '').trim()
     try {
       const workspaceDir = resolveWorkspaceDirectory(workspaceDirValue)
@@ -1282,6 +1471,10 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/script/content') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (!isWorkspaceFileAccessEnabled(runtimeTarget)) {
+      return sendWorkspaceFileAccessUnavailable(res, runtimeTarget, url)
+    }
     const filePath = String(url.searchParams.get('filePath') ?? '').trim()
     if (!filePath) return sendJson(res, 400, { error: 'filePath required' })
     try {
@@ -1297,6 +1490,10 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/file/content') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (!isWorkspaceFileAccessEnabled(runtimeTarget)) {
+      return sendWorkspaceFileAccessUnavailable(res, runtimeTarget, url)
+    }
     const filePath = String(url.searchParams.get('filePath') ?? '').trim()
     const kind = String(url.searchParams.get('kind') ?? '').trim()
     if (!filePath) return sendJson(res, 400, { error: 'filePath required' })
@@ -1318,6 +1515,10 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/file/save') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (!isWorkspaceFileAccessEnabled(runtimeTarget)) {
+      return sendWorkspaceFileAccessUnavailable(res, runtimeTarget, url)
+    }
     const body = await readRequestBody(req)
     const filePath = String(body.filePath ?? '').trim()
     const kind = String(body.kind ?? '').trim()
@@ -1345,6 +1546,10 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/file/create') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (!isWorkspaceFileAccessEnabled(runtimeTarget)) {
+      return sendWorkspaceFileAccessUnavailable(res, runtimeTarget, url)
+    }
     const body = await readRequestBody(req)
     const filePath = String(body.filePath ?? '').trim()
     if (!filePath) return sendJson(res, 400, { error: 'filePath required' })
@@ -1361,6 +1566,10 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/folder/create') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (!isWorkspaceFileAccessEnabled(runtimeTarget)) {
+      return sendWorkspaceFileAccessUnavailable(res, runtimeTarget, url)
+    }
     const body = await readRequestBody(req)
     const folderPath = String(body.folderPath ?? '').trim()
     if (!folderPath) return sendJson(res, 400, { error: 'folderPath required' })
@@ -1377,6 +1586,10 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/file/rename') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (!isWorkspaceFileAccessEnabled(runtimeTarget)) {
+      return sendWorkspaceFileAccessUnavailable(res, runtimeTarget, url)
+    }
     const body = await readRequestBody(req)
     const filePath = String(body.filePath ?? '').trim()
     const newName = String(body.newName ?? '').trim()
@@ -1407,6 +1620,10 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/folder/rename') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (!isWorkspaceFileAccessEnabled(runtimeTarget)) {
+      return sendWorkspaceFileAccessUnavailable(res, runtimeTarget, url)
+    }
     const body = await readRequestBody(req)
     const folderPath = String(body.folderPath ?? '').trim()
     const newName = String(body.newName ?? '').trim()
@@ -1438,6 +1655,10 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'DELETE' && url.pathname === '/api/file') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (!isWorkspaceFileAccessEnabled(runtimeTarget)) {
+      return sendWorkspaceFileAccessUnavailable(res, runtimeTarget, url)
+    }
     const body = await readRequestBody(req)
     const filePath = String(body.filePath ?? '').trim()
     const kind = String(body.kind ?? '').trim() || 'editor'
@@ -1454,6 +1675,10 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'DELETE' && url.pathname === '/api/folder') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    if (!isWorkspaceFileAccessEnabled(runtimeTarget)) {
+      return sendWorkspaceFileAccessUnavailable(res, runtimeTarget, url)
+    }
     const body = await readRequestBody(req)
     const folderPath = String(body.folderPath ?? '').trim()
     if (!folderPath) return sendJson(res, 400, { error: 'folderPath required' })
@@ -1471,7 +1696,17 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'GET' && url.pathname === '/api/nextv/workspace-config') {
     const rawWorkspaceDir = String(url.searchParams.get('workspaceDir') ?? '').trim()
+    const runtimeTarget = resolveRuntimeTarget(url)
     try {
+      if (runtimeTarget === 'attach' || runtimeTarget === 'remote-control' || runtimeTarget === 'external') {
+        const remoteWorkspaceConfig = await buildRemoteWorkspaceConfigResponse(runtimeTarget, url)
+        return sendJson(res, 200, {
+          ...remoteWorkspaceConfig,
+          capabilities: buildStudioCapabilities(runtimeTarget),
+          ...buildRemoteModeMetadata(runtimeTarget, url),
+        })
+      }
+
       const workspaceDir = resolveWorkspaceDirectory(rawWorkspaceDir)
       const workspaceConfig = loadWorkspaceNextVConfigCore({
         workspaceDir,
@@ -1520,6 +1755,9 @@ async function handleApi(req, res, url) {
       const configuredModels = Object.keys(configuredModelConfigs).sort((left, right) => left.localeCompare(right))
       return sendJson(res, 200, {
         ok: true,
+        source: 'workspace',
+        runtimeOwned: false,
+        workspaceDir: workspaceDir.relativePath,
         entrypointPath: String(workspaceConfig.nextv.config?.entrypointPath ?? '').trim(),
         baselineStatePath: String(workspaceConfig.nextv.config?.baselineStatePath ?? '').trim(),
         declaredExternals,
@@ -1540,6 +1778,11 @@ async function handleApi(req, res, url) {
               runOnStart: timer.runOnStart === true,
             }))
           : [],
+        definitionStatus: null,
+        activeDefinitionId: '',
+        definitionHash: '',
+        capabilities: buildStudioCapabilities(runtimeTarget),
+        ...buildRemoteModeMetadata(runtimeTarget, url),
       })
     } catch (err) {
       return sendJson(res, 400, { error: `Failed to load workspace config: ${err.message}` })
@@ -1549,6 +1792,30 @@ async function handleApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/nextv/graph') {
     const rawWorkspaceDir = String(url.searchParams.get('workspaceDir') ?? '').trim()
     const requestedEntrypointPath = String(url.searchParams.get('entrypointPath') ?? '').trim()
+    const runtimeTarget = resolveRuntimeTarget(url)
+
+    if (runtimeTarget === 'attach' || runtimeTarget === 'remote-control' || runtimeTarget === 'external') {
+      let response
+      try {
+        response = await requestRemoteGraph(runtimeTarget, url, {
+          workspaceDir: rawWorkspaceDir,
+          entrypointPath: requestedEntrypointPath,
+        })
+      } catch (err) {
+        if (String(err?.code ?? '') === 'validation_error') {
+          return sendJson(res, 400, { ok: false, error: String(err?.message ?? err), ...buildRemoteModeMetadata(runtimeTarget, url) })
+        }
+        return sendRemoteConnectionUnavailable(res, String(err?.message ?? err), runtimeTarget)
+      }
+
+      const errorResponse = sendRemoteCommandResponse(res, response, 'failed to extract remote nextV graph', runtimeTarget)
+      if (errorResponse) return errorResponse
+
+      return sendJson(res, 200, {
+        ok: true,
+        ...(response?.data ?? {}),
+      })
+    }
 
     let workspaceDir
     let workspaceConfig
@@ -1557,11 +1824,11 @@ async function handleApi(req, res, url) {
     try {
       workspaceDir = resolveWorkspaceDirectory(rawWorkspaceDir)
       workspaceConfig = loadWorkspaceNextVConfigCore({
-        workspaceDir,
-        toWorkspaceDisplayPath,
-        resolvePathFromBaseDirectory,
-        readJsonObjectFile,
-      })
+            workspaceDir,
+            toWorkspaceDisplayPath,
+            resolvePathFromBaseDirectory,
+            readJsonObjectFile,
+          })
       entrypoint = resolveEntrypoint(workspaceDir, requestedEntrypointPath, workspaceConfig)
     } catch (err) {
       return sendJson(res, 400, { error: String(err.message || err) })
@@ -1796,7 +2063,26 @@ async function handleApi(req, res, url) {
       return sendJson(res, 405, { error: 'nerve-studio is in remote observability mode; runtime control is disabled' })
     }
     if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
-      return sendJson(res, 405, { error: 'definition status is currently supported only in embedded runtime mode' })
+      let response
+      try {
+        response = await requestRemoteDefinitionStatus(runtimeTarget, url)
+      } catch (err) {
+        if (String(err?.code ?? '') === 'validation_error') {
+          return sendJson(res, 400, { ok: false, error: String(err?.message ?? err), ...buildRemoteModeMetadata(runtimeTarget, url) })
+        }
+        return sendRemoteConnectionUnavailable(res, String(err?.message ?? err), runtimeTarget)
+      }
+
+      const errorResponse = sendRemoteCommandResponse(res, response, 'failed to load remote definition status', runtimeTarget)
+      if (errorResponse) return errorResponse
+
+      const normalizedDefinitionStatus = normalizeDefinitionStatusPaths(response?.data ?? {})
+
+      return sendJson(res, 200, {
+        ok: true,
+        ...normalizedDefinitionStatus,
+        ...buildRemoteModeMetadata(runtimeTarget, url),
+      })
     }
 
     if (!runtimeController.isActive()) {
@@ -2264,6 +2550,7 @@ async function handleApi(req, res, url) {
         ok: true,
         running: false,
         snapshot: null,
+        capabilities: buildStudioCapabilities(runtimeTarget),
         ...buildRemoteModeMetadata(runtimeTarget, url),
       })
     }
@@ -2283,6 +2570,7 @@ async function handleApi(req, res, url) {
           ok: true,
           running: false,
           snapshot: null,
+          capabilities: buildStudioCapabilities(runtimeTarget),
           ...buildRemoteModeMetadata(runtimeTarget, url),
         })
       }
@@ -2293,6 +2581,7 @@ async function handleApi(req, res, url) {
           ok: true,
           running: snapshot.running === true,
           snapshot: snapshot.snapshot,
+          capabilities: buildStudioCapabilities(runtimeTarget),
           ...buildRemoteModeMetadata(runtimeTarget, url),
         })
       } catch (err) {
@@ -2304,6 +2593,7 @@ async function handleApi(req, res, url) {
             snapshot: cachedSnapshot,
             staleSnapshot: true,
             warning: String(err?.message ?? err),
+            capabilities: buildStudioCapabilities(runtimeTarget),
             ...buildRemoteModeMetadata(runtimeTarget, url),
           })
         }
@@ -2312,6 +2602,7 @@ async function handleApi(req, res, url) {
           ok: true,
           running: false,
           snapshot: null,
+          capabilities: buildStudioCapabilities(runtimeTarget),
           ...buildRemoteModeMetadata(runtimeTarget, url),
         })
       }
@@ -2322,6 +2613,7 @@ async function handleApi(req, res, url) {
       ok: true,
       running: snapshot?.running === true,
       snapshot,
+      capabilities: buildStudioCapabilities(runtimeTarget),
       ...buildRemoteModeMetadata(runtimeTarget, url),
     })
   }
@@ -2482,13 +2774,13 @@ server.listen(PORT, () => {
 
 process.on('exit', () => {
   stopManagedRuntimeProcess()
-  disconnectAttachedWsRemoteBridge()
+  attachSession.disconnect()
 })
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     stopManagedRuntimeProcess()
-    disconnectAttachedWsRemoteBridge()
+    attachSession.disconnect()
     process.exit(0)
   })
 }

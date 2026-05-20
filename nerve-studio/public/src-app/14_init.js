@@ -10,6 +10,7 @@ import {
   userOutputFilterState,
   scriptInputs,
   nextVWorkspaceDirInput,
+  nextVEntrypointInput,
   workspace
 } from './state.js'
 import {
@@ -140,6 +141,12 @@ import {
 } from './13_layout.js'
 
 export function initLayoutState() {
+  return (async () => {
+    const session = await loadSession()
+    const sessionRemoteMode = session?.remoteMode === true
+    const sessionRemoteControl = session?.remoteControl === true
+    const sessionRemoteWsUrl = String(session?.remoteWsUrl ?? '').trim()
+
   setAppMode('nextv')
 
   const savedWidth = Number(localStorage.getItem(storageKeys.leftWidth))
@@ -171,6 +178,24 @@ export function initLayoutState() {
   setNextVIngressControlsVisible(ingressControlsVisible, { persist: false })
   setNextVRuntimeTarget(nextVRuntimeTargetState.target, { persist: false, sync: false })
   setNextVAttachWsUrl(nextVRuntimeTargetState.attachWsUrl, { persist: false, sync: false })
+
+  if (sessionRemoteControl) {
+    // PATCH: Allow 'attach' mode even when remoteControl is true.
+    // Only force 'embedded' if attach is not the only allowed mode.
+    // If the current runtime target is 'attach', do not override.
+    if (nextVRuntimeTargetState.target !== 'attach') {
+      setNextVRuntimeTarget('embedded', { persist: false, sync: false })
+    }
+    if (sessionRemoteWsUrl) {
+      setNextVAttachWsUrl(sessionRemoteWsUrl, { persist: false, sync: false })
+    }
+  }
+
+  if (sessionRemoteMode) {
+    if (nextVWorkspaceDirInput) nextVWorkspaceDirInput.value = ''
+    if (nextVEntrypointInput) nextVEntrypointInput.value = ''
+  }
+
   const attachOverrideStored = localStorage.getItem(storageKeys.nextVAttachStartOverride) === '1'
   setNextVAttachStartOverrideEnabled(attachOverrideStored, { persist: false })
   const drawerStored = localStorage.getItem(storageKeys.nextVTreeDrawerOpen)
@@ -202,11 +227,27 @@ export function initLayoutState() {
   applyUserOutputChannelVisibility()
 
   const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
-  if (workspaceDir && isNextVMode()) {
+  const shouldAutoOpenWorkspace = workspaceDir
+    && isNextVMode()
+    && nextVRuntimeTargetState.target !== 'attach'
+    && !sessionRemoteMode
+  if (shouldAutoOpenWorkspace) {
     openNextVWorkspace().catch((err) => {
       appendNextVErrorLog(err, '[nextv:workspace:auto-open:error]')
     })
   }
+
+  // Auto-attach to remote runtime if in attach mode and ws url is present.
+  if (
+    nextVRuntimeTargetState.target === 'attach' &&
+    String(nextVRuntimeTargetState.attachWsUrl ?? '').trim()
+  ) {
+    // Defer to next tick so initial UI/render state is fully applied first.
+    setTimeout(() => {
+      void attachNextVRuntime()
+    }, 0)
+  }
+  })()
 }
 
 export function setupNextVEventsScrollListener() {
@@ -249,7 +290,6 @@ initLayoutState()
 initFileTreeCtxMenu()
 updateScriptRunControls()
 syncNextVRuntimeState()
-loadSession()
 
 // ---------------------------------------------------------------------------
 // Expose onclick handlers to global scope.

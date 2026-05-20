@@ -111,6 +111,9 @@ test('extractEventGraph classifies pure, llm, declared_output, side_effect, and 
     'on "llm"',
     '  response = agent("triage", event.value)',
     'end',
+    'on "llm_model"',
+    '  response = model("llama3.2:latest", event.value)',
+    'end',
     'on "side"',
     '  output text "hello"',
     '  state.now = tool("get_time")',
@@ -130,10 +133,12 @@ test('extractEventGraph classifies pure, llm, declared_output, side_effect, and 
 
   assert.equal(byEvent.pure.classification, 'pure')
   assert.equal(byEvent.llm.classification, 'llm')
+  assert.equal(byEvent.llm_model.classification, 'llm')
   assert.equal(byEvent.side.classification, 'declared_output')
   assert.equal(byEvent.sideonly.classification, 'side_effect')
   assert.equal(byEvent.mixed.classification, 'mixed')
   assert.deepEqual(byEvent.llm.agents, ['triage'])
+  assert.deepEqual(byEvent.llm_model.agents, ['model:llama3.2:latest'])
   assert.deepEqual(byEvent.mixed.agents, ['triage'])
   assert.deepEqual(byEvent.side.outputs, ['text'])
   assert.deepEqual(byEvent.side.tools, [

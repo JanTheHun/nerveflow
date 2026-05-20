@@ -874,6 +874,7 @@ export function createNextVRuntimeController({
         entrypointPath: nextVEntrypointPath,
         activeDefinitionId: nextVActiveDefinition.activeDefinitionId,
         definitionHash: nextVActiveDefinition.definitionHash,
+        declaredExternals: getDeclaredExternals(nextVWorkspaceConfig),
       },
       candidate: nextVCandidateStatus,
     }
@@ -893,5 +894,6 @@ export function createNextVRuntimeController({
     isActive: () => Boolean(nextVRunner),
     getWorkspaceDir: () => nextVWorkspaceDir,
     getEntrypointPath: () => nextVEntrypointPath,
+    getWorkspaceConfig: () => nextVWorkspaceConfig,
   }
 }

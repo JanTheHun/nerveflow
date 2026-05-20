@@ -509,7 +509,8 @@ export function getNextVGraphHandlerLabelLines(nodeObj, transition, options = {}
     const timerSuffix = (slot?.active === true || elapsedMs > 0)
       ? `  ${formatInlineAgentElapsedMs(elapsedMs)}`
       : ''
-    return `${parallelPrefix}agent:${name}${timerSuffix}`
+    const displayName = name.startsWith('model:') ? name : `agent:${name}`
+    return `${parallelPrefix}${displayName}${timerSuffix}`
   })
   const toolLines = tools.length === 1
     ? [`tool:${tools[0]}`]

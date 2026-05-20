@@ -12,6 +12,7 @@ import {
   dirtyEditsCache,
   editorLayoutState,
   isBusy,
+  isRemoteMode,
   nextVAutoSaveInput,
   nextVEntrypointInput,
   nextVFileState,
@@ -26,6 +27,7 @@ import {
   scriptPathInput,
   scriptView,
   tracePanelState,
+  remoteRuntimeEntrypointPath,
   userInputText,
   workspace
 } from './state.js'
@@ -117,9 +119,12 @@ export function setStatus(text, cls = '') {
 // --- Session init ---
 export async function loadSession() {
   try {
-    await fetch('/api/session')
+    const res = await fetch('/api/session')
+    if (!res.ok) return {}
+    return await res.json().catch(() => ({}))
   } catch {
     // best-effort
+    return {}
   }
 }
 
@@ -1003,6 +1008,12 @@ export async function loadScriptContent(filePath) {
 export async function ensureNextVEntrypointVisible(options = {}) {
   if (!isNextVMode()) return
 
+  const capabilities = nextVFileState?.capabilities
+  const canOpenWorkspaceFiles = capabilities && typeof capabilities === 'object'
+    ? capabilities.workspaceFileRead === true
+    : (isRemoteMode !== true)
+  if (!canOpenWorkspaceFiles) return
+
   const { logLoaded = false, warnOnDirty = true } = options
   const entrypointPath = resolveNextVPath(nextVEntrypointInput?.value)
   if (!entrypointPath) return
@@ -1042,6 +1053,8 @@ export async function openNextVWorkspace() {
   let configEntrypoint = ''
   let configDeclaredExternals = []
   let configDeclaredEffects = []
+  let workspaceConfigCapabilities = null
+  let workspaceConfigRuntimeOwned = false
   try {
     const cfgRes = await fetch(`/api/nextv/workspace-config?workspaceDir=${encodeURIComponent(workspaceDir)}`)
     if (cfgRes.ok) {
@@ -1049,21 +1062,51 @@ export async function openNextVWorkspace() {
       configEntrypoint = String(cfg.entrypointPath ?? '').trim()
       configDeclaredExternals = normalizeDeclaredExternalChannels(cfg.declaredExternals)
       configDeclaredEffects = normalizeDeclaredEffectChannels(cfg.declaredEffects)
+      workspaceConfigCapabilities = cfg?.capabilities && typeof cfg.capabilities === 'object'
+        ? { ...cfg.capabilities }
+        : null
+      workspaceConfigRuntimeOwned = cfg?.runtimeOwned === true
     }
   } catch {
     configDeclaredExternals = []
     configDeclaredEffects = []
   }
 
-  // 2. Determine candidate entrypoint: config first, then step.nrv, then step.wfs
-  const fallbackEntrypoints = ['step.nrv', 'step.wfs']
+  if (workspaceConfigCapabilities) {
+    nextVFileState.capabilities = workspaceConfigCapabilities
+  }
+
+  // 2. Determine candidate entrypoint: config first, then active/runtime hints, then common defaults.
+  const currentEntrypoint = normalizeRelativePath(nextVEntrypointInput?.value ?? '')
+  const runtimeEntrypoint = normalizeRelativePath(remoteRuntimeEntrypointPath ?? '')
+  const fallbackEntrypoints = [...new Set([
+    currentEntrypoint,
+    runtimeEntrypoint,
+    'workflow.nrv',
+    'workflow.wfs',
+    'step.nrv',
+    'step.wfs',
+  ].filter(Boolean))]
   const candidateEntrypoints = configEntrypoint
-    ? [configEntrypoint]
+    ? [configEntrypoint, ...fallbackEntrypoints.filter((entry) => entry !== configEntrypoint)]
     : fallbackEntrypoints
   let candidateEntrypoint = candidateEntrypoints[0] || ''
   let candidateEntrypointPath = candidateEntrypoint ? `${workspaceDir}/${candidateEntrypoint}` : ''
+  const canOpenWorkspaceFiles = workspaceConfigCapabilities && typeof workspaceConfigCapabilities === 'object'
+    ? workspaceConfigCapabilities.workspaceFileRead === true
+    : (isRemoteMode !== true)
 
   let loadedEntrypoint = false
+  if (!canOpenWorkspaceFiles || workspaceConfigRuntimeOwned) {
+    if (nextVEntrypointInput) {
+      nextVEntrypointInput.value = candidateEntrypoint
+    }
+    appendNextVLogRow('[nextv:workspace] runtime-owned workspace detected; file editor is disabled in observability-only mode', 'result')
+    if (candidateEntrypoint) {
+      appendNextVLogRow(`[nextv:workspace] using runtime entrypoint ${candidateEntrypoint}`, 'result')
+    }
+    loadedEntrypoint = Boolean(candidateEntrypoint)
+  } else {
   try {
     await loadWorkspaceTree(workspaceDir)
     const storedOpenFile = getStoredNextVOpenFile()
@@ -1123,6 +1166,7 @@ export async function openNextVWorkspace() {
       nextVEntrypointInput.value = ''
     }
     appendNextVLogRow(`[nextv:workspace] ${candidateEntrypointPath} not found — select an entrypoint to enable start`, 'result')
+  }
   }
 
   persistNextVConfig()

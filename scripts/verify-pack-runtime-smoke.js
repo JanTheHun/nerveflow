@@ -215,6 +215,13 @@ async function main() {
       throw new Error('Composable reference host assets are missing from installed npm artifact')
     }
 
+    const minimalWsServerPath = path.join(installedRoot, 'examples', 'minimal-ws-host', 'server.js')
+    const minimalWsReadmePath = path.join(installedRoot, 'examples', 'minimal-ws-host', 'README.md')
+    const minimalWsPackagePath = path.join(installedRoot, 'examples', 'minimal-ws-host', 'package.json')
+    if (!existsSync(minimalWsServerPath) || !existsSync(minimalWsReadmePath) || !existsSync(minimalWsPackagePath)) {
+      throw new Error('Minimal WS host assets are missing from installed npm artifact')
+    }
+
     console.log('[pack-smoke] validating installed nerve-compose validate command')
     const validateResult = await runCommand(process.execPath, [
       composeScript,

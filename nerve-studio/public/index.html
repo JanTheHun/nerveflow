@@ -35,9 +35,9 @@
           <div class="settings-group-label">nextv</div>
           <label class="settings-item" for="nextv-runtime-target">runtime target</label>
           <select id="nextv-runtime-target" class="settings-item" onchange="setNextVRuntimeTarget(this.value)">
-            <option value="embedded">embedded runtime</option>
-            <option value="external">external runtime process</option>
-            <option value="attach">attach WS runtime</option>
+            <option value="embedded" disabled>embedded runtime</option>
+            <option value="external" disabled>external runtime process</option>
+            <option value="attach" selected>attach WS runtime</option>
           </select>
           <label class="settings-item" for="nextv-editor-tab-size">editor tab size</label>
           <select id="nextv-editor-tab-size" class="settings-item" onchange="setNextVEditorTabSize(this.value)">
@@ -114,8 +114,8 @@
         <div class="panel-header nextv-primary-header">
           <span id="script-header-title">script</span>
           <div id="nextv-primary-tabs" class="panel-tabs" role="tablist" aria-label="nextv primary views">
-            <button id="nextv-view-editor" type="button" class="panel-tab" role="tab" aria-selected="true" onclick="setNextVPrimaryView('editor')">editor</button>
-            <button id="nextv-view-graph" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="setNextVPrimaryView('graph')">graph</button>
+            <button id="nextv-view-editor" type="button" class="panel-tab" role="tab" aria-selected="false" disabled onclick="setNextVPrimaryView('editor')">editor</button>
+            <button id="nextv-view-graph" type="button" class="panel-tab" role="tab" aria-selected="true" onclick="setNextVPrimaryView('graph')">graph</button>
             <button id="nextv-view-call-inspector" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="toggleNextVCallInspectorPanel()">call inspector</button>
           </div>
           <div class="nextv-view-actions">
@@ -480,6 +480,6 @@
   <script src="dagre.min.js"></script>
   <script src="nextv_graph_mapping.js?v=20260429a"></script>
   <script src="nextv_graph_timer_api.js?v=20260503a"></script>
-  <script type="module" src="src-app/14_init.js?v=20260504a"></script>
+  <script type="module" src="src-app/14_init.js?v=20260520e"></script>
 </body>
 </html>

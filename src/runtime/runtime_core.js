@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { extname, isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 
 import {
+  detectCycles,
+  extractEventGraph,
   NextVEventRunner,
   appendAgentFormatInstructions,
   buildAgentReturnContractGuidance,
@@ -10,6 +12,7 @@ import {
   buildDecideGuidance,
   buildDecideRetryPrompt,
   normalizeAgentFormattedOutput,
+  parseNextVScript,
   runNextVScriptFromFile,
   validateAgentReturnContract,
   validateDecideOutput,
@@ -113,6 +116,7 @@ export function createRuntimeResolvers({ repoRoot }) {
   }
 
   return {
+    repoRoot,
     resolveWorkspaceDirectory,
     loadWorkspaceConfig: (workspaceDir) =>
       loadWorkspaceNextVConfig({
@@ -258,6 +262,75 @@ export function createRuntimeCore({
 
   function getDefinitionStatus() {
     return runtimeController.getDefinitionStatus()
+  }
+
+  function getGraph(payload = {}) {
+    if (!runtimeController.isActive()) {
+      throw new Error('nextV runtime not active')
+    }
+
+    const requestedWorkspaceDir = String(payload?.workspaceDir ?? '').trim()
+    let rawWorkspaceDir = requestedWorkspaceDir || String(runtimeController.getWorkspaceDir() ?? '').trim()
+    if (rawWorkspaceDir && isAbsolute(rawWorkspaceDir)) {
+      rawWorkspaceDir = relative(resolvers.repoRoot, rawWorkspaceDir).replace(/\\/g, '/') || '.'
+    }
+    const workspaceDir = resolvers.resolveWorkspaceDirectory(rawWorkspaceDir)
+    const workspaceConfig = runtimeController.getWorkspaceConfig?.() ?? resolvers.loadWorkspaceConfig(workspaceDir)
+    const requestedEntrypointValue = String(payload?.entrypointPath ?? '').trim()
+    const runtimeEntrypointPath = String(runtimeController.getEntrypointPath() ?? '').trim()
+    let requestedEntrypointPath = requestedEntrypointValue || runtimeEntrypointPath
+    const workspacePrefix = workspaceDir.relativePath === '.' ? '' : `${workspaceDir.relativePath}/`
+    if (workspacePrefix && requestedEntrypointPath.startsWith(workspacePrefix)) {
+      requestedEntrypointPath = requestedEntrypointPath.slice(workspacePrefix.length)
+    }
+    const entrypoint = resolvers.resolveEntrypoint(workspaceDir, requestedEntrypointPath, workspaceConfig)
+
+    const source = readFileSync(entrypoint.absolutePath, 'utf8')
+    const ast = parseNextVScript(source, {
+      baseDir: dirname(entrypoint.absolutePath),
+      filePath: entrypoint.absolutePath,
+    })
+    const graph = extractEventGraph(ast, {
+      declaredExternals: getDeclaredExternals(workspaceConfig),
+    })
+    const workspaceAbsolutePath = workspaceDir.absolutePath
+
+    for (const node of graph.nodes) {
+      if (node?.sourcePath && !String(node.sourcePath).startsWith('(')) {
+        node.sourcePath = relative(workspaceAbsolutePath, node.sourcePath).replace(/\\/g, '/')
+      }
+    }
+    for (const edge of Array.isArray(graph.controlEdges) ? graph.controlEdges : []) {
+      if (edge?.sourcePath && !String(edge.sourcePath).startsWith('(')) {
+        edge.sourcePath = relative(workspaceAbsolutePath, edge.sourcePath).replace(/\\/g, '/')
+      }
+    }
+
+    const { cycles } = detectCycles(graph)
+    const timerNodes = Array.isArray(workspaceConfig?.nextv?.timers)
+      ? workspaceConfig.nextv.timers.map((timer) => ({
+          id: `timer:${timer.event}`,
+          kind: 'timer',
+          eventType: timer.event,
+          interval: Number(timer.interval),
+          runOnStart: timer.runOnStart === true,
+          sourcePath: '(host:timers)',
+        }))
+      : []
+
+    return {
+      workspaceDir: workspaceDir.relativePath,
+      entrypointPath: relative(workspaceAbsolutePath, entrypoint.absolutePath).replace(/\\/g, '/'),
+      nodes: graph.nodes,
+      edges: graph.edges,
+      controlEdges: graph.controlEdges,
+      transitions: graph.transitions,
+      cycles,
+      ignoredDynamicEmits: graph.ignoredDynamicEmits,
+      contractWarnings: graph.contractWarnings,
+      timerNodes,
+      declaredExternals: graph.declaredExternals,
+    }
   }
 
   function sanitizeRequestMessages(rawMessages) {
@@ -693,6 +766,7 @@ export function createRuntimeCore({
     submitCandidate,
     promoteCandidate,
     getDefinitionStatus,
+    getGraph,
     callInspectorExecute,
     getSnapshot,
     attachSurface,

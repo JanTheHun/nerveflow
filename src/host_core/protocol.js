@@ -21,6 +21,7 @@
  * - promote_candidate: Apply a validated promotable candidate to the active runtime
  * - snapshot: Get current runtime state
  * - definition_status: Get active/candidate definition status
+ * - graph: Get runtime-owned nextV graph data for the active definition
  * - subscribe: Attach surface to runtime events
  * - unsubscribe: Detach surface from runtime events
  * 
@@ -61,6 +62,7 @@ const HOST_COMMAND_TYPES = Object.freeze([
   'promote_candidate',
   'snapshot',
   'definition_status',
+  'graph',
   'subscribe',
   'unsubscribe',
 ])

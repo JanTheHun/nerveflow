@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { dirname, isAbsolute, resolve } from 'node:path'
 import WebSocket from 'ws'
 
 function mapConnectionError(err) {
@@ -51,8 +52,19 @@ export function createWsRemoteBridge({
 
   function updateSnapshotFromPayload(payload) {
     if (!payload || typeof payload !== 'object') return
-    const workspaceDir = String(payload.workspaceDir ?? payload.snapshot?.workspaceDir ?? '').trim()
+    let workspaceDir = String(payload.workspaceDir ?? payload.snapshot?.workspaceDir ?? '').trim()
+    if (workspaceDir === '.') workspaceDir = ''
     const entrypointPath = String(payload.entrypointPath ?? payload.snapshot?.entrypointPath ?? '').trim()
+    const snapshotStatePath = String(payload.snapshot?.statePath ?? '').trim()
+
+    if (!workspaceDir && snapshotStatePath && isAbsolute(snapshotStatePath)) {
+      workspaceDir = resolve(dirname(snapshotStatePath))
+    }
+
+    if (!workspaceDir && entrypointPath && isAbsolute(entrypointPath)) {
+      workspaceDir = resolve(dirname(entrypointPath))
+    }
+
     if (workspaceDir) cachedWorkspaceDir = workspaceDir
     if (entrypointPath) cachedEntrypointPath = entrypointPath
     if (payload.snapshot && typeof payload.snapshot === 'object') {

@@ -28,6 +28,7 @@ import {
   nextVEventSourceInput,
   nextVEventTypeInput,
   nextVEventValueInput,
+  nextVFileState,
   nextVGraphState,
   nextVHasLiveRuntimeEvents,
   nextVImageCount,
@@ -119,6 +120,86 @@ import {
   ensureNextVEntrypointVisible
 } from './13_layout.js'
 
+const MAX_SEEN_EXECUTION_EVENT_KEYS = 20000
+let seenExecutionEventKeys = new Set()
+let seenExecutionEventKeyOrder = []
+let executionSnapshotFallbackTimer = null
+
+function toExecutionEventKey(event) {
+  if (!event || typeof event !== 'object') return ''
+  const type = String(event.type ?? '').trim()
+  const timestamp = String(event.timestamp ?? '').trim()
+  const tool = String(event.tool ?? '').trim()
+  const agent = String(event.agent ?? '').trim()
+  const sourcePath = String(event.sourcePath ?? '').trim()
+  const sourceLine = Number.isFinite(Number(event.sourceLine)) ? String(Number(event.sourceLine)) : ''
+  const line = Number.isFinite(Number(event.line)) ? String(Number(event.line)) : ''
+  return [type, timestamp, tool, agent, sourcePath, sourceLine, line].join('|')
+}
+
+function resetSeenExecutionEventKeys() {
+  seenExecutionEventKeys = new Set()
+  seenExecutionEventKeyOrder = []
+}
+
+function rememberSeenExecutionEvent(event) {
+  const key = toExecutionEventKey(event)
+  if (!key || seenExecutionEventKeys.has(key)) return
+  seenExecutionEventKeys.add(key)
+  seenExecutionEventKeyOrder.push(key)
+  if (seenExecutionEventKeyOrder.length > MAX_SEEN_EXECUTION_EVENT_KEYS) {
+    const pruneCount = seenExecutionEventKeyOrder.length - MAX_SEEN_EXECUTION_EVENT_KEYS
+    for (let i = 0; i < pruneCount; i++) {
+      const staleKey = seenExecutionEventKeyOrder.shift()
+      if (staleKey) seenExecutionEventKeys.delete(staleKey)
+    }
+  }
+}
+
+function filterFreshExecutionEvents(events) {
+  const list = Array.isArray(events) ? events : []
+  const fresh = []
+  for (const event of list) {
+    const key = toExecutionEventKey(event)
+    if (!key) {
+      fresh.push(event)
+      continue
+    }
+    if (seenExecutionEventKeys.has(key)) continue
+    rememberSeenExecutionEvent(event)
+    fresh.push(event)
+  }
+  return fresh
+}
+
+function cancelExecutionSnapshotFallback() {
+  if (executionSnapshotFallbackTimer !== null) {
+    clearTimeout(executionSnapshotFallbackTimer)
+    executionSnapshotFallbackTimer = null
+  }
+}
+
+async function fetchAndRenderLatestSnapshot() {
+  try {
+    const res = await fetch(buildNextVApiPath('/api/nextv/snapshot'))
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) return
+    if (data?.snapshot) {
+      renderNextVSnapshot(data.snapshot)
+    }
+  } catch {
+    // best-effort fallback only
+  }
+}
+
+function scheduleExecutionSnapshotFallback() {
+  cancelExecutionSnapshotFallback()
+  executionSnapshotFallbackTimer = setTimeout(() => {
+    executionSnapshotFallbackTimer = null
+    void fetchAndRenderLatestSnapshot()
+  }, 140)
+}
+
 export function openNextVStream() {
   closeNextVStream()
   _setNextVEventSource(new EventSource(buildNextVApiPath('/api/nextv/stream')))
@@ -139,6 +220,7 @@ export function openNextVStream() {
   nextVEventSource.addEventListener('nextv_started', (evt) => {
     try {
       const payload = JSON.parse(evt.data)
+      resetSeenExecutionEventKeys()
       _setNextVHasLiveRuntimeEvents(false)
       resetNextVGraphRuntimeState({ keepExternalNodes: false })
       applyNextVGraphRuntimeVisuals()
@@ -174,10 +256,20 @@ export function openNextVStream() {
       if (!runtimeEvent || typeof runtimeEvent !== 'object') return
 
       _setNextVHasLiveRuntimeEvents(true)
+      rememberSeenExecutionEvent(runtimeEvent)
       handleNextVGraphRuntimeEvent(runtimeEvent)
       renderCanonicalNextVEvents([runtimeEvent])
       appendTraceRows([runtimeEvent])
-      if (payload?.snapshot) renderNextVSnapshot(payload.snapshot)
+
+      const runtimeEventType = String(runtimeEvent?.type ?? '').trim()
+      if (
+        runtimeEventType === 'output'
+        || runtimeEventType === 'agent_result'
+        || runtimeEventType === 'agent_error'
+        || runtimeEventType === 'state_update'
+      ) {
+        scheduleExecutionSnapshotFallback()
+      }
     } catch {
       // ignore malformed stream payload
     }
@@ -185,21 +277,29 @@ export function openNextVStream() {
 
   nextVEventSource.addEventListener('nextv_execution', (evt) => {
     try {
+      cancelExecutionSnapshotFallback()
       const payload = JSON.parse(evt.data)
       const eventType = String(payload?.event?.type ?? '')
       const source = String(payload?.event?.source ?? '')
+      const executionSnapshot = payload?.snapshot && typeof payload.snapshot === 'object'
+        ? payload.snapshot
+        : null
+      if (executionSnapshot) {
+        renderNextVSnapshot(executionSnapshot)
+      }
       const shouldRenderFromExecution = !nextVHasLiveRuntimeEvents
+      const executionEvents = filterFreshExecutionEvents(payload?.events)
+      renderCanonicalNextVEvents(executionEvents)
       if (eventType) {
         nextVGraphState.runtimeExternalNodes.add(eventType)
       }
-      if (shouldRenderFromExecution && Array.isArray(payload?.events)) {
-        for (const runtimeEvent of payload.events) {
+      if (shouldRenderFromExecution && Array.isArray(executionEvents)) {
+        for (const runtimeEvent of executionEvents) {
           handleNextVGraphRuntimeEvent(runtimeEvent)
         }
       }
       if (shouldRenderFromExecution) {
-        renderCanonicalNextVEvents(payload?.events)
-        appendTraceRows(payload?.events)
+        appendTraceRows(executionEvents)
       }
       if (eventType && nextVGraphState.runtimeSequence === 0) {
         const fallbackHandlerId = inferNextVGraphFallbackHandler(eventType) || `handler:${eventType}`
@@ -222,13 +322,16 @@ export function openNextVStream() {
         appendNextVLogRow(executionDetails, 'result')
       }
       const diffBefore = nextVLastKnownState ?? {}
-      const diffAfter = payload?.snapshot?.state ?? {}
+      const diffAfter = executionSnapshot?.state ?? {}
       appendNextVStateDiffEntry(eventType, buildStateDiff(diffBefore, diffAfter))
-      renderNextVSnapshot(payload.snapshot)
+      _setNextVLastKnownState(diffAfter)
+      if (!executionSnapshot) {
+        scheduleExecutionSnapshotFallback()
+      }
       _setNextVHasLiveRuntimeEvents(false)
       setStatus('nextv execution complete')
-    } catch {
-      // ignore malformed stream payload
+    } catch (err) {
+      appendNextVErrorLog({ message: String(err?.message ?? err) }, '[nextv:execution_handler_error]')
     }
   })
 
@@ -283,7 +386,9 @@ export function openNextVStream() {
 
   nextVEventSource.addEventListener('nextv_stopped', (evt) => {
     try {
+      cancelExecutionSnapshotFallback()
       const payload = JSON.parse(evt.data)
+      resetSeenExecutionEventKeys()
       if (payload?.snapshot) renderNextVSnapshot(payload.snapshot)
       resetNextVGraphRuntimeState({ keepExternalNodes: true })
       applyNextVGraphRuntimeVisuals()
@@ -321,6 +426,9 @@ export async function syncNextVRuntimeState() {
   try {
     const res = await fetch(buildNextVApiPath('/api/nextv/snapshot'))
     const data = await res.json().catch(() => ({}))
+    nextVFileState.capabilities = data?.capabilities && typeof data.capabilities === 'object'
+      ? { ...data.capabilities }
+      : null
 
     _setIsRemoteMode(data?.remoteMode === true)
     _setIsRemoteControlMode(data?.remoteControl === true)
@@ -356,6 +464,7 @@ export async function syncNextVRuntimeState() {
     }
     setNextVRunControls()
   } catch {
+    nextVFileState.capabilities = null
     _setNextVRuntimeRunning(false)
     if (isRemoteControlMode) {
       _setIsRemoteRuntimeConnected(false)
@@ -499,7 +608,9 @@ export async function startNextVRuntime() {
     flashNextVGraphSignalDispatch('init', 1000)
     _setNextVLastKnownState(null)
     clearNextVStateDiff()
-    appendNextVStateDiffEntry('init', buildStateDiff({}, data?.snapshot?.state ?? {}))
+    const initState = data?.snapshot?.state ?? {}
+    appendNextVStateDiffEntry('init', buildStateDiff({}, initState))
+    _setNextVLastKnownState(initState)
     renderNextVSnapshot(data.snapshot)
     setStatus('nextv runtime started')
   } catch (err) {

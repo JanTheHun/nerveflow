@@ -1657,13 +1657,14 @@ export function restoreNextVConfig() {
   const workspaceDir = normalizeNextVWorkspaceDir(localStorage.getItem(storageKeys.nextVWorkspaceDir) ?? '')
   const entrypointPath = normalizeRelativePath(localStorage.getItem(storageKeys.nextVEntrypoint) ?? '')
   const storedPrimaryView = localStorage.getItem(storageKeys.nextVPrimaryView)
-  const primaryView = storedPrimaryView === 'graph' ? 'graph' : 'editor'
+  const primaryView = storedPrimaryView === 'editor' ? 'editor' : 'graph'
   const storedAutoSave = localStorage.getItem(storageKeys.nextVAutoSave)
   const autoSaveEnabled = storedAutoSave == null ? false : storedAutoSave === '1'
   const storedDevTab = localStorage.getItem(storageKeys.nextVDevTab)
   const devTab = ['events', 'trace', 'console'].includes(storedDevTab) ? storedDevTab : 'events'
   const storedInputTab = String(localStorage.getItem(storageKeys.nextVInputTab) ?? '').trim()
-  const runtimeTarget = normalizeNextVRuntimeTarget(localStorage.getItem(storageKeys.nextVRuntimeTarget) ?? 'embedded')
+  const storedRuntimeTarget = normalizeNextVRuntimeTarget(localStorage.getItem(storageKeys.nextVRuntimeTarget) ?? 'attach')
+  const runtimeTarget = 'attach'
   const attachWsUrl = String(localStorage.getItem(storageKeys.nextVAttachWsUrl) ?? '').trim()
   const devConsoleOpen = localStorage.getItem(storageKeys.nextVDevConsoleOpen) !== '0'
   const graphDirection = normalizeNextVGraphDirection(localStorage.getItem(storageKeys.nextVGraphDirection) ?? 'TB')

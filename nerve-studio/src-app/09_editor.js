@@ -39,6 +39,7 @@ import {
   openFileTabs,
   paneAssignments,
   pendingDeleteConfirmResolver,
+  isRemoteMode,
   scriptCache,
   scriptOpenFileLabel,
   storageKeys,
@@ -267,6 +268,26 @@ export function getTreeNodeIcon(node, expanded = false) {
   if (ext === '.html' || ext === '.htm') return '</>'
   if (ext === '.css' || ext === '.scss') return '#'
   return '·'
+}
+
+export function hasWorkspaceFileAccess() {
+  const capabilities = nextVFileState?.capabilities
+  if (capabilities && typeof capabilities === 'object') {
+    const canTree = capabilities.workspaceFileTree === true
+    const canRead = capabilities.workspaceFileRead === true
+    const canWrite = capabilities.workspaceFileWrite === true
+    return canTree && canRead && canWrite
+  }
+  return getNextVRuntimeTarget() === 'embedded' && isRemoteMode !== true
+}
+
+export function getWorkspaceFileAccessBlockedReason() {
+  return 'workspace file editing is unavailable in observability-only mode'
+}
+
+export function ensureWorkspaceFileAccess() {
+  if (hasWorkspaceFileAccess()) return
+  throw new Error(getWorkspaceFileAccessBlockedReason())
 }
 
 // --- File tree context menu ---
@@ -533,6 +554,10 @@ export function showInlineNameInput(parentFolderPath, kind) {
 // --- Create / Delete operations ---
 
 export async function doCreateFile(parentFolderPath, name, fullPath) {
+  if (!hasWorkspaceFileAccess()) {
+    setStatus(getWorkspaceFileAccessBlockedReason(), 'responding')
+    return
+  }
   try {
     const targetPath = resolveNextVPath(fullPath)
     if (!targetPath) {
@@ -560,6 +585,10 @@ export async function doCreateFile(parentFolderPath, name, fullPath) {
 }
 
 export async function doCreateFolder(parentFolderPath, name, fullPath) {
+  if (!hasWorkspaceFileAccess()) {
+    setStatus(getWorkspaceFileAccessBlockedReason(), 'responding')
+    return
+  }
   try {
     const targetPath = resolveNextVPath(fullPath)
     if (!targetPath) {
@@ -586,6 +615,10 @@ export async function doCreateFolder(parentFolderPath, name, fullPath) {
 }
 
 export async function doDeleteFile(filePath) {
+  if (!hasWorkspaceFileAccess()) {
+    setStatus(getWorkspaceFileAccessBlockedReason(), 'responding')
+    return
+  }
   const confirmed = await requestTimedDeleteConfirm('file', filePath)
   if (!confirmed) return
   try {
@@ -609,6 +642,10 @@ export async function doDeleteFile(filePath) {
 }
 
 export async function doDeleteFolder(folderPath) {
+  if (!hasWorkspaceFileAccess()) {
+    setStatus(getWorkspaceFileAccessBlockedReason(), 'responding')
+    return
+  }
   const confirmed = await requestTimedDeleteConfirm('dir', folderPath)
   if (!confirmed) return
   try {
@@ -694,6 +731,10 @@ export function remapEditorStatePaths(oldPath, newPath) {
 }
 
 export async function doRenameFile(filePath, newName) {
+  if (!hasWorkspaceFileAccess()) {
+    setStatus(getWorkspaceFileAccessBlockedReason(), 'responding')
+    return
+  }
   try {
     const sourcePath = normalizeRelativePath(filePath)
     if (!sourcePath) {
@@ -727,6 +768,10 @@ export async function doRenameFile(filePath, newName) {
 }
 
 export async function doRenameFolder(folderPath, newName) {
+  if (!hasWorkspaceFileAccess()) {
+    setStatus(getWorkspaceFileAccessBlockedReason(), 'responding')
+    return
+  }
   try {
     const sourcePath = normalizeRelativePath(folderPath)
     if (!sourcePath) {
@@ -830,6 +875,14 @@ export function renderWorkspaceTree() {
   if (!fileTree) return
   fileTree.innerHTML = ''
 
+  if (!hasWorkspaceFileAccess()) {
+    const empty = document.createElement('div')
+    empty.className = 'file-tree-empty'
+    empty.textContent = 'Observability-only mode: workspace files are disabled.'
+    fileTree.appendChild(empty)
+    return
+  }
+
   const children = Array.isArray(nextVFileState.tree?.children) ? nextVFileState.tree.children : []
   if (children.length === 0) {
     const empty = document.createElement('div')
@@ -859,6 +912,7 @@ export function inferEditorKind() {
 }
 
 export async function loadEditorFileContent(filePath, options = {}) {
+  ensureWorkspaceFileAccess()
   const normalizedPath = normalizeRelativePath(filePath)
   if (!normalizedPath) return null
 
@@ -873,6 +927,7 @@ export async function loadEditorFileContent(filePath, options = {}) {
 }
 
 export async function loadWorkspaceTree(workspaceDir) {
+  ensureWorkspaceFileAccess()
   const normalizedWorkspaceDir = normalizeNextVWorkspaceDir(workspaceDir)
   const url = `/api/workspace/tree?workspaceDir=${encodeURIComponent(normalizedWorkspaceDir)}`
   const res = await fetch(url)
@@ -903,6 +958,11 @@ export async function saveCurrentEditorFile(options = {}) {
     return false
   }
 
+  if (!hasWorkspaceFileAccess()) {
+    if (!silent) setStatus(getWorkspaceFileAccessBlockedReason(), 'responding')
+    return false
+  }
+
   const content = normalizeNewlines(getPaneTextarea(paneId)?.value ?? '')
   const { savedPath, bytes } = await saveEditorFileContent(filePath, content)
   state.path = savedPath
@@ -926,6 +986,7 @@ export async function saveCurrentEditorFile(options = {}) {
 }
 
 export async function saveEditorFileContent(filePath, content) {
+  ensureWorkspaceFileAccess()
   const normalizedPath = normalizeRelativePath(filePath)
   if (!normalizedPath) {
     throw new Error('file path required to save')
@@ -959,6 +1020,11 @@ export async function saveAllNextVFiles(options = {}) {
   const silent = options.silent === true
   const failed = []
   let savedCount = 0
+
+  if (!hasWorkspaceFileAccess()) {
+    if (!silent) setStatus(getWorkspaceFileAccessBlockedReason(), 'responding')
+    return { savedCount: 0, failedCount: 0 }
+  }
 
   for (const tabPath of nextVFileState.openTabs) {
     const normalizedTabPath = normalizeRelativePath(tabPath)
@@ -1440,6 +1506,7 @@ export function scheduleNextVAutoSave() {
 }
 
 export async function openWorkspaceEditorFile(filePath, options = {}) {
+  ensureWorkspaceFileAccess()
   let normalizedPath = normalizeRelativePath(filePath)
   if (!normalizedPath) return
 

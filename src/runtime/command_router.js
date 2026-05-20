@@ -111,6 +111,11 @@ export function createRuntimeCommandRouter({
           throw new Error('definition status is not available in this runtime host')
         }
         data = runtimeCore.getDefinitionStatus()
+      } else if (command.type === 'graph') {
+        if (typeof runtimeCore.getGraph !== 'function') {
+          throw new Error('graph extraction is not available in this runtime host')
+        }
+        data = runtimeCore.getGraph(payload)
       } else if (command.type === 'subscribe') {
         if (typeof onSubscribe === 'function') onSubscribe(command)
         data = {

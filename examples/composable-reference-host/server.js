@@ -15,10 +15,15 @@
  */
 
 import path from 'node:path'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 
 import {
   createComposableHost,
 } from '../../src/host_core/index.js'
+
+import {
+  createOpenAICompatTransport,
+} from '../../src/host_core/agent_transports/index.js'
 
 import {
   wsSurface,
@@ -26,41 +31,95 @@ import {
 
 function resolveWorkspaceDir() {
   const workspaceArg = process.argv[2]
-  const workspaceInput = process.env.WORKSPACE_DIR || workspaceArg
-
-  if (!workspaceInput) {
-    throw new Error('workspace directory required; pass WORKSPACE_DIR or the first CLI argument')
-  }
+  const workspaceInput = process.env.WORKSPACE_DIR || workspaceArg || '.'
 
   const absolutePath = path.resolve(process.cwd(), workspaceInput)
-  const runtimeWorkspaceDir = path.relative(process.cwd(), absolutePath).replace(/\\/g, '/') || '.'
-
-  if (runtimeWorkspaceDir.startsWith('..') || path.isAbsolute(runtimeWorkspaceDir)) {
-    throw new Error('workspace directory must be inside the current repository')
+  const stats = statSync(absolutePath)
+  if (!stats.isDirectory()) {
+    throw new Error(`workspace path must be a directory: ${absolutePath}`)
   }
 
   return {
     absolutePath,
-    runtimeWorkspaceDir,
+  }
+}
+
+function stripEnvValueQuotes(valueRaw) {
+  const value = String(valueRaw ?? '')
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    return value.slice(1, -1)
+  }
+  if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1)
+  }
+  return value
+}
+
+function loadWorkspaceEnv(workspaceAbsolutePath) {
+  const envPath = path.join(workspaceAbsolutePath, '.env')
+  if (!existsSync(envPath)) {
+    return {
+      loaded: false,
+      filePath: envPath,
+      applied: 0,
+    }
+  }
+
+  const source = readFileSync(envPath, 'utf8')
+  let applied = 0
+
+  for (const rawLine of source.split(/\r?\n/)) {
+    const line = String(rawLine ?? '')
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+
+    const equalsIndex = trimmed.indexOf('=')
+    if (equalsIndex <= 0) continue
+
+    let key = trimmed.slice(0, equalsIndex).trim()
+    if (!key) continue
+    if (key.startsWith('export ')) {
+      key = key.slice('export '.length).trim()
+    }
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue
+    if (Object.prototype.hasOwnProperty.call(process.env, key)) continue
+
+    const valueRaw = trimmed.slice(equalsIndex + 1).trim()
+    process.env[key] = stripEnvValueQuotes(valueRaw)
+    applied += 1
+  }
+
+  return {
+    loaded: true,
+    filePath: envPath,
+    applied,
   }
 }
 
 const port = parseInt(process.env.PORT || '4190', 10)
+const callAgent = createOpenAICompatTransport()
 
 async function main() {
   const workspace = resolveWorkspaceDir()
+  const envLoad = loadWorkspaceEnv(workspace.absolutePath)
 
   console.log('🌐 Composable Reference Host')
   console.log(`📁 Workspace: ${workspace.absolutePath}`)
   console.log(`🔌 Port: ${port}`)
+  if (envLoad.loaded) {
+    console.log(`🔐 Loaded ${envLoad.applied} env var${envLoad.applied === 1 ? '' : 's'} from ${envLoad.filePath}`)
+  }
   console.log('')
 
   // Create the composable host
   const host = createComposableHost({
-    workspaceDir: workspace.runtimeWorkspaceDir,
+    // Resolve runtime paths relative to the target workspace itself so
+    // this host can run from any external project folder.
+    repoRoot: workspace.absolutePath,
+    workspaceDir: '.',
     autoAttachCapabilitiesFromWorkspace: true,
     port,
-    callAgent: callMockAgent,
+    callAgent,
     defaultModel: 'mistral',
     slowAgentWarningMs: 2000,
     parallelMaxConcurrency: 4,
@@ -95,23 +154,9 @@ async function main() {
   })
 }
 
-async function callMockAgent(input) {
-  console.log(`[Agent] Processing: ${input.eventType || input.content || JSON.stringify(input).slice(0, 50)}`)
-
-  await new Promise((resolve) => setTimeout(resolve, 100))
-
-  return {
-    type: 'agent_result',
-    data: {
-      processedBy: 'reference-host-mock-agent',
-      timestamp: new Date().toISOString(),
-    },
-  }
-}
-
 main().catch((err) => {
   console.error('❌ Error:', err.message)
-  console.error('Usage: WORKSPACE_DIR=path/to/workspace node examples/composable-reference-host/server.js')
+  console.error('Usage: WORKSPACE_DIR=path/to/workspace node examples/composable-reference-host/server.js [workspaceDir]')
   console.error('Tip: use nerve-compose add to declare capabilities in your workspace config')
   process.exit(1)
 })

@@ -332,6 +332,17 @@ function getLiteralAgentName(args) {
   return ''
 }
 
+function getLiteralModelName(args) {
+  for (const arg of args ?? []) {
+    if (arg?.kind !== 'positional') continue
+    if (arg?.expr?.type !== 'string') return ''
+
+    const value = String(arg.expr.value ?? '').trim()
+    return value || ''
+  }
+  return ''
+}
+
 function collectTransitionSignals(instr, state) {
   const pushAgentName = (nameRaw, lineRaw = null) => {
     const name = String(nameRaw ?? '').trim()
@@ -371,6 +382,13 @@ function collectTransitionSignals(instr, state) {
         return
       }
 
+      if (node.name === 'model') {
+        state.hasAgent = true
+        const modelName = getLiteralModelName(node.args)
+        pushAgentName(modelName ? `model:${modelName}` : 'model', node.line)
+        return
+      }
+
       if (node.name === 'tool') {
         const toolName = getLiteralToolName(node.args)
         const metadata = toolName ? getToolMetadata(toolName) : null
@@ -392,6 +410,14 @@ function collectTransitionSignals(instr, state) {
     const agentName = getLiteralAgentName(instr.args)
     pushAgentName(agentName, instr.line)
     if (agentName) state.callOrder.push({ kind: 'agent', name: agentName, line: Number.isFinite(Number(instr.line)) ? Number(instr.line) : null })
+  }
+
+  if (instr?.op === 'call' && instr?.name === 'model') {
+    state.hasAgent = true
+    const modelName = getLiteralModelName(instr.args)
+    const qualifiedName = modelName ? `model:${modelName}` : 'model'
+    pushAgentName(qualifiedName, instr.line)
+    state.callOrder.push({ kind: 'agent', name: qualifiedName, line: Number.isFinite(Number(instr.line)) ? Number(instr.line) : null })
   }
 
   if (instr?.op === 'tool_call') {

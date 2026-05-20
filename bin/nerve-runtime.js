@@ -387,9 +387,9 @@ if (options.autoStart) {
   }
 }
 
-server.listen(options.port, () => {
-  console.log(`nerve-runtime listening at http://localhost:${options.port}`)
-  console.log(`nerve-runtime websocket surface: ws://localhost:${options.port}${options.wsPath}`)
+server.listen(options.port, '127.0.0.1', () => {
+  console.log(`nerve-runtime listening at http://127.0.0.1:${options.port}`)
+  console.log(`nerve-runtime websocket surface: ws://127.0.0.1:${options.port}${options.wsPath}`)
   if (!options.autoStart) {
     console.log('nerve-runtime autostart disabled; waiting for remote start command')
   }

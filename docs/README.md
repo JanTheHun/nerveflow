@@ -6,8 +6,23 @@ This documentation is for **users building workflows with Nerveflow**.
 
 - [01-what-is-nerve.md](01-what-is-nerve.md)
 - [02-getting-started.md](02-getting-started.md)
-- [onboarding-step-2.md](onboarding-step-2.md)
-- [onboarding-step-3.md](onboarding-step-3.md)
+
+## Onboarding sequence
+
+- [onboarding-step-1.md](onboarding-step-1.md) — Install and verify the base runtime
+- [onboarding-step-2.md](onboarding-step-2.md) — Add an LLM and run a stateful chatbot
+- [onboarding-step-3.md](onboarding-step-3.md) — Use Nerve Studio to inspect the runtime
+- [onboarding-step-4.md](onboarding-step-4.md) — Build your first bounded-decision workflow
+- [onboarding-step-5.md](onboarding-step-5.md) — Run through a host and add your first tool call
+
+After Step 5, choose your path:
+
+- [onboarding-step-6a.md](onboarding-step-6a.md) — Add a vector database for real RAG
+- [onboarding-step-6b.md](onboarding-step-6b.md) — Add speech capability
+- [onboarding-step-6c.md](onboarding-step-6c.md) — Add MCP servers
+
+## Reference
+
 - [03-language-reference.md](03-language-reference.md)
 - [04-host-integration.md](04-host-integration.md)
 - [05-platform-vision.md](05-platform-vision.md)

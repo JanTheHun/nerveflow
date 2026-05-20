@@ -110,6 +110,14 @@ http://localhost:4173
 2. You can keep your existing WS client workflow.
 3. Tool calls are host-provided but workflow-orchestrated.
 
-Next: add a second tool (for example, `mock_retrieve`) and route between plain generation and retrieval-augmented generation.
+## Want to make it real?
+
+Core onboarding is complete. Choose your next focus:
+
+- [onboarding-step-6a.md](onboarding-step-6a.md) — Add a vector database for real RAG
+- [onboarding-step-6b.md](onboarding-step-6b.md) — Add speech capability
+- [onboarding-step-6c.md](onboarding-step-6c.md) — Add MCP servers
+
+Or continue exploring in the [User Handbook](13-user-handbook.md).
 
 If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../MANIFESTO.md).

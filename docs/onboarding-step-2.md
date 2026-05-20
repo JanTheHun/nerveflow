@@ -122,7 +122,21 @@ Replace state.init.json with:
 
 ## Paste chatbot workflow
 
-Replace workflow.nrv with:
+Choose your model label based on the path you selected:
+
+**Local path (Ollama):**
+```nrv
+reply = model("llama3.2:latest", messages=state.conversation)
+```
+
+**External API path:**
+```nrv
+reply = model("gpt-4o-mini", messages=state.conversation)
+# or: reply = model("llama-3.3-70b-versatile", messages=state.conversation)
+# or: reply = model("gemini-2.5-flash-lite", messages=state.conversation)
+```
+
+Replace `workflow.nrv` with the complete workflow below, using the model label from your chosen path:
 
 ```nrv
 on external "user_message"
@@ -156,14 +170,7 @@ on external "user_message"
 end
 ```
 
-Set the model label in that workflow based on your path:
-
-1. Local path:
-reply = model("llama3.2:latest", messages=state.conversation)
-2. External API path:
-reply = model("gpt-4o-mini", messages=state.conversation)
-or reply = model("llama-3.3-70b-versatile", messages=state.conversation)
-or reply = model("gemini-2.5-flash-lite", messages=state.conversation)
+**Remember:** swap `llama3.2:latest` in the workflow to match your chosen model label from above.
 
 Expected behavior:
 
@@ -214,12 +221,6 @@ npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "remember my favo
 npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "what is my favorite color?"
 ```
 
-nerve-send syntax:
-
-```bash
-npx nerve-send <wsUrl> <eventType> [message]
-```
-
-Next: continue with onboarding-step-3.md to introduce Nerve Studio.
+Next: continue with [onboarding-step-3.md](onboarding-step-3.md) to inspect the runtime with Nerve Studio.
 
 If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../MANIFESTO.md).

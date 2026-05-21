@@ -33,6 +33,20 @@ export function createOpenAICompatTransport(opts = {}) {
     try { onDebugRecord(record) } catch { /* debug must never affect execution */ }
   }
 
+  function resolveCallTimeoutMs(transportConfig) {
+    if (!transportConfig || typeof transportConfig !== 'object') {
+      return timeoutMs
+    }
+
+    const rawTimeout = transportConfig.timeoutMs ?? transportConfig.timeout_ms
+    const parsedTimeout = Number(rawTimeout)
+    if (Number.isFinite(parsedTimeout) && parsedTimeout > 0) {
+      return Math.floor(parsedTimeout)
+    }
+
+    return timeoutMs
+  }
+
   const callOpenAICompatAgent = async function callOpenAICompatAgent({ model, messages, tools, tool_choice, transport }) {
     // Per-call transport config (from nextv.json transports.map) can override API key and base URL.
     const callApiKey = String(
@@ -43,6 +57,7 @@ export function createOpenAICompatTransport(opts = {}) {
       (transport && typeof transport === 'object' && transport.baseUrl ? transport.baseUrl : null)
       ?? baseUrl
     ).replace(/\/+$/, '')
+    const callTimeoutMs = resolveCallTimeoutMs(transport)
 
     const url = `${callBaseUrl}/v1/chat/completions`
     const requestPayload = { model, messages, stream: false }
@@ -61,7 +76,7 @@ export function createOpenAICompatTransport(opts = {}) {
     }
 
     if (Array.isArray(tools) && tools.length > 0) {
-      requestPayload.tools = tools
+      requestPayload.tools = sanitizeToolDefinitionsForWire(tools)
       requestPayload.tool_choice = typeof tool_choice === 'string' && tool_choice.trim()
         ? tool_choice.trim()
         : 'auto'
@@ -75,7 +90,7 @@ export function createOpenAICompatTransport(opts = {}) {
     debug({ phase: 'request', url, payload: requestPayload })
 
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+    const timeout = setTimeout(() => controller.abort(), callTimeoutMs)
 
     let response
     try {
@@ -88,9 +103,9 @@ export function createOpenAICompatTransport(opts = {}) {
     } catch (err) {
       clearTimeout(timeout)
       if (err?.name === 'AbortError') {
-        const timeoutErr = new Error(`OpenAI-compat chat timed out after ${timeoutMs}ms`)
+        const timeoutErr = new Error(`OpenAI-compat chat timed out after ${callTimeoutMs}ms`)
         timeoutErr.code = 'AGENT_TRANSPORT_TIMEOUT'
-        debug({ phase: 'timeout', url, timeoutMs })
+        debug({ phase: 'timeout', url, timeoutMs: callTimeoutMs })
         throw timeoutErr
       }
       debug({ phase: 'fetch_error', url, error: String(err?.message ?? err) })
@@ -107,9 +122,9 @@ export function createOpenAICompatTransport(opts = {}) {
       } catch (bodyErr) {
         clearTimeout(timeout)
         if (bodyErr?.name === 'AbortError') {
-          const timeoutErr = new Error(`OpenAI-compat chat timed out after ${timeoutMs}ms`)
+          const timeoutErr = new Error(`OpenAI-compat chat timed out after ${callTimeoutMs}ms`)
           timeoutErr.code = 'AGENT_TRANSPORT_TIMEOUT'
-          debug({ phase: 'timeout', url, timeoutMs, stage: 'body_text' })
+          debug({ phase: 'timeout', url, timeoutMs: callTimeoutMs, stage: 'body_text' })
           throw timeoutErr
         }
       }
@@ -126,9 +141,9 @@ export function createOpenAICompatTransport(opts = {}) {
     } catch (bodyErr) {
       clearTimeout(timeout)
       if (bodyErr?.name === 'AbortError') {
-        const timeoutErr = new Error(`OpenAI-compat chat timed out after ${timeoutMs}ms`)
+        const timeoutErr = new Error(`OpenAI-compat chat timed out after ${callTimeoutMs}ms`)
         timeoutErr.code = 'AGENT_TRANSPORT_TIMEOUT'
-        debug({ phase: 'timeout', url, timeoutMs, stage: 'body_json' })
+        debug({ phase: 'timeout', url, timeoutMs: callTimeoutMs, stage: 'body_json' })
         throw timeoutErr
       }
       throw bodyErr
@@ -145,7 +160,7 @@ export function createOpenAICompatTransport(opts = {}) {
         const callId = String(call?.id ?? `tool-call-${index + 1}`).trim() || `tool-call-${index + 1}`
         const callName = String(call?.function?.name ?? '').trim()
         if (!callName) return null
-        const argumentsRaw = String(call?.function?.arguments ?? '').trim() || '{}'
+        const argumentsRaw = normalizeOpenAICompatToolArgumentsRaw(call?.function?.arguments)
         return {
           id: callId,
           name: callName,
@@ -197,6 +212,57 @@ export function createOpenAICompatTransport(opts = {}) {
   callOpenAICompatAgent.capabilities = { supports_preload: false }
 
   return callOpenAICompatAgent
+}
+
+function normalizeOpenAICompatToolArgumentsRaw(argumentsValue) {
+  if (typeof argumentsValue === 'string') {
+    const trimmed = argumentsValue.trim()
+    return trimmed || '{}'
+  }
+
+  if (argumentsValue && typeof argumentsValue === 'object' && !Array.isArray(argumentsValue)) {
+    try {
+      return JSON.stringify(argumentsValue)
+    } catch {
+      return '{}'
+    }
+  }
+
+  return '{}'
+}
+
+function sanitizeToolDefinitionsForWire(tools) {
+  if (!Array.isArray(tools)) return []
+
+  return tools
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
+      if (entry.type !== 'function') return entry
+
+      const fn = entry.function
+      if (!fn || typeof fn !== 'object' || Array.isArray(fn)) {
+        return {
+          ...entry,
+          function: {
+            name: '',
+            description: '',
+            parameters: { type: 'object', properties: {}, additionalProperties: true },
+          },
+        }
+      }
+
+      return {
+        ...entry,
+        function: {
+          name: String(fn.name ?? '').trim(),
+          description: String(fn.description ?? ''),
+          parameters: (fn.parameters && typeof fn.parameters === 'object' && !Array.isArray(fn.parameters))
+            ? fn.parameters
+            : { type: 'object', properties: {}, additionalProperties: true },
+        },
+      }
+    })
+    .filter(Boolean)
 }
 
 /**

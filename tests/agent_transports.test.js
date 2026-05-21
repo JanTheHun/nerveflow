@@ -210,11 +210,12 @@ test('createOllamaTransport forwards tools payload, normalizes tool history, and
           content: '{"iso":"2026-05-12T00:00:00.000Z"}',
         },
       ],
-      tools: [{ type: 'function', function: { name: 'get_time', parameters: { type: 'object' } } }],
+      tools: [{ type: 'function', function: { name: 'get_time', parameters: { type: 'object' }, _schemaSource: 'native' } }],
     })
 
     assert.equal(Array.isArray(capturedBody.tools), true)
     assert.equal(capturedBody.tools[0].function.name, 'get_time')
+    assert.equal(capturedBody.tools[0].function._schemaSource, undefined)
     assert.equal(capturedBody.messages[1].tool_calls[0].function.name, 'get_time')
     assert.deepEqual(capturedBody.messages[1].tool_calls[0].function.arguments, { timeZone: 'UTC' })
     assert.equal(capturedBody.messages[2].role, 'tool')
@@ -398,6 +399,37 @@ test('createOpenAICompatTransport times out with AGENT_TRANSPORT_TIMEOUT', async
   })
 })
 
+test('createOpenAICompatTransport supports per-call timeout override via timeoutMs and timeout_ms', async () => {
+  await withFetchMock((_url, options = {}) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      resolve({ ok: true, status: 200, json: async () => OPENAI_COMPAT_MOCK_RESPONSE, text: async () => '' })
+    }, 20)
+
+    options.signal?.addEventListener('abort', () => {
+      clearTimeout(timer)
+      const err = new Error('aborted')
+      err.name = 'AbortError'
+      reject(err)
+    }, { once: true })
+  }), async () => {
+    const callAgent = createOpenAICompatTransport({ apiKey: 'sk-test', timeoutMs: 5 })
+
+    const resultCamel = await callAgent({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'hi' }],
+      transport: { timeoutMs: 100 },
+    })
+    assert.equal(resultCamel.text, 'hello')
+
+    const resultSnake = await callAgent({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'hi' }],
+      transport: { timeout_ms: 100 },
+    })
+    assert.equal(resultSnake.text, 'hello')
+  })
+})
+
 test('createOpenAICompatTransport exposes capabilities.supports_preload=false', () => {
   const callAgent = createOpenAICompatTransport({})
   assert.equal(callAgent.capabilities.supports_preload, false)
@@ -439,17 +471,61 @@ test('createOpenAICompatTransport forwards tools payload and extracts tool calls
     const result = await callAgent({
       model: 'gpt-4o',
       messages: [{ role: 'user', content: 'search docs' }],
-      tools: [{ type: 'function', function: { name: 'search', parameters: { type: 'object' } } }],
+      tools: [{ type: 'function', function: { name: 'search', parameters: { type: 'object' }, _schemaSource: 'fallback' } }],
       tool_choice: 'auto',
     })
 
     assert.equal(Array.isArray(capturedBody.tools), true)
     assert.equal(capturedBody.tools[0].function.name, 'search')
+    assert.equal(capturedBody.tools[0].function._schemaSource, undefined)
     assert.equal(capturedBody.tool_choice, 'auto')
     assert.equal(Array.isArray(result.metadata.toolCalls), true)
     assert.equal(result.metadata.toolCalls.length, 1)
     assert.equal(result.metadata.toolCalls[0].id, 'call_123')
     assert.equal(result.metadata.toolCalls[0].name, 'search')
     assert.equal(result.metadata.toolCalls[0].argumentsRaw, '{"q":"nerveflow"}')
+  })
+})
+
+test('createOpenAICompatTransport preserves object-form tool call arguments', async () => {
+  await withFetchMock(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      id: 'chatcmpl-tools-object-args',
+      object: 'chat.completion',
+      created: 1710000011,
+      model: 'gpt-4o',
+      choices: [{
+        index: 0,
+        finish_reason: 'tool_calls',
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'call_obj_1',
+            type: 'function',
+            function: {
+              name: 'list_directory',
+              arguments: {
+                path: 'C:/workspace',
+              },
+            },
+          }],
+        },
+      }],
+    }),
+    text: async () => '',
+  }), async () => {
+    const callAgent = createOpenAICompatTransport({ timeoutMs: 5000 })
+    const result = await callAgent({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'list files' }],
+    })
+
+    assert.equal(Array.isArray(result.metadata.toolCalls), true)
+    assert.equal(result.metadata.toolCalls.length, 1)
+    assert.equal(result.metadata.toolCalls[0].name, 'list_directory')
+    assert.equal(result.metadata.toolCalls[0].argumentsRaw, '{"path":"C:/workspace"}')
   })
 })

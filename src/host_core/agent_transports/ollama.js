@@ -26,7 +26,7 @@ export function createOllamaTransport(opts = {}) {
     const requestPayload = { model, messages: normalizeOllamaMessages(messages), stream: false }
 
     if (Array.isArray(tools) && tools.length > 0) {
-      requestPayload.tools = tools
+      requestPayload.tools = sanitizeToolDefinitionsForWire(tools)
     }
 
     if (transport && typeof transport === 'object') {
@@ -168,6 +168,40 @@ export function createOllamaTransport(opts = {}) {
   }
 
   return callOllamaAgent
+}
+
+function sanitizeToolDefinitionsForWire(tools) {
+  if (!Array.isArray(tools)) return []
+
+  return tools
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
+      if (entry.type !== 'function') return entry
+
+      const fn = entry.function
+      if (!fn || typeof fn !== 'object' || Array.isArray(fn)) {
+        return {
+          ...entry,
+          function: {
+            name: '',
+            description: '',
+            parameters: { type: 'object', properties: {}, additionalProperties: true },
+          },
+        }
+      }
+
+      return {
+        ...entry,
+        function: {
+          name: String(fn.name ?? '').trim(),
+          description: String(fn.description ?? ''),
+          parameters: (fn.parameters && typeof fn.parameters === 'object' && !Array.isArray(fn.parameters))
+            ? fn.parameters
+            : { type: 'object', properties: {}, additionalProperties: true },
+        },
+      }
+    })
+    .filter(Boolean)
 }
 
 /**

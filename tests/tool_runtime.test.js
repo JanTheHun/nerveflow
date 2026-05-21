@@ -40,3 +40,40 @@ test('tool runtime throws deterministic error for unknown tools', async () => {
     /Tool "not_implemented" is not available in this host yet\./,
   )
 })
+
+test('tool runtime falls through object provider when handler returns handled:false', async () => {
+  const runtime = createToolRuntime({
+    providers: [
+      {
+        ping: async () => ({ handled: false, ok: false, error: 'not here' }),
+      },
+      {
+        ping: async () => ({ ok: true, pong: true }),
+      },
+    ],
+  })
+
+  const result = await runtime.call({ name: 'ping' })
+  assert.deepEqual(result, { ok: true, pong: true })
+})
+
+test('tool runtime returns wrapped result when object provider signals handled:true', async () => {
+  let nextProviderCalled = false
+  const runtime = createToolRuntime({
+    providers: [
+      {
+        ping: async () => ({ handled: true, result: { ok: true, source: 'first' } }),
+      },
+      {
+        ping: async () => {
+          nextProviderCalled = true
+          return { ok: true, source: 'second' }
+        },
+      },
+    ],
+  })
+
+  const result = await runtime.call({ name: 'ping' })
+  assert.deepEqual(result, { ok: true, source: 'first' })
+  assert.equal(nextProviderCalled, false)
+})

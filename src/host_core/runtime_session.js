@@ -77,6 +77,38 @@ function annotateRetryExhaustion(err, retryLimit, attemptNum) {
   return err
 }
 
+function buildGovernedTimeoutError(callLabel, timeoutMs, toolName = '') {
+  const label = toolName
+    ? `${callLabel} tool "${toolName}"`
+    : callLabel
+  const err = new Error(`${label} exceeded tools.timeoutMs (${timeoutMs}).`)
+  err.code = 'TOOL_TIMEOUT'
+  err.kind = 'tool_timeout'
+  return err
+}
+
+async function runWithTimeout(taskPromise, timeoutMs, onTimeout) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return await taskPromise
+  }
+
+  let timeoutToken = null
+  try {
+    return await Promise.race([
+      taskPromise,
+      new Promise((_, reject) => {
+        timeoutToken = setTimeout(() => {
+          reject(typeof onTimeout === 'function' ? onTimeout() : new Error(`Operation timed out after ${timeoutMs}ms.`))
+        }, timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timeoutToken) {
+      clearTimeout(timeoutToken)
+    }
+  }
+}
+
 function cloneEventForViolation(event) {
   if (!event || typeof event !== 'object' || Array.isArray(event)) return null
 
@@ -151,18 +183,73 @@ function normalizeRequestedToolsPolicy(rawTools) {
   return { mode, maxRounds, allow, timeoutMs, denyOnUnknownTool }
 }
 
-function buildGovernedToolDefinitions(toolNames) {
-  return toolNames.map((name) => ({
-    type: 'function',
-    function: {
-      name,
-      description: `Runtime governed tool: ${name}`,
-      parameters: {
-        type: 'object',
-        additionalProperties: true,
+function defaultGovernedToolParameters() {
+  return {
+    type: 'object',
+    properties: {},
+    additionalProperties: true,
+  }
+}
+
+function normalizeGovernedToolParameters(inputSchemaRaw) {
+  if (!inputSchemaRaw || typeof inputSchemaRaw !== 'object' || Array.isArray(inputSchemaRaw)) {
+    return defaultGovernedToolParameters()
+  }
+
+  const schema = { ...inputSchemaRaw }
+  const schemaType = String(schema.type ?? '').trim().toLowerCase()
+  if (!schemaType) {
+    schema.type = 'object'
+    return schema
+  }
+
+  if (schemaType !== 'object') {
+    return defaultGovernedToolParameters()
+  }
+
+  return schema
+}
+
+async function buildGovernedToolDefinitions(toolNames, getToolMetadata = null, onSchemaFallback = null) {
+  const definitions = []
+  const schemaSourceByName = {}
+
+  for (const name of toolNames) {
+    let metadata = null
+    if (typeof getToolMetadata === 'function') {
+      try {
+        metadata = await getToolMetadata(name)
+      } catch {
+        metadata = null
+      }
+    }
+
+    const metadataDescription = String(metadata?.description ?? '').trim()
+    const hasNativeSchema = metadata != null && metadata.inputSchema != null
+    const schemaSource = hasNativeSchema ? 'native' : 'fallback'
+    schemaSourceByName[name] = schemaSource
+
+    if (!hasNativeSchema && typeof onSchemaFallback === 'function') {
+      onSchemaFallback(name, metadata == null ? 'no_metadata' : 'no_input_schema')
+    }
+
+    const readableName = name.replace(/[_-]/g, ' ')
+    const description = metadataDescription || readableName
+
+    definitions.push({
+      type: 'function',
+      function: {
+        name,
+        description,
+        parameters: normalizeGovernedToolParameters(metadata?.inputSchema),
       },
-    },
-  }))
+    })
+  }
+
+  return {
+    definitions,
+    schemaSourceByName,
+  }
 }
 
 function extractTransportToolCalls(transportResult) {
@@ -520,7 +607,20 @@ export function createHostAdapter({
       const governedMaxRounds = governedToolsEnabled ? requestedToolsPolicy.maxRounds : 0
       const governedTimeoutMs = governedToolsEnabled ? requestedToolsPolicy.timeoutMs : 0
       const governedDenyOnUnknownTool = governedToolsEnabled ? requestedToolsPolicy.denyOnUnknownTool !== false : true
-      const governedToolDefinitions = governedToolsEnabled ? buildGovernedToolDefinitions(effectiveAllow) : []
+      const getGovernedToolMetadata = (toolRuntime && typeof toolRuntime.getMetadata === 'function')
+        ? toolRuntime.getMetadata.bind(toolRuntime)
+        : null
+      const onSchemaFallback = governedToolsEnabled
+        ? (toolName, reason) => {
+            const label = agentName ? `agent("${agentName}")` : `model("${resolvedModel}")`
+            process.stderr.write(`[nerveflow] warn: ${label} tool "${toolName}" has no input schema (${reason}); model may not invoke it reliably\n`)
+          }
+        : null
+      const governedToolDefinitionsResult = governedToolsEnabled
+        ? await buildGovernedToolDefinitions(effectiveAllow, getGovernedToolMetadata, onSchemaFallback)
+        : { definitions: [], schemaSourceByName: {} }
+      const governedToolDefinitions = governedToolDefinitionsResult.definitions
+      const governedToolSchemaSourceByName = governedToolDefinitionsResult.schemaSourceByName
 
       let lastViolation = null
       let previousViolationKey = null
@@ -729,6 +829,7 @@ export function createHostAdapter({
               const pendingToolMessages = []
               for (const toolCall of toolCalls) {
                 governedSummary.toolCalls += 1
+                const correlationId = toolCall.id
                 if (!effectiveAllow.includes(toolCall.name)) {
                   governedSummary.deniedToolCalls += 1
                   if (governedDenyOnUnknownTool) {
@@ -753,31 +854,72 @@ export function createHostAdapter({
                   continue
                 }
 
+                const schemaSource = governedToolSchemaSourceByName[toolCall.name] ?? 'unknown'
+
                 if (typeof onGovernedToolEvent === 'function') {
                   await onGovernedToolEvent({
                     type: 'tool_call',
                     tool: toolCall.name,
                     args: { positional: [], named: toolCall.args ?? {} },
+                    correlationId,
+                    round: round + 1,
+                    status: 'started',
+                    schemaSource,
                     executionRole: 'agent-governed',
                   })
                 }
 
-                const toolResult = await adapter.callTool({
-                  name: toolCall.name,
-                  args: toolCall.args,
-                  positional: [],
-                  state,
-                  event,
-                  locals,
-                  line,
-                  statement,
-                })
+                let toolResult
+                try {
+                  const elapsedMs = Math.max(0, Date.now() - callStartedAt)
+                  const remainingTimeoutMs = governedTimeoutMs > 0
+                    ? Math.max(0, governedTimeoutMs - elapsedMs)
+                    : 0
+
+                  if (governedTimeoutMs > 0 && remainingTimeoutMs <= 0) {
+                    throw buildGovernedTimeoutError(callLabel, governedTimeoutMs, toolCall.name)
+                  }
+
+                  toolResult = await runWithTimeout(
+                    adapter.callTool({
+                      name: toolCall.name,
+                      args: toolCall.args,
+                      positional: [],
+                      state,
+                      event,
+                      locals,
+                      line,
+                      statement,
+                    }),
+                    remainingTimeoutMs,
+                    () => buildGovernedTimeoutError(callLabel, governedTimeoutMs, toolCall.name),
+                  )
+                } catch (toolErr) {
+                  if (typeof onGovernedToolEvent === 'function') {
+                    await onGovernedToolEvent({
+                      type: 'tool_error',
+                      tool: toolCall.name,
+                      correlationId,
+                      round: round + 1,
+                      status: 'failed',
+                      error: {
+                        code: String(toolErr?.code ?? '').trim() || 'TOOL_EXECUTION_ERROR',
+                        message: String(toolErr?.message ?? toolErr ?? 'Unknown tool error'),
+                      },
+                      executionRole: 'agent-governed',
+                    })
+                  }
+                  throw toolErr
+                }
 
                 if (typeof onGovernedToolEvent === 'function') {
                   await onGovernedToolEvent({
                     type: 'tool_result',
                     tool: toolCall.name,
                     result: toolResult,
+                    correlationId,
+                    round: round + 1,
+                    status: 'completed',
                     executionRole: 'agent-governed',
                   })
                 }

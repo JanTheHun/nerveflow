@@ -1203,6 +1203,10 @@ test('callAgent executes governed tool calls and feeds tool results back to mode
   assert.equal(Array.isArray(transportCalls[0].tools), true)
   assert.equal(transportCalls[0].tools.length, 1)
   assert.equal(transportCalls[0].tools[0].function.name, 'search')
+  assert.equal(transportCalls[0].tools[0].function.description, 'search')
+  assert.equal(transportCalls[0].tools[0].function.parameters.type, 'object')
+  assert.equal(transportCalls[0].tools[0].function.parameters.additionalProperties, true)
+  assert.equal(transportCalls[0].tools[0].function._schemaSource, undefined)
   assert.equal(transportCalls[1].messages.some((m) => m.role === 'tool' && /doc-1/.test(String(m.content))), true)
   assert.equal(result.metadata.tools.mode, 'governed')
   assert.equal(result.metadata.tools.timeoutMs, 0)
@@ -1210,6 +1214,87 @@ test('callAgent executes governed tool calls and feeds tool results back to mode
   assert.equal(result.metadata.tools.toolCalls, 1)
   assert.equal(result.metadata.tools.deniedToolCalls, 0)
   assert.deepEqual(result.metadata.tools.toolsUsed, ['search'])
+})
+
+test('callAgent governed mode uses metadata-backed tool schema when available', async () => {
+  const transportCalls = []
+
+  const toolRuntime = createToolRuntime({
+    providers: [
+      {
+        search: async () => ({ hits: ['doc-1'] }),
+      },
+    ],
+    metadataProviders: [
+      async (toolName) => {
+        if (toolName !== 'search') return null
+        return {
+          name: 'search',
+          description: 'Search indexed documents',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              q: { type: 'string', description: 'Search query text' },
+            },
+            required: ['q'],
+            additionalProperties: false,
+          },
+        }
+      },
+    ],
+  })
+
+  let callCount = 0
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: new Set(['search']), aliases: {} },
+      agents: { profiles: { chat: { model: 'gpt-4o', tools: ['search'] } } },
+      operators: { map: {} },
+    },
+    callAgent: async (payload) => {
+      transportCalls.push(payload)
+      callCount += 1
+      if (callCount === 1) {
+        return {
+          text: '',
+          metadata: {
+            provider: 'openai_compat',
+            toolCalls: [{ id: 'call-1', name: 'search', argumentsRaw: '{"q":"nerveflow"}' }],
+          },
+        }
+      }
+      return { text: 'final answer', metadata: { provider: 'openai_compat' } }
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+    toolRuntime,
+  })
+
+  const result = await adapter.callAgent({
+    agent: 'chat',
+    prompt: 'find docs',
+    tools: { mode: 'governed', maxRounds: 4, allow: ['search'] },
+    event: { type: 'user_message', source: 'external' },
+  })
+
+  assert.equal(result.value, 'final answer')
+  assert.equal(Array.isArray(transportCalls[0].tools), true)
+  assert.equal(transportCalls[0].tools[0].function.description, 'Search indexed documents')
+  assert.equal(transportCalls[0].tools[0].function._schemaSource, undefined)
+  assert.deepEqual(transportCalls[0].tools[0].function.parameters, {
+    type: 'object',
+    properties: {
+      q: { type: 'string', description: 'Search query text' },
+    },
+    required: ['q'],
+    additionalProperties: false,
+  })
 })
 
 test('callAgent does not execute tool calls when tools mode is disabled', async () => {
@@ -1390,4 +1475,248 @@ test('callAgent governed mode enforces timeoutMs', async () => {
     }),
     /exceeded tools\.timeoutMs/,
   )
+})
+
+test('callAgent governed mode emits tool lifecycle events with correlation metadata', async () => {
+  const governedEvents = []
+  const toolRuntime = createToolRuntime({
+    providers: [
+      {
+        search: async ({ args }) => ({ ok: true, q: String(args?.q ?? '') }),
+      },
+    ],
+  })
+
+  let callCount = 0
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: new Set(['search']), aliases: {} },
+      agents: { profiles: { chat: { model: 'gpt-4o', tools: ['search'] } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => {
+      callCount += 1
+      if (callCount === 1) {
+        return {
+          text: '',
+          metadata: {
+            provider: 'openai_compat',
+            toolCalls: [{ id: 'call-1', name: 'search', argumentsRaw: '{"q":"trace"}' }],
+          },
+        }
+      }
+
+      return {
+        text: 'done',
+        metadata: { provider: 'openai_compat' },
+      }
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+    toolRuntime,
+  })
+
+  const result = await adapter.callAgent({
+    agent: 'chat',
+    prompt: 'trace tools',
+    tools: { mode: 'governed', maxRounds: 3, allow: ['search'], timeoutMs: 5000 },
+    event: { type: 'user_message', source: 'external' },
+    onGovernedToolEvent: (payload) => {
+      governedEvents.push(payload)
+    },
+  })
+
+  assert.equal(result.value, 'done')
+  assert.equal(governedEvents.length, 2)
+  assert.equal(governedEvents[0].type, 'tool_call')
+  assert.equal(governedEvents[1].type, 'tool_result')
+  assert.equal(governedEvents[0].status, 'started')
+  assert.equal(governedEvents[1].status, 'completed')
+  assert.equal(governedEvents[0].round, 1)
+  assert.equal(governedEvents[1].round, 1)
+  assert.equal(governedEvents[0].correlationId, 'call-1')
+  assert.equal(governedEvents[1].correlationId, 'call-1')
+})
+
+test('callAgent governed mode emits tool_error when tool execution exceeds timeout budget', async () => {
+  const governedEvents = []
+  const toolRuntime = createToolRuntime({
+    providers: [
+      {
+        search: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20))
+          return { ok: true }
+        },
+      },
+    ],
+  })
+
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: new Set(['search']), aliases: {} },
+      agents: { profiles: { chat: { model: 'gpt-4o', tools: ['search'] } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => ({
+      text: '',
+      metadata: {
+        provider: 'openai_compat',
+        toolCalls: [{ id: 'call-timeout', name: 'search', argumentsRaw: '{"q":"slow"}' }],
+      },
+    }),
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+    toolRuntime,
+  })
+
+  await assert.rejects(
+    () => adapter.callAgent({
+      agent: 'chat',
+      prompt: 'slow tools',
+      tools: { mode: 'governed', maxRounds: 2, allow: ['search'], timeoutMs: 5 },
+      event: { type: 'user_message', source: 'external' },
+      onGovernedToolEvent: (payload) => {
+        governedEvents.push(payload)
+      },
+    }),
+    /tool "search" exceeded tools\.timeoutMs/,
+  )
+
+  assert.equal(governedEvents[0].type, 'tool_call')
+  assert.equal(governedEvents[0].status, 'started')
+  assert.equal(governedEvents[1].type, 'tool_error')
+  assert.equal(governedEvents[1].status, 'failed')
+  assert.equal(governedEvents[1].correlationId, 'call-timeout')
+  assert.equal(governedEvents[1].error.code, 'TOOL_TIMEOUT')
+})
+
+test('callAgent governed mode emits schemaSource fallback when tool has no metadata', async () => {
+  const governedEvents = []
+  const toolRuntime = createToolRuntime({
+    providers: [
+      {
+        my_tool: async () => ({ ok: true }),
+      },
+    ],
+    // no metadataProviders — schema will fall back
+  })
+
+  let callCount = 0
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: new Set(['my_tool']), aliases: {} },
+      agents: { profiles: { chat: { model: 'gpt-4o', tools: ['my_tool'] } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => {
+      callCount += 1
+      if (callCount === 1) {
+        return {
+          text: '',
+          metadata: {
+            provider: 'openai_compat',
+            toolCalls: [{ id: 'call-schema-1', name: 'my_tool', argumentsRaw: '{}' }],
+          },
+        }
+      }
+      return { text: 'done', metadata: { provider: 'openai_compat' } }
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+    toolRuntime,
+  })
+
+  await adapter.callAgent({
+    agent: 'chat',
+    prompt: 'test schema fallback',
+    tools: { mode: 'governed', maxRounds: 2, allow: ['my_tool'], timeoutMs: 5000 },
+    event: { type: 'user_message', source: 'external' },
+    onGovernedToolEvent: (payload) => { governedEvents.push(payload) },
+  })
+
+  assert.equal(governedEvents[0].type, 'tool_call')
+  assert.equal(governedEvents[0].schemaSource, 'fallback')
+})
+
+test('callAgent governed mode emits schemaSource native when tool has inputSchema metadata', async () => {
+  const governedEvents = []
+  const toolRuntime = createToolRuntime({
+    providers: [
+      {
+        my_tool: async () => ({ ok: true }),
+      },
+    ],
+    metadataProviders: [
+      async (name) => {
+        if (name === 'my_tool') {
+          return {
+            name: 'my_tool',
+            description: 'A test tool',
+            inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+          }
+        }
+        return null
+      },
+    ],
+  })
+
+  let callCount = 0
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: new Set(['my_tool']), aliases: {} },
+      agents: { profiles: { chat: { model: 'gpt-4o', tools: ['my_tool'] } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => {
+      callCount += 1
+      if (callCount === 1) {
+        return {
+          text: '',
+          metadata: {
+            provider: 'openai_compat',
+            toolCalls: [{ id: 'call-schema-2', name: 'my_tool', argumentsRaw: '{"path":"/tmp"}' }],
+          },
+        }
+      }
+      return { text: 'done', metadata: { provider: 'openai_compat' } }
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+    toolRuntime,
+  })
+
+  await adapter.callAgent({
+    agent: 'chat',
+    prompt: 'test schema native',
+    tools: { mode: 'governed', maxRounds: 2, allow: ['my_tool'], timeoutMs: 5000 },
+    event: { type: 'user_message', source: 'external' },
+    onGovernedToolEvent: (payload) => { governedEvents.push(payload) },
+  })
+
+  assert.equal(governedEvents[0].type, 'tool_call')
+  assert.equal(governedEvents[0].schemaSource, 'native')
 })

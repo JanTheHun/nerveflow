@@ -280,72 +280,97 @@ test('runtime command router handles call_inspector_execute command', async () =
 })
 
 test('runtime core callInspectorExecute mode=try returns success envelope', async () => {
+  const previousModelResolution = process.env.AGENT_MODEL_RESOLUTION
+  process.env.AGENT_MODEL_RESOLUTION = 'legacy'
+
   const runtime = createRuntimeCore({
     resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
     callAgent: async () => 'play',
   })
 
-  const response = await runtime.callInspectorExecute({
-    workspaceDir: 'examples/mqtt-simple-host',
-    targetKind: 'model',
-    mode: 'try',
-    model: 'test-model',
-    prompt: 'hello',
-  })
+  try {
+    const response = await runtime.callInspectorExecute({
+      workspaceDir: 'examples/mqtt-simple-host',
+      targetKind: 'model',
+      mode: 'try',
+      model: 'test-model',
+      prompt: 'hello',
+    })
 
-  assert.equal(response.call.mode, 'try')
-  assert.equal(response.result.hadContractViolation, false)
-  assert.deepEqual(response.result.value, {
-    ok: true,
-    value: 'play',
-  })
-  assert.deepEqual(response.result.parsed, {
-    ok: true,
-    value: 'play',
-  })
-  assert.equal(response.resolvedCall.attempt, 1)
-  assert.equal(response.resolvedCall.retryLimit, 0)
-  assert.equal(Array.isArray(response.resolvedCall.finalRequest?.messages), true)
-  assert.equal(response.resolvedCall.finalRequest.messages.length > 0, true)
-  assert.equal(response.resolvedCall.retryGuidanceInjected, false)
+    assert.equal(response.call.mode, 'try')
+    assert.equal(response.result.hadContractViolation, false)
+    assert.deepEqual(response.result.value, {
+      ok: true,
+      value: 'play',
+    })
+    assert.deepEqual(response.result.parsed, {
+      ok: true,
+      value: 'play',
+    })
+    assert.equal(response.resolvedCall.attempt, 1)
+    assert.equal(response.resolvedCall.retryLimit, 0)
+    assert.equal(Array.isArray(response.resolvedCall.finalRequest?.messages), true)
+    assert.equal(response.resolvedCall.finalRequest.messages.length > 0, true)
+    assert.equal(response.resolvedCall.retryGuidanceInjected, false)
+  } finally {
+    if (previousModelResolution == null) {
+      delete process.env.AGENT_MODEL_RESOLUTION
+    } else {
+      process.env.AGENT_MODEL_RESOLUTION = previousModelResolution
+    }
+  }
 })
 
 test('runtime core callInspectorExecute mode=try returns failure envelope on contract violation', async () => {
+  const previousModelResolution = process.env.AGENT_MODEL_RESOLUTION
+  process.env.AGENT_MODEL_RESOLUTION = 'legacy'
+
   const runtime = createRuntimeCore({
     resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
     callAgent: async () => '{"intent":"maybe"}',
   })
 
-  const response = await runtime.callInspectorExecute({
-    workspaceDir: 'examples/mqtt-simple-host',
-    targetKind: 'model',
-    mode: 'try',
-    model: 'test-model',
-    prompt: 'hello',
-    returns: { intent: ['yes', 'no'] },
-    validate: 'strict',
-    retry_on_contract_violation: 1,
-  })
+  try {
+    const response = await runtime.callInspectorExecute({
+      workspaceDir: 'examples/mqtt-simple-host',
+      targetKind: 'model',
+      mode: 'try',
+      model: 'test-model',
+      prompt: 'hello',
+      returns: { intent: ['yes', 'no'] },
+      validate: 'strict',
+      retry_on_contract_violation: 1,
+    })
 
-  assert.equal(response.call.mode, 'try')
-  assert.equal(response.result.hadContractViolation, true)
-  assert.equal(response.result.value?.ok, false)
-  assert.equal(response.result.value?.error?.type, 'agent_return_contract_violation')
-  assert.equal(typeof response.result.value?.error?.message, 'string')
-  assert.equal(response.resolvedCall.attempt, 2)
-  assert.equal(response.resolvedCall.retryLimit, 1)
-  assert.equal(response.resolvedCall.retryGuidanceInjected, true)
-  assert.equal(Array.isArray(response.resolvedCall.finalRequest?.messages), true)
-  assert.equal(
-    response.resolvedCall.finalRequest.messages.some((entry) => (
-      String(entry?.role ?? '') === 'user'
-      && /the previous response/i.test(String(entry?.content ?? ''))
-    )),
-    true,
-  )
+    assert.equal(response.call.mode, 'try')
+    assert.equal(response.result.hadContractViolation, true)
+    assert.equal(response.result.value?.ok, false)
+    assert.equal(response.result.value?.error?.type, 'agent_return_contract_violation')
+    assert.equal(typeof response.result.value?.error?.message, 'string')
+    assert.equal(response.resolvedCall.attempt, 2)
+    assert.equal(response.resolvedCall.retryLimit, 1)
+    assert.equal(response.resolvedCall.retryGuidanceInjected, true)
+    assert.equal(Array.isArray(response.resolvedCall.finalRequest?.messages), true)
+    assert.equal(
+      response.resolvedCall.finalRequest.messages.some((entry) => (
+        String(entry?.role ?? '') === 'user'
+        && /the previous response/i.test(String(entry?.content ?? ''))
+      )),
+      true,
+    )
+  } finally {
+    if (previousModelResolution == null) {
+      delete process.env.AGENT_MODEL_RESOLUTION
+    } else {
+      process.env.AGENT_MODEL_RESOLUTION = previousModelResolution
+    }
+  }
 })
 
 test('runtime core callInspectorExecute forwards governed tools policy', async () => {
+  const previousModelResolution = process.env.AGENT_MODEL_RESOLUTION
+  process.env.AGENT_MODEL_RESOLUTION = 'legacy'
+
   let capturedPayload = null
   const runtime = createRuntimeCore({
     resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
@@ -355,29 +380,37 @@ test('runtime core callInspectorExecute forwards governed tools policy', async (
     },
   })
 
-  const response = await runtime.callInspectorExecute({
-    workspaceDir: 'examples/mqtt-simple-host',
-    targetKind: 'model',
-    mode: 'call',
-    model: 'test-model',
-    prompt: 'hello',
-    tools: {
-      mode: 'governed',
-      allow: ['search', 'fetch'],
-      maxRounds: 3,
-      timeoutMs: 2500,
-      denyOnUnknownTool: false,
-    },
-  })
+  try {
+    const response = await runtime.callInspectorExecute({
+      workspaceDir: 'examples/mqtt-simple-host',
+      targetKind: 'model',
+      mode: 'call',
+      model: 'test-model',
+      prompt: 'hello',
+      tools: {
+        mode: 'governed',
+        allow: ['search', 'fetch'],
+        maxRounds: 3,
+        timeoutMs: 2500,
+        denyOnUnknownTool: false,
+      },
+    })
 
-  assert.equal(Array.isArray(capturedPayload?.tools), true)
-  assert.equal(capturedPayload.tools.length, 2)
-  assert.equal(capturedPayload.tools[0].function.name, 'search')
-  assert.equal(capturedPayload.tools[1].function.name, 'fetch')
-  assert.equal(response.call.tools.mode, 'governed')
-  assert.deepEqual(response.call.tools.allow, ['search', 'fetch'])
-  assert.equal(response.resolvedCall.tools.mode, 'governed')
-  assert.deepEqual(response.resolvedCall.tools.allow, ['search', 'fetch'])
+    assert.equal(Array.isArray(capturedPayload?.tools), true)
+    assert.equal(capturedPayload.tools.length, 2)
+    assert.equal(capturedPayload.tools[0].function.name, 'search')
+    assert.equal(capturedPayload.tools[1].function.name, 'fetch')
+    assert.equal(response.call.tools.mode, 'governed')
+    assert.deepEqual(response.call.tools.allow, ['search', 'fetch'])
+    assert.equal(response.resolvedCall.tools.mode, 'governed')
+    assert.deepEqual(response.resolvedCall.tools.allow, ['search', 'fetch'])
+  } finally {
+    if (previousModelResolution == null) {
+      delete process.env.AGENT_MODEL_RESOLUTION
+    } else {
+      process.env.AGENT_MODEL_RESOLUTION = previousModelResolution
+    }
+  }
 })
 
 test('runtime core callInspectorExecute rejects invalid tools mode', async () => {

@@ -790,7 +790,7 @@ test('[Multi-Surface] Multiple MQTT clients subscribe to same runtime', async ()
     mockClient1.simulateCommand({
       type: 'enqueue_event',
       requestId: 'multi-enq',
-      payload: { type: 'test', value: 'multi-surface' },
+      payload: { type: 'sensor_reading', value: 'multi-surface' },
     })
 
     // Wait for execution event
@@ -845,7 +845,7 @@ test('[Multi-Surface] MQTT client disconnect does not stop runtime', async () =>
     mockClient.simulateCommand({
       type: 'enqueue_event',
       requestId: 'detach-enq',
-      payload: { type: 'test', value: 'after-detach' },
+      payload: { type: 'sensor_reading', value: 'after-detach' },
     })
 
     const { payload } = await execEventPromise

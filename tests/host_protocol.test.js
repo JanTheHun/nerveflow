@@ -145,6 +145,7 @@ test('protocol constants include required v1 values', () => {
     'promote_candidate',
     'snapshot',
     'definition_status',
+    'graph',
     'subscribe',
     'unsubscribe',
   ])

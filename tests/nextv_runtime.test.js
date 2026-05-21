@@ -3251,6 +3251,7 @@ test('model() accepts validate="none" and returns parsed JSON', async () => {
     },
     callAgent: async () => '{"intent":"classify"}',
     defaultModel: 'gpt-4',
+    modelResolutionMode: 'legacy',
     resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
     existsSync: () => false,
     runNextVScriptFromFile: async () => ({ returnValue: undefined }),

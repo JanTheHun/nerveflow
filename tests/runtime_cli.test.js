@@ -438,7 +438,7 @@ test('nerve-attach can snapshot enqueue and stop a live runtime', async () => {
       'bin/nerve-attach.js',
       wsUrl,
       'enqueue',
-      'user_message',
+      'sensor_reading',
       'hello',
     ])
     assert.equal(enqueueResult.code, 0)

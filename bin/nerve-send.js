@@ -11,6 +11,8 @@ function parseCliOptions(argv) {
     wsUrl: '',
     timeoutMs: DEFAULT_TIMEOUT_MS,
     json: false,
+    verbose: false,
+    traceTools: false,
   }
 
   const positionals = []
@@ -20,6 +22,16 @@ function parseCliOptions(argv) {
 
     if (token === '--json') {
       options.json = true
+      continue
+    }
+
+    if (token === '--verbose') {
+      options.verbose = true
+      continue
+    }
+
+    if (token === '--trace-tools') {
+      options.traceTools = true
       continue
     }
 
@@ -39,7 +51,7 @@ function parseCliOptions(argv) {
   }
 
   if (positionals.length < 2) {
-    throw new Error('Usage: nerve-send <wsUrl> <eventType> [message] [--timeout-ms <n>] [--json]')
+    throw new Error('Usage: nerve-send <wsUrl> <eventType> [message] [--timeout-ms <n>] [--json] [--verbose] [--trace-tools]')
   }
 
   options.wsUrl = positionals[0]
@@ -84,6 +96,113 @@ function extractTextOutputFromExecution(payload) {
 
   if (textOutputs.length === 0) return ''
   return textOutputs[textOutputs.length - 1]
+}
+
+function formatDisplayValue(value) {
+  if (typeof value === 'string') {
+    const text = value.trim()
+    return text || '(empty string)'
+  }
+
+  if (value === undefined) return 'undefined'
+
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function extractLatestToolResultFromExecution(payload) {
+  const events = Array.isArray(payload?.events) ? payload.events : []
+
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const runtimeEvent = events[index]
+    if (!runtimeEvent || runtimeEvent.type !== 'tool_result') continue
+
+    const toolName = String(runtimeEvent.tool ?? '').trim() || 'tool'
+    const resultText = formatDisplayValue(runtimeEvent.result)
+    return `${toolName}: ${resultText}`
+  }
+
+  return ''
+}
+
+function extractDisplayOutputFromExecution(payload) {
+  const outputText = extractTextOutputFromExecution(payload)
+  if (outputText) {
+    return {
+      output: outputText,
+      source: 'output_text',
+    }
+  }
+
+  const toolResultText = extractLatestToolResultFromExecution(payload)
+  if (toolResultText) {
+    return {
+      output: toolResultText,
+      source: 'tool_result',
+    }
+  }
+
+  return {
+    output: '(no output)',
+    source: 'none',
+  }
+}
+
+function extractExecutionEvents(payload) {
+  return Array.isArray(payload?.events) ? payload.events : []
+}
+
+function buildToolTrace(events) {
+  if (!Array.isArray(events) || events.length === 0) return []
+
+  return events
+    .filter((runtimeEvent) => {
+      const eventType = String(runtimeEvent?.type ?? '').trim()
+      return eventType === 'tool_call' || eventType === 'tool_result' || eventType === 'tool_error'
+    })
+    .map((runtimeEvent) => {
+      const eventType = String(runtimeEvent?.type ?? '').trim()
+      const schemaSource = eventType === 'tool_call' && runtimeEvent?.schemaSource
+        ? String(runtimeEvent.schemaSource)
+        : null
+      return {
+        type: eventType,
+        tool: String(runtimeEvent?.tool ?? '').trim() || 'tool',
+        correlationId: String(runtimeEvent?.correlationId ?? '').trim() || null,
+        round: Number.isFinite(Number(runtimeEvent?.round)) ? Number(runtimeEvent.round) : null,
+        status: String(runtimeEvent?.status ?? '').trim() || null,
+        ...(schemaSource !== null ? { schemaSource } : {}),
+        args: eventType === 'tool_call' ? (runtimeEvent?.args ?? null) : null,
+        result: eventType === 'tool_result' ? (runtimeEvent?.result ?? null) : null,
+        error: eventType === 'tool_error' ? (runtimeEvent?.error ?? null) : null,
+      }
+    })
+}
+
+function formatToolTraceLine(traceEvent) {
+  const type = String(traceEvent?.type ?? '').trim()
+  const tool = String(traceEvent?.tool ?? '').trim() || 'tool'
+  const id = traceEvent?.correlationId ? ` id=${traceEvent.correlationId}` : ''
+  const round = Number.isFinite(traceEvent?.round) ? ` round=${traceEvent.round}` : ''
+  const status = traceEvent?.status ? ` status=${traceEvent.status}` : ''
+
+  if (type === 'tool_call') {
+    const schema = traceEvent?.schemaSource ? ` schema=${traceEvent.schemaSource}` : ''
+    return `tool_call tool=${tool}${id}${round}${status}${schema}`
+  }
+  if (type === 'tool_result') {
+    return `tool_result tool=${tool}${id}${round}${status}`
+  }
+  if (type === 'tool_error') {
+    const errorMessage = String(traceEvent?.error?.message ?? '').trim()
+    const code = String(traceEvent?.error?.code ?? '').trim()
+    const detail = [code, errorMessage].filter(Boolean).join(': ')
+    return `tool_error tool=${tool}${id}${round}${status}${detail ? ` error=${detail}` : ''}`
+  }
+  return `${type || 'event'} tool=${tool}${id}${round}${status}`
 }
 
 function formatExecutionErrorFromEvent(message) {
@@ -248,17 +367,31 @@ async function main() {
       new Promise((_, reject) => setTimeout(() => reject(timeoutError('nextv_execution event')), options.timeoutMs)),
     ])
 
-    const outputText = extractTextOutputFromExecution(executionEvent?.payload)
-    const finalText = outputText || '(no output)'
+    const executionEvents = extractExecutionEvents(executionEvent?.payload)
+    const toolTrace = buildToolTrace(executionEvents)
+    const displayResult = extractDisplayOutputFromExecution(executionEvent?.payload)
+    const finalText = displayResult.output
+
+    if ((options.verbose || options.traceTools) && !options.json) {
+      for (const traceEvent of toolTrace) {
+        console.error(`[trace] ${formatToolTraceLine(traceEvent)}`)
+      }
+    }
 
     if (options.json) {
-      console.log(JSON.stringify({
+      const outputPayload = {
         ok: true,
         wsUrl: options.wsUrl,
         eventType: options.eventType,
         message: options.message,
         output: finalText,
-      }, null, 2))
+        outputSource: displayResult.source,
+        executionEvents,
+      }
+      if (options.verbose || options.traceTools) {
+        outputPayload.toolTrace = toolTrace
+      }
+      console.log(JSON.stringify(outputPayload, null, 2))
     } else {
       console.log(finalText)
     }

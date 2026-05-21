@@ -1,5 +1,5 @@
 import { createServer } from 'node:http'
-import { dirname, join, relative, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
@@ -98,7 +98,62 @@ export function createComposableHost({
     return this // Enable chaining
   }
 
-  function buildCapabilityFactoryFromModuleProvider(provider, moduleConfig = {}, moduleName = '') {
+  const NODELIKE_MCP_STDIO_COMMANDS = new Set(['node', 'node.exe', 'bun', 'deno'])
+
+  function looksLikeRelativeFilePath(value) {
+    const raw = String(value ?? '').trim()
+    if (!raw || isAbsolute(raw)) return false
+    return raw.startsWith('.') || raw.includes('/') || raw.includes('\\')
+  }
+
+  function resolveMcpStdioServerPathsForWorkspace(servers, workspaceAbsolutePath) {
+    if (!Array.isArray(servers)) return []
+
+    const workspaceRoot = String(workspaceAbsolutePath ?? '').trim()
+    if (!workspaceRoot) return servers
+
+    return servers.map((server) => {
+      const transport = String(server?.transport ?? '').trim().toLowerCase()
+      if (transport !== 'stdio') return server
+
+      const config = server?.config
+      if (!config || typeof config !== 'object' || Array.isArray(config)) {
+        return server
+      }
+
+      let nextConfig = config
+      let changed = false
+
+      const command = String(config.command ?? '').trim()
+      if (looksLikeRelativeFilePath(command)) {
+        nextConfig = {
+          ...nextConfig,
+          command: resolve(workspaceRoot, command),
+        }
+        changed = true
+      }
+
+      const runtimeCommand = basename(command).toLowerCase()
+      const args = Array.isArray(config.args) ? config.args : null
+      if (args && args.length > 0 && NODELIKE_MCP_STDIO_COMMANDS.has(runtimeCommand) && looksLikeRelativeFilePath(args[0])) {
+        const nextArgs = [...args]
+        nextArgs[0] = resolve(workspaceRoot, String(args[0]))
+        nextConfig = {
+          ...nextConfig,
+          args: nextArgs,
+        }
+        changed = true
+      }
+
+      if (!changed) return server
+      return {
+        ...server,
+        config: nextConfig,
+      }
+    })
+  }
+
+  function buildCapabilityFactoryFromModuleProvider(provider, moduleConfig = {}, moduleName = '', workspaceAbsolutePath = '') {
     const normalizedProvider = String(provider ?? '').trim().toLowerCase()
 
     if (normalizedProvider === 'memory-pgvector') {
@@ -113,13 +168,20 @@ export function createComposableHost({
 
     if (normalizedProvider === 'mcp' || normalizedProvider === 'mcp-client') {
       const servers = Array.isArray(moduleConfig.servers) ? moduleConfig.servers : []
-      return () => mcpCapability({ servers })
+      const resolvedServers = resolveMcpStdioServerPathsForWorkspace(servers, workspaceAbsolutePath)
+      const eagerConnect = moduleConfig.eagerConnect === true
+      const detectToolConflicts = moduleConfig.detectToolConflicts === true
+      return () => mcpCapability({
+        servers: resolvedServers,
+        eagerConnect,
+        detectToolConflicts,
+      })
     }
 
     throw new Error(`Unsupported workspace module provider "${provider}" for module "${moduleName}"`)
   }
 
-  function resolveWorkspaceCapabilityEntries(workspaceConfig) {
+  function resolveWorkspaceCapabilityEntries(workspaceConfig, workspaceAbsolutePath = '') {
     const requiredCapabilities = getRequiredCapabilities(workspaceConfig)
     const configuredModules = getConfiguredModules(workspaceConfig)
     const entries = []
@@ -148,7 +210,7 @@ export function createComposableHost({
         moduleName,
         provider,
         mode: String(moduleConfig.mode ?? 'embedded').toLowerCase(),
-        factory: buildCapabilityFactoryFromModuleProvider(provider, moduleConfig, moduleName),
+        factory: buildCapabilityFactoryFromModuleProvider(provider, moduleConfig, moduleName, workspaceAbsolutePath),
       })
     }
 
@@ -162,7 +224,7 @@ export function createComposableHost({
     if (autoAttachCapabilitiesFromWorkspace) {
       const resolvedWorkspaceDir = resolvers.resolveWorkspaceDirectory(workspaceDir)
       const workspaceConfig = resolvers.loadWorkspaceConfig(resolvedWorkspaceDir)
-      const entries = resolveWorkspaceCapabilityEntries(workspaceConfig)
+      const entries = resolveWorkspaceCapabilityEntries(workspaceConfig, resolvedWorkspaceDir.absolutePath)
       for (const entry of entries) {
         factories.push(entry.factory)
         workspaceCapabilities.push({
@@ -221,6 +283,7 @@ export function createComposableHost({
 
       // 1. Instantiate all capabilities and collect their providers
       const allToolProviders = []
+      const allToolMetadataProviders = []
       const allIngressConnectors = []
       const allEffectRealizers = []
       const setupHooks = []
@@ -238,6 +301,14 @@ export function createComposableHost({
 
         if (Array.isArray(capability.toolProviders)) {
           allToolProviders.push(...capability.toolProviders)
+        }
+
+        if (Array.isArray(capability.toolMetadataProviders)) {
+          allToolMetadataProviders.push(...capability.toolMetadataProviders.filter((entry) => typeof entry === 'function'))
+        }
+
+        if (typeof capability.getToolMetadata === 'function') {
+          allToolMetadataProviders.push(capability.getToolMetadata)
         }
 
         if (Array.isArray(capability.ingressConnectors)) {
@@ -260,7 +331,7 @@ export function createComposableHost({
 
       // 3. Assemble the three runtimes
       const toolRuntime = allToolProviders.length > 0
-        ? createToolRuntime({ providers: allToolProviders })
+        ? createToolRuntime({ providers: allToolProviders, metadataProviders: allToolMetadataProviders })
         : null
 
       const ingressRuntime = allIngressConnectors.length > 0

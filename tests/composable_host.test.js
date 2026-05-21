@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { join, relative, resolve } from 'node:path'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { createServer as createNetServer } from 'node:net'
+import { dirname, join, relative, resolve } from 'node:path'
 import { WebSocket } from 'ws'
 
 import {
@@ -15,11 +16,36 @@ import {
 
 const REPO_ROOT = resolve(process.cwd())
 
-async function createTempWorkspace({ nextvConfig, entrySource }) {
+function findOpenPort() {
+  return new Promise((resolvePort, rejectPort) => {
+    const server = createNetServer()
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      const port = Number(address?.port ?? 0)
+      server.close((err) => {
+        if (err) return rejectPort(err)
+        resolvePort(port)
+      })
+    })
+    server.on('error', rejectPort)
+  })
+}
+
+async function createTempWorkspace({ nextvConfig, entrySource, extraFiles = [] }) {
   const workspaceRoot = await mkdtemp(join(REPO_ROOT, '.tmp-composable-host-'))
   const workspaceRelativePath = relative(REPO_ROOT, workspaceRoot).replace(/\\/g, '/')
   await writeFile(join(workspaceRoot, 'nextv.json'), `${JSON.stringify(nextvConfig, null, 2)}\n`, 'utf8')
   await writeFile(join(workspaceRoot, 'entry.nrv'), entrySource, 'utf8')
+
+  for (const file of extraFiles) {
+    if (!file || typeof file !== 'object') continue
+    const relativePath = String(file.path ?? '').trim()
+    if (!relativePath) continue
+    const absolutePath = join(workspaceRoot, relativePath)
+    await mkdir(dirname(absolutePath), { recursive: true })
+    await writeFile(absolutePath, String(file.content ?? ''), 'utf8')
+  }
+
   return {
     workspaceRoot,
     workspaceRelativePath,
@@ -73,14 +99,16 @@ function waitForWsMessage(ws, predicate) {
 }
 
 test('composable host starts with ws surface and no capabilities', { timeout: 5000 }, async () => {
+  const port = await findOpenPort()
   const host = createComposableHost({
     workspaceDir: 'examples/mqtt-simple-host',
+    port,
   })
 
   host.attachSurface(wsSurface({ path: '/api/runtime/ws' }))
 
   const result = await host.start()
-  assert.equal(result.port, 4190)
+  assert.equal(result.port, port)
   assert.equal(result.runtimeCore.isActive(), true)
 
   await host.shutdown()
@@ -255,6 +283,63 @@ test('composable host fails on unknown workspace module provider', { timeout: 10
       () => host.start(),
       /Unsupported workspace module provider "unknown-provider"/i,
     )
+  } finally {
+    await host.shutdown().catch(() => {})
+    await rm(workspace.workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('composable host resolves relative mcp stdio script paths from workspace directory', { timeout: 15000 }, async () => {
+  const workspace = await createTempWorkspace({
+    nextvConfig: {
+      entrypointPath: 'entry.nrv',
+      externals: ['user_message'],
+      requires: {
+        mcp: {
+          required: true,
+          provider: 'mcp',
+        },
+      },
+      modules: {
+        mcp: {
+          provider: 'mcp',
+          mode: 'embedded',
+          eagerConnect: true,
+          servers: [
+            {
+              name: 'local-mcp',
+              transport: 'stdio',
+              config: {
+                command: process.execPath,
+                args: ['./mcp-servers/local-mcp.mjs'],
+              },
+            },
+          ],
+        },
+      },
+    },
+    entrySource: 'on external "user_message"\n  output text "ok"\nend\n',
+    extraFiles: [
+      {
+        path: 'mcp-servers/local-mcp.mjs',
+        content: `import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'\nimport { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'\n\nconst server = new McpServer({ name: 'local-mcp', version: '1.0.0' })\nserver.registerTool(\n  'fetch_url',\n  {\n    description: 'Returns a fixed response for tests.',\n  },\n  async () => ({\n    content: [\n      {\n        type: 'text',\n        text: 'ok',\n      },\n    ],\n  }),\n)\n\nconst transport = new StdioServerTransport()\nawait server.connect(transport)\n`,
+      },
+    ],
+  })
+
+  const port = await findOpenPort()
+  const host = createComposableHost({
+    workspaceDir: workspace.workspaceRelativePath,
+    autoAttachCapabilitiesFromWorkspace: true,
+    port,
+  })
+
+  host.attachSurface(wsSurface({ path: '/api/runtime/ws' }))
+
+  try {
+    const result = await host.start()
+    assert.equal(result.runtimeCore.isActive(), true)
+    await host.shutdown()
   } finally {
     await host.shutdown().catch(() => {})
     await rm(workspace.workspaceRoot, { recursive: true, force: true })

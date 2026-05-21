@@ -47,6 +47,12 @@ Capability flow:
 1. Declare required capabilities in workspace config (`nerve.json` or `nextv.json`) under `requires` and `modules`
 2. Start composable-reference-host against that workspace
 
+For MCP capability, scaffold baseline config and a local sample server with:
+
+```bash
+npx nerve-compose add mcp <workspaceDir>
+```
+
 For memory-pgvector capabilities, configure these environment variables as needed:
 
 - `MEMORY_DB_URL`
@@ -102,6 +108,12 @@ The runtime loads and executes workflow from the supplied workspace, and capabil
 - `memory-pgvector` -> storage capability with local vector provider
 - `speech-surface` -> speech capability
 - `mcp` / `mcp-client` -> MCP capability
+
+MCP module options:
+
+- `servers`: MCP server descriptors (required for actual tool providers)
+- `eagerConnect`: when `true`, connect MCP servers during host startup
+- `detectToolConflicts`: when `true`, fail startup if duplicate tool names exist across MCP servers
 
 ## WebSocket Access
 

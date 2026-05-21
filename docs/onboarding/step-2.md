@@ -231,10 +231,16 @@ npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "remember my favo
 npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "what is my favorite color?"
 ```
 
+If your local model is slow, increase the client wait timeout (default is 30000ms):
+
+```bash
+npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "hello there" --timeout-ms 120000
+```
+
 nerve-send syntax:
 
 ```bash
-npx nerve-send <wsUrl> <eventType> [message]
+npx nerve-send <wsUrl> <eventType> [message] [--timeout-ms <n>]
 ```
 
 Next: continue with [step-3.md](step-3.md) to introduce Nerve Studio.

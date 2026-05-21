@@ -14,6 +14,9 @@ Typical flow:
 # 1) Declare capability in workspace config
 npx nerve-compose add memory-pgvector <workspaceDir>
 
+# Optional: scaffold MCP capability and local sample server
+npx nerve-compose add mcp <workspaceDir>
+
 # 2) Validate resolved bindings before host startup
 npx nerve-compose validate <workspaceDir> --json
 
@@ -37,6 +40,11 @@ Current composable auto-attach provider labels:
 - `memory-pgvector`
 - `speech-surface`
 - `mcp` (alias: `mcp-client`)
+
+MCP module config can optionally include:
+
+- `eagerConnect: true` to connect at host startup
+- `detectToolConflicts: true` to fail fast on duplicate MCP tool names
 
 ## Validation and failure model
 

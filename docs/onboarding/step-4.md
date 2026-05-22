@@ -23,16 +23,16 @@ on external "user_message"
     decision = model(
       "llama3.2:latest",
       event.value,
-      "Classify user intent. Return one of: chat, lights, music, other.",
-      returns={ intent:["chat","lights","music","other"] },
+      "Classify user intent. Return one of: chat, knowledge, tools, other.",
+      returns={ intent:["chat","knowledge","tools","other"] },
       retry_on_contract_violation=1
     )
 
-    if decision.intent == "lights"
-      output text "Lighting route selected. (Scaffold)"
-    else if decision.intent == "music"
-      output text "Music route selected. (Scaffold)"
-    else if decision.intent == "chat"
+    if decision.intent == "knowledge"
+      output text "Knowledge route selected. (Scaffold)"
+    else if decision.intent == "tools"
+      output text "Tools route selected. (Scaffold)"
+    else
       state.conversation = state.conversation + [
         {
           role: "user",
@@ -42,12 +42,6 @@ on external "user_message"
 
       reply = model("llama3.2:latest", messages=state.conversation)
 
-      if reply.content
-        assistant_text = reply.content
-      else
-        assistant_text = reply
-      end
-
       state.conversation = state.conversation + [
         {
           role: "assistant",
@@ -56,8 +50,6 @@ on external "user_message"
       ]
 
       output text assistant_text
-    else
-      output text "I can help with chat, lights, or music."
     end
   end
 end
@@ -65,22 +57,7 @@ end
 
 If you are using the external API path, replace both model labels with your configured model label (for example `gpt-4o-mini`).
 
-## 2. Keep or replace state.init.json
-
-Ensure `state.init.json` contains:
-
-```json
-{
-  "conversation": [
-    {
-      "role": "system",
-      "content": "You are a concise, helpful assistant."
-    }
-  ]
-}
-```
-
-## 3. Restart runtime
+## 2. Restart runtime
 
 Stop the runtime if it is running, then restart to load your updated workflow:
 
@@ -88,7 +65,7 @@ Stop the runtime if it is running, then restart to load your updated workflow:
 npx nerve-runtime start --port 4190
 ```
 
-## 4. Attach Studio (if needed)
+## 3. Attach Studio (if needed)
 
 If Studio is not already running, attach it:
 
@@ -102,20 +79,20 @@ Open:
 http://localhost:4173
 ```
 
-## 5. Verify routing in Studio
+## 4. Verify routing in Studio
 
 In Studio, enqueue these events:
 
 1. `hello nerve`
 Expected: `hello world!`
-2. `turn on the kitchen lights`
-Expected: `Lighting route selected. (Scaffold)`
-3. `play some music`
-Expected: `Music route selected. (Scaffold)`
-4. `what did I just ask?`
+2. `summarize Winston Churchill's life in 5 sentences`
+Expected: `Knowledge route selected. (Scaffold)`
+3. `list files in my working folder`
+Expected: `Tools route selected. (Scaffold)`
+4. `what do you think about cats?`
 Expected: chatbot response from the `chat` branch
 
-## 6. Other bounded-call patterns
+## 5. Other bounded-call patterns
 
 `returns` is one way to bound model behavior. It is not the only way.
 
@@ -127,12 +104,14 @@ Other useful patterns:
 
 In this step, we use `returns` because it keeps routing explicit with an enum contract.
 
-## 7. What you learned
+## 6. What you learned
 
 1. Probabilistic output is bounded by a contract.
 2. Workflow routing remains explicit and deterministic.
 3. You can scale this pattern into specialized multi-agent flows.
 
-Next: continue with [step-5.md](step-5.md) for a simple home-assistant scaffold.
+## Next
+
+Meet your first host and add your first tool call in [step-5.md](step-5.md).
 
 If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../../MANIFESTO.md).

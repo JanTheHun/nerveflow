@@ -1,133 +1,159 @@
 # Onboarding Step 5
 
-## Run the runtime through a host and add your first tool call.
+## Attach your first host capability
 
-Up to now, you ran the runtime directly.
-In this step, you run a small reference host that embeds runtime and exposes the same WS command surface you have been using.
+Up to now, you have been running the runtime directly.
 
-A host is the small Node app around runtime execution.
-It is where tool calls become possible.
+Your workflows already support:
 
-Reference host for this step:
-- Repository source path: `examples/minimal-ws-host/server.js`
-- Installed package path: `node_modules/nerveflow/examples/minimal-ws-host/server.js`
+- deterministic orchestration
+- bounded model behavior
+- attachable observability surfaces
+
+Now you will attach your first external capability through a host.
+
+This is one of the core architectural boundaries in Nerveflow:
+
+**Workflows decide when. Hosts decide how.**
+
+The workflow orchestrates execution.
+The host realizes capabilities.
+
+---
+
+## What changes in this step
+
+Before:
+
+workflow -> runtime
+
+After:
+
+workflow -> runtime -> host capability
+
+The workflow remains deterministic.
+
+The host becomes the boundary where external capabilities attach.
+
+---
 
 ## 1. Stop the runtime
 
 Stop the runtime if it is still running.
 
-## 2. Update your workflow
+## 2. Start the composable reference host
 
-Update your `workflow.nrv` to call a tool. Inside your `on external "user_message"` handler, change this line:
-
-```nrv
-output text assistant_text
-```
-
-to these two lines:
-
-```nrv
-now = tool("get_time")
-output text "${assistant_text} ${now}"
-```
-
-## 3. Start the host
-
-Use the command that matches your setup:
-
-Repository source checkout (run from repository root):
+From your workspace root:
 
 ```bash
-node examples/minimal-ws-host/server.js path/to/my-project
+node node_modules/nerveflow/examples/composable-reference-host/server.js
 ```
 
-If your workflow files are in the current directory, you can use:
-
-```bash
-node examples/minimal-ws-host/server.js
+Host endpoint:
 ```
-
-Project installed with npm (run from your project directory after `npm install nerveflow`):
-
-```bash
-node node_modules\nerveflow\examples\minimal-ws-host\server.js
-```
-
-Host endpoints:
-
-```text
-http://127.0.0.1:4190
 ws://127.0.0.1:4190/api/runtime/ws
 ```
 
 What changed:
 
-1. Before: you started runtime directly.
-2. Now: the host process owns runtime execution and tool integrations.
-3. Your event client flow stays the same (`npx nerve-send` over WS).
+The runtime now executes inside a host process.
+The host owns external capability attachment.
+Your client workflow stays the same.
 
-## 4. Minimal host tool: get_time
+You still send events over the same WS runtime surface.
 
-In `examples/minimal-ws-host/server.js`, the host provides exactly one tool via `createToolRuntime(...)`:
+---
 
-```js
-const toolRuntime = createToolRuntime({
-  providers: [
-    {
-      async get_time() {
-        return new Date().toISOString()
-      },
-    },
-  ],
-})
+## 3. Add a simple host capability
+
+From your workspace root:
+```
+npx nerve-compose add mcp --json
+```
+This scaffolds:
+
+- MCP capability wiring
+- a local sample MCP server
+- workspace capability bindings
+
+Validate the workspace:
+```
+npx nerve-compose validate --json
+```
+Expected:
+```json
+{
+  "ok": true
+}
 ```
 
-This keeps the concept focused:
+---
 
-1. workflow asks for a tool
-2. host executes the tool
-3. runtime stays deterministic
+## 4. Update your workflow
 
-## 5. Test with nerve-send
+Update your `workflow.nrv` to call a tool. Inside your `on external "user_message"` handler, change this line:
 
-```bash
-npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "hello"
+```nrv
+reply = model("llama3.2:latest", messages=state.conversation)
 ```
 
-What to observe:
+to this:
 
-1. `nerve-send` still works as before.
-2. Event goes to runtime through the host WS surface.
-3. Workflow calls `tool("get_time")`.
-4. Host returns UTC timestamp.
-
-Optional: inspect execution in Nerve Studio
-
-You can attach Studio to the same host websocket endpoint to inspect events, outputs, and execution flow while the host is running.
-
-```bash
-npx nerve-studio --remote-ws ws://127.0.0.1:4190/api/runtime/ws
+```nrv
+reply = agent(
+  "workspace_guide",
+  event.value,
+  tools={
+    mode: "governed",
+    allow: [ "echo" ],
+    maxRounds: 4
+  }
+)
 ```
 
-Then open:
 
-```text
-http://localhost:4173
-```
 
-## 6. What you learned
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 5. What you learned
 
 1. Host is the capability boundary around runtime execution.
 2. You can keep your existing WS client workflow.
 3. Tool calls are host-provided but workflow-orchestrated.
 
-## Want to make it real?
+## Next
 
-Core onboarding is complete. Choose your next focus:
+Add a real capability:
 
 - [step-6a.md](step-6a.md) — Add a vector database for real RAG
 - [step-6b.md](step-6b.md) — Add speech capability
 - [step-6c.md](step-6c.md) — Add MCP servers
+
+## If you hadn't done it yet: scaffold documentation profiles
+
+If you want guided project-generation or AI-assisted workflows, you can scaffold documentation profiles into your workspace:
+
+```bash
+# Minimal guide docs
+npx nerve-compose add docs minimal
+
+# AI/project-generation docs
+npx nerve-compose add docs ai
+```
 
 Or continue exploring in the [User Handbook](../guide/13-user-handbook.md).
 

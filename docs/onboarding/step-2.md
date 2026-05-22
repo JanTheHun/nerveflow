@@ -122,52 +122,30 @@ Replace state.init.json with:
 
 ## Paste chatbot workflow
 
-Choose your model label based on the path you selected:
-
-**Local path (Ollama):**
+In your `workflow.nrv`, replace
 ```nrv
+state.count = state.count + 1
+output text "(no output, ${state.count})"
+```
+with
+```nrv
+state.conversation = state.conversation + [
+  {
+    role: "user",
+    content: event.value
+  }
+]
+
 reply = model("llama3.2:latest", messages=state.conversation)
-```
 
-**External API path:**
-```nrv
-reply = model("gpt-4o-mini", messages=state.conversation)
-# or: reply = model("llama-3.3-70b-versatile", messages=state.conversation)
-# or: reply = model("gemini-2.5-flash-lite", messages=state.conversation)
-```
+state.conversation = state.conversation + [
+  {
+    role: "assistant",
+    content: assistant_text
+  }
+]
 
-Replace `workflow.nrv` with the complete workflow below, using the model label from your chosen path:
-
-```nrv
-on external "user_message"
-  if event.value == "hello nerve"
-    output text "hello world!"
-  else
-    state.conversation = state.conversation + [
-      {
-        role: "user",
-        content: event.value
-      }
-    ]
-
-    reply = model("llama3.2:latest", messages=state.conversation)
-
-    if reply.content
-      assistant_text = reply.content
-    else
-      assistant_text = reply
-    end
-
-    state.conversation = state.conversation + [
-      {
-        role: "assistant",
-        content: assistant_text
-      }
-    ]
-
-    output text assistant_text
-  end
-end
+output text assistant_text
 ```
 
 **Remember:** swap `llama3.2:latest` in the workflow to match your chosen model label from above.
@@ -242,7 +220,8 @@ nerve-send syntax:
 ```bash
 npx nerve-send <wsUrl> <eventType> [message] [--timeout-ms <n>]
 ```
+## Next
 
-Next: continue with [step-3.md](step-3.md) to introduce Nerve Studio.
+Attach Nerve Studio, an observability surface in [step-3.md](step-3.md).
 
 If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../../MANIFESTO.md).

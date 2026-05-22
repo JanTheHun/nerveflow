@@ -52,14 +52,19 @@ In Studio, click on the **"show input"** button to open the Input Panel, then co
 5. Runtime events continue updating in the UI for both branches.
 6. Repeated sends remain deterministic and inspectable.
 
-## 5. Continue
+## 5. Advanced Nerve Studio features:
 
-Next onboarding step:
+- [nerve-studio/README.md](../../nerve-studio/README.md)
 
-- [step-4.md](step-4.md)
 
-For advanced Studio modes and remote options, see:
+## 6. What you learned
 
-- [../../nerve-studio/README.md](../../nerve-studio/README.md)
+1. The runtime can be inspected through attachable surfaces.
+2. Events, state, and outputs remain observable while workflows execute.
+3. Deterministic orchestration becomes easier to debug and trust when execution is visible.
+
+## Next
+
+Learn about bounded decisions in [step-4.md](step-4.md).
 
 If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../../MANIFESTO.md).

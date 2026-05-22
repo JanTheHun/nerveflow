@@ -26,6 +26,8 @@
     "sync:editor-core": "node scripts/sync-editor-core-to-studio.js",
     "verify:editor-core-sync": "node scripts/verify-editor-core-sync.js",
     "verify:editor-core-pack": "node scripts/verify-editor-core-pack.js",
+    "check:studio-colors": "node scripts/verify-studio-colors.js",
+    "check:studio-colors:strict": "node scripts/verify-studio-colors.js --strict",
     "build:studio": "npm run sync:editor-core ; node scripts/build-app-js.js",
     "dev:remote": "node bin/nerve-dev-remote.js",
     "model:check": "node bin/nerve-model-check.js",

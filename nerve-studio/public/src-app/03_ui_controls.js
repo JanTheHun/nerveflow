@@ -34,6 +34,7 @@ import {
   nextVReloadConfigBtn,
   nextVValidateBtn,
   nextVPromoteBtn,
+  nextVRefreshSnapshotBtn,
   nextVRunBtn,
   nextVRuntimeRunning,
   nextVCandidatePromotable,
@@ -46,7 +47,9 @@ import {
   nextVAttachWsUrlLabel,
   nextVAttachStartOverrideInput,
   nextVAttachStartOverrideLabel,
+  nextVEntrypointLabel,
   nextVOpenWorkspaceBtn,
+  nextVConfigRow,
   nextVWorkspaceDirInput,
   nextVRuntimeTargetInput,
   nextVRuntimeTargetState,
@@ -66,6 +69,9 @@ import {
   nextVViewEditor,
   nextVViewGraph,
   nextVViewState,
+  nextVThemeModeInput,
+  nextVThemeChipDayBtn,
+  nextVThemeChipNightBtn,
   outputHeaderBadge,
   outputHeaderTitle,
   remoteModeBadge,
@@ -187,7 +193,7 @@ export function setModePanelLabels(mode) {
 
 export function setNextVPrimaryView(view, options = {}) {
   const { persist = true } = options
-  const nextView = view === 'graph' ? 'graph' : 'editor'
+  const nextView = view === 'graph' ? 'graph' : 'graph'
   const previousView = nextVViewState.currentView
 
   if (previousView === 'graph' && nextView !== 'graph') {
@@ -229,6 +235,32 @@ export function setNextVPrimaryView(view, options = {}) {
 
   if (persist) {
     localStorage.setItem(storageKeys.nextVPrimaryView, nextView)
+  }
+}
+
+export function normalizeNextVThemeMode(value) {
+  return String(value ?? '').trim().toLowerCase() === 'day' ? 'day' : 'night'
+}
+
+export function setNextVThemeMode(mode, options = {}) {
+  const { persist = true } = options
+  const nextMode = normalizeNextVThemeMode(mode)
+  document.body.dataset.theme = nextMode
+  if (nextVThemeModeInput) {
+    nextVThemeModeInput.value = nextMode
+  }
+  if (nextVThemeChipDayBtn) {
+    const active = nextMode === 'day'
+    nextVThemeChipDayBtn.classList.toggle('active', active)
+    nextVThemeChipDayBtn.setAttribute('aria-pressed', active ? 'true' : 'false')
+  }
+  if (nextVThemeChipNightBtn) {
+    const active = nextMode === 'night'
+    nextVThemeChipNightBtn.classList.toggle('active', active)
+    nextVThemeChipNightBtn.setAttribute('aria-pressed', active ? 'true' : 'false')
+  }
+  if (persist) {
+    localStorage.setItem(storageKeys.nextVThemeMode, nextMode)
   }
 }
 
@@ -699,6 +731,41 @@ function syncNextVAttachStartOverrideUi(showAttachControls) {
   }
 }
 
+function syncNextVAttachConfigUi() {
+  const isAttachMode = getNextVRuntimeTarget() === 'attach'
+  const hideInAttachMode = isAttachMode
+
+  if (nextVConfigRow) {
+    nextVConfigRow.hidden = hideInAttachMode
+    nextVConfigRow.style.display = hideInAttachMode ? 'none' : ''
+  }
+
+  if (nextVWorkspaceDirInput) {
+    nextVWorkspaceDirInput.hidden = hideInAttachMode
+    nextVWorkspaceDirInput.style.display = hideInAttachMode ? 'none' : ''
+  }
+
+  if (nextVOpenWorkspaceBtn) {
+    nextVOpenWorkspaceBtn.hidden = hideInAttachMode
+    nextVOpenWorkspaceBtn.style.display = hideInAttachMode ? 'none' : ''
+  }
+
+  if (nextVEntrypointLabel) {
+    nextVEntrypointLabel.hidden = hideInAttachMode
+    nextVEntrypointLabel.style.display = hideInAttachMode ? 'none' : ''
+  }
+
+  if (nextVEntrypointInput) {
+    nextVEntrypointInput.hidden = hideInAttachMode
+    nextVEntrypointInput.style.display = hideInAttachMode ? 'none' : ''
+  }
+
+  if (nextVAttachStartOverrideLabel) {
+    nextVAttachStartOverrideLabel.hidden = true
+    nextVAttachStartOverrideLabel.style.display = 'none'
+  }
+}
+
 function syncNextVAttachRuntimeOwnershipUi() {
   const isAttachMode = getNextVRuntimeTarget() === 'attach'
   const lockToAttachedRuntime = isAttachMode && !isNextVAttachStartOverrideEnabled()
@@ -750,7 +817,11 @@ export function syncNextVAttachWsUrlControls() {
   if (nextVAttachControls) {
     nextVAttachControls.hidden = !showAttachControls
   }
+  if (nextVAttachStatus) {
+    nextVAttachStatus.hidden = !showAttachControls
+  }
   syncNextVAttachStartOverrideUi(showAttachControls)
+  syncNextVAttachConfigUi()
   syncNextVAttachRuntimeOwnershipUi()
   syncNextVAttachSessionUi()
 }
@@ -1029,39 +1100,49 @@ export function updateRemoteModeBadge() {
   if (!remoteModeBadge) return
   remoteModeBadge.hidden = isRemoteMode !== true
   if (!isRemoteMode) {
-    remoteModeBadge.textContent = 'remote runtime'
-    remoteModeBadge.title = 'remote runtime'
+    remoteModeBadge.textContent = ''
+    remoteModeBadge.title = ''
     return
   }
 
-  let label = 'remote runtime'
-  if (isRemoteControlMode) {
-    label = nextVRuntimeTargetState.target === 'attach'
-      ? 'attached WS runtime (control)'
-      : 'remote WS runtime (control)'
-  } else if (remoteTransport === 'mqtt') {
-    label = 'remote MQTT runtime'
-  }
-
   const workspaceLabel = remoteRuntimeWorkspaceDir && remoteRuntimeWorkspaceDir !== '.'
-    ? remoteRuntimeWorkspaceDir
+    ? (pathBasename(remoteRuntimeWorkspaceDir) || remoteRuntimeWorkspaceDir)
     : ''
   const entryLabel = pathBasename(remoteRuntimeEntrypointPath) || remoteRuntimeEntrypointPath
-  if (workspaceLabel && entryLabel) {
-    label = `${label}: ${workspaceLabel} / ${entryLabel}`
-  } else if (workspaceLabel) {
-    label = `${label}: ${workspaceLabel}`
-  } else if (entryLabel) {
-    label = `${label}: ${entryLabel}`
+
+  remoteModeBadge.hidden = !workspaceLabel && !entryLabel
+  if (remoteModeBadge.hidden) {
+    remoteModeBadge.textContent = ''
+    remoteModeBadge.title = ''
+    return
   }
 
-  remoteModeBadge.textContent = label
-  remoteModeBadge.title = label
+  remoteModeBadge.textContent = ''
+
+  if (workspaceLabel) {
+    const workspaceChip = document.createElement('span')
+    workspaceChip.className = 'remote-mode-badge-chip'
+    workspaceChip.textContent = workspaceLabel
+    remoteModeBadge.appendChild(workspaceChip)
+  }
+
+  if (entryLabel) {
+    const entryChip = document.createElement('span')
+    entryChip.className = 'remote-mode-badge-chip remote-mode-badge-chip-entry'
+    entryChip.textContent = entryLabel
+    remoteModeBadge.appendChild(entryChip)
+  }
+
+  const titleParts = []
+  if (workspaceLabel) titleParts.push(workspaceLabel)
+  if (entryLabel) titleParts.push(entryLabel)
+  remoteModeBadge.title = titleParts.join(' / ')
 }
 
 export function setNextVRunControls() {
   const isExternalMode = nextVRuntimeTargetState.target === 'external'
   const isAttachMode = nextVRuntimeTargetState.target === 'attach'
+  const isWsRemoteMode = isRemoteMode && remoteTransport === 'ws'
   const attachOverrideEnabled = isNextVAttachStartOverrideEnabled()
   const hasEntrypoint = isAttachMode && !attachOverrideEnabled
     ? Boolean(normalizeRelativePath(remoteRuntimeEntrypointPath ?? ''))
@@ -1100,6 +1181,10 @@ export function setNextVRunControls() {
   
   if (nextVStopBtn) nextVStopBtn.disabled = remoteBlocksControl || !nextVRuntimeRunning || isBusy
   const isEmbeddedMode = !isRemoteMode && !isExternalMode && !isAttachMode
+  if (nextVReloadConfigBtn) nextVReloadConfigBtn.hidden = isWsRemoteMode
+  if (nextVValidateBtn) nextVValidateBtn.hidden = isWsRemoteMode
+  if (nextVPromoteBtn) nextVPromoteBtn.hidden = isWsRemoteMode
+  if (nextVRefreshSnapshotBtn) nextVRefreshSnapshotBtn.hidden = isWsRemoteMode
   if (nextVReloadConfigBtn) nextVReloadConfigBtn.disabled = !isEmbeddedMode || !nextVRuntimeRunning || isBusy
   if (nextVValidateBtn) nextVValidateBtn.disabled = !isEmbeddedMode || !nextVRuntimeRunning || isBusy
   if (nextVPromoteBtn) nextVPromoteBtn.disabled = !isEmbeddedMode || !nextVCandidatePromotable || isBusy

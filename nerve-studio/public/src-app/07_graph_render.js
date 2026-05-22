@@ -71,6 +71,12 @@ import {
   appendScriptLogRow
 } from './13_layout.js'
 
+function getThemeColorToken(name, fallback) {
+  const rootStyle = getComputedStyle(document.body || document.documentElement)
+  const value = String(rootStyle.getPropertyValue(name) ?? '').trim()
+  return value || fallback
+}
+
 export function renderNextVGraph(data = {}, options = {}) {
   const { preserveViewport = false, viewportState = null } = options
   if (!nextVGraphOutput) return
@@ -463,6 +469,7 @@ export function renderNextVGraph(data = {}, options = {}) {
 
   const autoFollowLabel = document.createElement('label')
   autoFollowLabel.className = 'nextv-graph-toolbar-check'
+  autoFollowLabel.hidden = true
   autoFollowLabel.title = 'Auto-select active handler node during runtime'
   const autoFollowCheckbox = document.createElement('input')
   autoFollowCheckbox.type = 'checkbox'
@@ -476,6 +483,7 @@ export function renderNextVGraph(data = {}, options = {}) {
   const controlBranchesBtn = document.createElement('button')
   controlBranchesBtn.type = 'button'
   controlBranchesBtn.className = 'nextv-graph-layout-btn'
+  controlBranchesBtn.hidden = true
   controlBranchesBtn.classList.toggle('active', isNextVControlBranchesVisible())
   controlBranchesBtn.textContent = isNextVControlBranchesVisible() ? 'hide branches' : 'show branches'
   controlBranchesBtn.title = 'toggle control branch nodes'
@@ -486,6 +494,7 @@ export function renderNextVGraph(data = {}, options = {}) {
   const controlOverlayBtn = document.createElement('button')
   controlOverlayBtn.type = 'button'
   controlOverlayBtn.className = 'nextv-graph-layout-btn'
+  controlOverlayBtn.hidden = true
   controlOverlayBtn.classList.toggle('active', isNextVControlOverlayEnabled())
   controlOverlayBtn.textContent = isNextVControlOverlayEnabled() ? 'boundedness on' : 'boundedness off'
   controlOverlayBtn.title = 'toggle boundedness overlay'
@@ -500,7 +509,6 @@ export function renderNextVGraph(data = {}, options = {}) {
   toolbar.appendChild(resetBtn)
   toolbar.appendChild(zoomLabel)
   toolbar.appendChild(hint)
-  toolbar.appendChild(autoFollowLabel)
   toolbar.appendChild(controlBranchesBtn)
   toolbar.appendChild(controlOverlayBtn)
   wrap.appendChild(toolbar)
@@ -527,7 +535,6 @@ export function renderNextVGraph(data = {}, options = {}) {
     appendTransitionChip(legend, 'output', 'declared_output')
     appendTransitionChip(legend, 'tool effect', 'side_effect')
     appendTransitionChip(legend, 'mixed', 'mixed')
-    wrap.appendChild(legend)
   }
 
   if (visibleControlGraphEdges.length > 0 && isNextVControlOverlayEnabled()) {
@@ -538,7 +545,6 @@ export function renderNextVGraph(data = {}, options = {}) {
     appendTransitionChip(controlLegend, 'control operational', 'control-operational')
     appendTransitionChip(controlLegend, 'control mixed', 'control-mixed')
     appendTransitionChip(controlLegend, 'control unknown', 'control-unknown')
-    wrap.appendChild(controlLegend)
   }
 
   const viewport = document.createElement('div')
@@ -624,6 +630,9 @@ export function renderNextVGraph(data = {}, options = {}) {
   svg.dataset.padding = String(padding)
 
   const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs')
+  const edgeColor = getThemeColorToken('--graph-edge-normal', '#5f89a7')
+  const cycleEdgeColor = getThemeColorToken('--graph-edge-cycle', '#f44747')
+  const activeEdgeColor = getThemeColorToken('--graph-edge-active', '#9cdcfe')
 
   const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'marker')
   arrow.setAttribute('id', 'nextv-graph-arrow')
@@ -634,7 +643,7 @@ export function renderNextVGraph(data = {}, options = {}) {
   arrow.setAttribute('orient', 'auto')
   const arrowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path')
   arrowPath.setAttribute('d', 'M 0 0 L 8 4 L 0 8 z')
-  arrowPath.setAttribute('fill', '#5f89a7')
+  arrowPath.setAttribute('fill', edgeColor)
   arrow.appendChild(arrowPath)
 
   const cycleArrow = document.createElementNS('http://www.w3.org/2000/svg', 'marker')
@@ -646,7 +655,7 @@ export function renderNextVGraph(data = {}, options = {}) {
   cycleArrow.setAttribute('orient', 'auto')
   const cycleArrowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path')
   cycleArrowPath.setAttribute('d', 'M 0 0 L 8 4 L 0 8 z')
-  cycleArrowPath.setAttribute('fill', '#f44747')
+  cycleArrowPath.setAttribute('fill', cycleEdgeColor)
   cycleArrow.appendChild(cycleArrowPath)
 
   const activeArrow = document.createElementNS('http://www.w3.org/2000/svg', 'marker')
@@ -658,7 +667,7 @@ export function renderNextVGraph(data = {}, options = {}) {
   activeArrow.setAttribute('orient', 'auto')
   const activeArrowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path')
   activeArrowPath.setAttribute('d', 'M 0 0 L 9 4.5 L 0 9 z')
-  activeArrowPath.setAttribute('fill', '#9cdcfe')
+  activeArrowPath.setAttribute('fill', activeEdgeColor)
   activeArrow.appendChild(activeArrowPath)
 
   defs.appendChild(arrow)

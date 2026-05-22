@@ -90,6 +90,7 @@ export const storageKeys = {
   nextVEditorGridSplit: 'local-agent.nextv.editorGridSplit',
   nextVEditorLayout: 'local-agent.nextv.editorLayout',
   nextVEditorTabSize: 'local-agent.nextv.editorTabSize',
+  nextVThemeMode: 'local-agent.nextv.themeMode',
   nextVEditorSurfaceBeta: 'local-agent.nextv.editorSurfaceBeta',
   nextVEditorSurfaceTelemetry: 'local-agent.nextv.editorSurfaceTelemetry',
 }
@@ -376,6 +377,8 @@ export const nextVViewGraph = document.getElementById('nextv-view-graph')
 export const nextVViewCallInspector = document.getElementById('nextv-view-call-inspector')
 export const toggleNextVDevConsoleBtn = document.getElementById('toggle-nextv-dev-console-btn')
 export const toggleUserIOBtn = document.getElementById('toggle-user-io-btn')
+export const nextVThemeChipDayBtn = document.getElementById('nextv-theme-chip-day')
+export const nextVThemeChipNightBtn = document.getElementById('nextv-theme-chip-night')
 export const nextVInputTabs = document.getElementById('nextv-input-tabs')
 export const scriptDirtyBadge = document.getElementById('script-dirty-badge')
 export const scriptOpenFileLabel = document.getElementById('script-open-file-label')
@@ -383,6 +386,8 @@ export const openFileTabs = document.getElementById('open-file-tabs')
 export const toggleNextVFilesBtn = document.getElementById('toggle-nextv-files-btn')
 export const nextVWorkspaceDirInput = document.getElementById('nextv-workspace-dir')
 export const nextVOpenWorkspaceBtn = document.getElementById('nextv-open-workspace-btn')
+export const nextVConfigRow = document.getElementById('nextv-config-row')
+export const nextVEntrypointLabel = document.getElementById('nextv-entrypoint-label')
 export const nextVEntrypointInput = document.getElementById('nextv-entrypoint')
 export const nextVAttachStartOverrideLabel = document.getElementById('nextv-attach-start-override-label')
 export const nextVAttachStartOverrideInput = document.getElementById('nextv-attach-start-override')
@@ -426,6 +431,7 @@ export const nextVStopBtn = document.getElementById('nextv-stop-btn')
 export const nextVReloadConfigBtn = document.getElementById('nextv-reload-config-btn')
 export const nextVValidateBtn = document.getElementById('nextv-validate-btn')
 export const nextVPromoteBtn = document.getElementById('nextv-promote-btn')
+export const nextVRefreshSnapshotBtn = document.getElementById('nextv-refresh-snapshot-btn')
 export const nextVCandidateStatusRow = document.getElementById('nextv-candidate-status-row')
 export const nextVCandidateStatusBadge = document.getElementById('nextv-candidate-status-badge')
 export const nextVCandidateIssueCount = document.getElementById('nextv-candidate-issue-count')
@@ -437,6 +443,7 @@ export const nextVAttachBtn = document.getElementById('nextv-attach-btn')
 export const nextVDetachBtn = document.getElementById('nextv-detach-btn')
 export const nextVAttachStatus = document.getElementById('nextv-attach-status')
 export const nextVEditorTabSizeInput = document.getElementById('nextv-editor-tab-size')
+export const nextVThemeModeInput = document.getElementById('nextv-theme-mode')
 export const nextVEditorSurfaceBetaToggle = document.getElementById('nextv-editor-surface-beta-toggle')
 export const nextVEditorSurfaceTelemetryToggle = document.getElementById('nextv-editor-surface-telemetry-toggle')
 export const remoteModeBadge = document.getElementById('remote-mode-badge')

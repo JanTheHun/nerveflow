@@ -9,6 +9,7 @@ import {
   nextVRuntimeTargetState,
   userOutputFilterState,
   scriptInputs,
+  settingsMenu,
   nextVWorkspaceDirInput,
   nextVEntrypointInput,
   workspace
@@ -34,6 +35,8 @@ import {
   setNextVRuntimeTarget,
   setNextVAttachWsUrl,
   setNextVAttachStartOverrideEnabled,
+  setNextVThemeMode,
+  normalizeNextVThemeMode,
   toggleNextVIngressControlsSetting,
   setDeclaredExternalChannels,
   setNextVInputTab,
@@ -173,11 +176,11 @@ export function initLayoutState() {
   setNextVInputTab(inputPanelState.currentTab, { persist: false })
   const imagesStored = localStorage.getItem(storageKeys.nextVImagesOpen) === '1'
   setNextVImagesOpen(imagesStored, { persist: false })
-  const ingressControlsVisibleStored = localStorage.getItem(storageKeys.nextVIngressControlsVisible)
-  const ingressControlsVisible = ingressControlsVisibleStored == null ? true : ingressControlsVisibleStored === '1'
-  setNextVIngressControlsVisible(ingressControlsVisible, { persist: false })
+  setNextVIngressControlsVisible(false, { persist: false })
   setNextVRuntimeTarget(nextVRuntimeTargetState.target, { persist: false, sync: false })
   setNextVAttachWsUrl(nextVRuntimeTargetState.attachWsUrl, { persist: false, sync: false })
+  const storedThemeMode = normalizeNextVThemeMode(localStorage.getItem(storageKeys.nextVThemeMode) ?? 'night')
+  setNextVThemeMode(storedThemeMode, { persist: false })
 
   if (sessionRemoteControl) {
     // PATCH: Allow 'attach' mode even when remoteControl is true.
@@ -275,6 +278,15 @@ export function setupNextVEventsScrollListener() {
   })
 }
 
+function setupSettingsMenuDismiss() {
+  if (!settingsMenu) return
+  document.addEventListener('pointerdown', (event) => {
+    if (!settingsMenu.hasAttribute('open')) return
+    if (settingsMenu.contains(event.target)) return
+    settingsMenu.removeAttribute('open')
+  })
+}
+
 setupSplitter()
 setupFileTreeSplitter()
 setupNextVStateDiffSplitter()
@@ -286,6 +298,7 @@ initNextVCallInspectorPanelChrome()
 initNextVCallInspector()
 initNextVTokenClickPlugin()
 setupNextVEventsScrollListener()
+setupSettingsMenuDismiss()
 initLayoutState()
 initFileTreeCtxMenu()
 updateScriptRunControls()
@@ -307,6 +320,7 @@ Object.assign(window, {
   setNextVRuntimeTarget,
   setNextVAttachWsUrl,
   setNextVAttachStartOverrideEnabled,
+  setNextVThemeMode,
   attachNextVRuntime,
   detachNextVRuntime,
   setUserIOPanelOpen,

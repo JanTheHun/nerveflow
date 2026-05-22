@@ -1656,8 +1656,7 @@ export function persistNextVConfig() {
 export function restoreNextVConfig() {
   const workspaceDir = normalizeNextVWorkspaceDir(localStorage.getItem(storageKeys.nextVWorkspaceDir) ?? '')
   const entrypointPath = normalizeRelativePath(localStorage.getItem(storageKeys.nextVEntrypoint) ?? '')
-  const storedPrimaryView = localStorage.getItem(storageKeys.nextVPrimaryView)
-  const primaryView = storedPrimaryView === 'editor' ? 'editor' : 'graph'
+  const primaryView = 'graph'
   const storedAutoSave = localStorage.getItem(storageKeys.nextVAutoSave)
   const autoSaveEnabled = storedAutoSave == null ? false : storedAutoSave === '1'
   const storedDevTab = localStorage.getItem(storageKeys.nextVDevTab)

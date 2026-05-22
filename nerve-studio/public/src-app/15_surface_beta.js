@@ -619,15 +619,13 @@ function publishSurfaceTelemetrySnapshot(telemetry) {
 }
 
 function readStoredSurfaceBetaEnabled() {
-  return localStorage.getItem(storageKeys.nextVEditorSurfaceBeta) === '1'
+  const stored = localStorage.getItem(storageKeys.nextVEditorSurfaceBeta)
+  if (stored == null) return true
+  return stored === '1'
 }
 
 function persistSurfaceBetaEnabled(enabled) {
-  if (enabled) {
-    localStorage.setItem(storageKeys.nextVEditorSurfaceBeta, '1')
-  } else {
-    localStorage.removeItem(storageKeys.nextVEditorSurfaceBeta)
-  }
+  localStorage.setItem(storageKeys.nextVEditorSurfaceBeta, enabled ? '1' : '0')
 }
 
 function readStoredSurfaceTelemetryVisible() {

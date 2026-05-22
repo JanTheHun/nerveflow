@@ -10,9 +10,9 @@
 
   <header>
     <span class="brand">nerve-studio</span>
-    <span id="remote-mode-badge" class="remote-mode-badge" hidden>remote MQTT runtime</span>
     <div class="header-controls">
       <div class="nextv-attach-header-bar">
+        <span id="nextv-attach-status" class="nextv-attach-status" data-state="detached">detached</span>
         <input
           id="nextv-attach-ws-url"
           class="nextv-attach-url-input"
@@ -26,34 +26,41 @@
         <div id="nextv-attach-controls" class="nextv-attach-controls" hidden>
           <button id="nextv-attach-btn" type="button" onclick="attachNextVRuntime()">attach</button>
           <button id="nextv-detach-btn" type="button" onclick="detachNextVRuntime()" disabled>detach</button>
-          <span id="nextv-attach-status" class="nextv-attach-status" data-state="detached">detached</span>
         </div>
+        <span id="remote-mode-badge" class="remote-mode-badge" hidden>remote MQTT runtime</span>
+        <div class="nextv-top-run-controls">
+          <button type="button" id="nextv-start-btn" onclick="startNextVRuntime()">start</button>
+          <button type="button" id="nextv-stop-btn" onclick="stopNextVRuntime()" disabled>stop</button>
+        </div>
+      </div>
+      <div class="nextv-theme-chip-toggle" aria-label="color palette">
+        <button id="nextv-theme-chip-day" type="button" class="nextv-theme-chip" onclick="setNextVThemeMode('day')" aria-pressed="false">day</button>
+        <button id="nextv-theme-chip-night" type="button" class="nextv-theme-chip" onclick="setNextVThemeMode('night')" aria-pressed="true">night</button>
       </div>
       <details id="settings-menu" class="settings-menu">
         <summary id="settings-btn" class="settings-btn" title="settings" aria-label="settings">⚙</summary>
         <div class="settings-popover" role="menu" aria-label="settings">
-          <div class="settings-group-label">nextv</div>
           <label class="settings-item" for="nextv-runtime-target">runtime target</label>
           <select id="nextv-runtime-target" class="settings-item" onchange="setNextVRuntimeTarget(this.value)">
             <option value="embedded" disabled>embedded runtime</option>
             <option value="external" disabled>external runtime process</option>
             <option value="attach" selected>attach WS runtime</option>
           </select>
-          <label class="settings-item" for="nextv-editor-tab-size">editor tab size</label>
-          <select id="nextv-editor-tab-size" class="settings-item" onchange="setNextVEditorTabSize(this.value)">
+          <label class="settings-item" for="nextv-editor-tab-size" hidden>editor tab size</label>
+          <select id="nextv-editor-tab-size" class="settings-item" onchange="setNextVEditorTabSize(this.value)" hidden>
             <option value="2">2 spaces</option>
             <option value="4">4 spaces</option>
             <option value="8">8 spaces</option>
           </select>
-          <label class="settings-item check-label settings-item-checkbox" role="menuitemcheckbox" aria-label="enable surface switchers in editor panes">
+          <label class="settings-item check-label settings-item-checkbox" role="menuitemcheckbox" aria-label="enable surface switchers in editor panes" hidden>
             <input id="nextv-editor-surface-beta-toggle" type="checkbox" onchange="setNextVEditorSurfaceBetaEnabled(this.checked)">
             enable surface switchers
           </label>
-          <label class="settings-item check-label settings-item-checkbox" role="menuitemcheckbox" aria-label="show surface telemetry row">
+          <label class="settings-item check-label settings-item-checkbox" role="menuitemcheckbox" aria-label="show surface telemetry row" hidden>
             <input id="nextv-editor-surface-telemetry-toggle" type="checkbox" onchange="setNextVEditorSurfaceTelemetryVisible(this.checked)">
             show surface telemetry
           </label>
-          <label class="settings-item check-label settings-item-checkbox" role="menuitemcheckbox" aria-label="show ingress connectors">
+          <label class="settings-item check-label settings-item-checkbox" role="menuitemcheckbox" aria-label="show ingress connectors" hidden>
             <input id="nextv-show-ingress-toggle" type="checkbox" onchange="toggleNextVIngressControlsSetting()" checked>
             show ingress connectors
           </label>
@@ -81,25 +88,23 @@
           <div id="script-inputs"></div>
           <button type="button" onclick="addScriptInputRow()">add input</button>
         </div>
-        <div class="footer-row nextv-config-row">
+        <div id="nextv-config-row" class="footer-row nextv-config-row">
           <input id="nextv-workspace-dir" type="text" placeholder="workspace folder (optional)" autocomplete="off" spellcheck="false" />
           <button type="button" id="nextv-open-workspace-btn" onclick="openNextVWorkspace()">open</button>
-          <span class="row-label">entrypoint</span>
+          <span id="nextv-entrypoint-label" class="row-label">entrypoint</span>
           <input id="nextv-entrypoint" type="text" placeholder="path/to/main.nrv (or .wfs)" autocomplete="off" spellcheck="false" />
           <label id="nextv-attach-start-override-label" class="check-label nextv-attach-start-override" hidden>
             <input id="nextv-attach-start-override" type="checkbox" onchange="setNextVAttachStartOverrideEnabled(this.checked)">
             override attached path
           </label>
           <button type="button" id="nextv-run-btn" onclick="runNextVRuntime()" hidden>run</button>
-          <button type="button" id="nextv-start-btn" onclick="startNextVRuntime()">start</button>
-          <button type="button" id="nextv-stop-btn" onclick="stopNextVRuntime()" disabled>stop</button>
           <button type="button" id="nextv-reload-config-btn" onclick="reloadNextVRuntimeConfig()" disabled>reload config</button>
           <button type="button" id="nextv-validate-btn" onclick="submitNextVCandidate()" disabled>validate</button>
           <button type="button" id="nextv-promote-btn" onclick="promoteNextVCandidate()" disabled>promote</button>
           <button id="nextv-refresh-snapshot-btn" type="button" onclick="refreshNextVSnapshot()">snapshot</button>
         </div>
         <div id="nextv-candidate-status-row" class="footer-row nextv-candidate-row" hidden>
-          <span class="row-label">candidate</span>
+          <span class="row-label" hidden>candidate</span>
           <span id="nextv-candidate-status-badge"></span>
           <span id="nextv-candidate-issue-count"></span>
         </div>
@@ -114,7 +119,6 @@
         <div class="panel-header nextv-primary-header">
           <span id="script-header-title">script</span>
           <div id="nextv-primary-tabs" class="panel-tabs" role="tablist" aria-label="nextv primary views">
-            <button id="nextv-view-editor" type="button" class="panel-tab" role="tab" aria-selected="false" disabled onclick="setNextVPrimaryView('editor')">editor</button>
             <button id="nextv-view-graph" type="button" class="panel-tab" role="tab" aria-selected="true" onclick="setNextVPrimaryView('graph')">graph</button>
             <button id="nextv-view-call-inspector" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="toggleNextVCallInspectorPanel()">call inspector</button>
           </div>

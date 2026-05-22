@@ -45,11 +45,11 @@ on external "user_message"
       state.conversation = state.conversation + [
         {
           role: "assistant",
-          content: assistant_text
+          content: reply
         }
       ]
 
-      output text assistant_text
+      output text reply
     end
   end
 end
@@ -98,7 +98,7 @@ Expected: chatbot response from the `chat` branch
 
 Other useful patterns:
 
-1. `decide=[...]` on `agent(...)` for a single bounded scalar decision.
+1. `decide=[...]` on `model(...)` or `agent(...)` for a single bounded scalar decision.
 2. `try ...` to convert supported runtime/model/tool failures into an explicit `{ ok, ... }` envelope.
 3. `format="json"` when you want JSON-shaped output formatting, even without a strict decision contract.
 

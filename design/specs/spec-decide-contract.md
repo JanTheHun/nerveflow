@@ -8,15 +8,15 @@
 
 Provide a minimal, deterministic contract mode for extracting one bounded decision from model output without requiring structured JSON output.
 
-`decide` is a **scalar binding contract** on `agent(...)` — the simplest possible trust boundary in the binding model. It constrains model output to a finite set of string literals with immediate strict validation, returning a bounded scalar value directly. No structured output is required.
+`decide` is a **scalar binding contract** on `model(...)` or `agent(...)` — the simplest possible trust boundary in the binding model. It constrains model output to a finite set of string literals with immediate strict validation, returning a bounded scalar value directly. No structured output is required.
 
 ---
 
 ## Syntax
 
 ```nrv
-value = agent(
-  "agent_name",
+value = model(
+  "model_name",
   input,
   decide=["option1","option2","option3"]
 )
@@ -253,7 +253,7 @@ end
 
 ## One-Line Summary
 
-`decide` is a scalar binding contract for `agent(...)` that constrains plain text output to a declared option set, producing a bounded scalar string through runtime-authoritative validation.
+`decide` is a scalar binding contract for `model(...)` or `agent(...)` that constrains plain text output to a declared option set, producing a bounded scalar string through runtime-authoritative validation.
 
 ---
 

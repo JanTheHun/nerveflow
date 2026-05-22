@@ -184,7 +184,7 @@ For `try agent(...)` and `try model(...)`, the following must hold:
 
 - `on_contract_violation` is absent
 
-`returns`, `decide` (agent), and `retry_on_contract_violation` are valid with `try`.
+`returns`, `decide`, and `retry_on_contract_violation` are valid with `try`.
 
 If any disallowed option is present, runtime raises `INVALID_CALL_CONFIG`.
 

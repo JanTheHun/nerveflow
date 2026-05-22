@@ -29,6 +29,7 @@ const MODEL_NAMED_ARG_ALLOWLIST = new Set([
   'format',
   'returns',
   'validate',
+  'decide',
   'retry_on_contract_violation',
   'on_contract_violation',
 ])
@@ -2613,7 +2614,7 @@ function buildFunctions(options, runtimeContext) {
           kind: 'runtime',
           code: 'INVALID_MODEL_ARGUMENT',
           statement,
-          message: `model() received unsupported named argument "${key}". Use: model, prompt, instructions, messages, tools, format, returns, validate, retry_on_contract_violation, on_contract_violation.`,
+          message: `model() received unsupported named argument "${key}". Use: model, prompt, instructions, messages, tools, format, returns, validate, decide, retry_on_contract_violation, on_contract_violation.`,
         })
       }
 
@@ -2642,6 +2643,40 @@ function buildFunctions(options, runtimeContext) {
       }
 
       const returns = normalizeAgentReturnsValue(named?.returns ?? null, context)
+      const decideOptions = named?.decide ?? null
+
+      if (decideOptions != null) {
+        if (returns != null) {
+          throw nextvError({
+            line,
+            kind: 'runtime',
+            code: 'INVALID_CALL_CONFIG',
+            statement,
+            message: 'model() decide and returns are mutually exclusive.',
+          })
+        }
+        if (named?.validate != null) {
+          throw nextvError({
+            line,
+            kind: 'runtime',
+            code: 'INVALID_CALL_CONFIG',
+            statement,
+            message: 'model() decide sets its own validation mode. validate must not be specified alongside decide.',
+          })
+        }
+        try {
+          assertValidDecideOptions(decideOptions)
+        } catch (err) {
+          throw nextvError({
+            line,
+            kind: 'runtime',
+            code: err.code ?? 'INVALID_CALL_CONFIG',
+            statement,
+            message: String(err.message ?? 'Invalid decide options.'),
+          })
+        }
+      }
+
       const validateRaw = String(named?.validate ?? '').trim().toLowerCase()
       if (validateRaw && validateRaw !== 'strict' && validateRaw !== 'coerce' && validateRaw !== 'none') {
         throw nextvError({
@@ -2654,6 +2689,12 @@ function buildFunctions(options, runtimeContext) {
       }
       const validate = returns != null ? (validateRaw || 'coerce') : validateRaw
       const effectiveFormat = returns != null ? '' : format
+
+      let finalInstructions = instructions
+      if (decideOptions != null && typeof options.buildDecideGuidance === 'function') {
+        const decideGuidance = options.buildDecideGuidance(decideOptions)
+        finalInstructions = finalInstructions ? `${finalInstructions}\n\n${decideGuidance}` : decideGuidance
+      }
 
       const retryCountRaw = named?.retry_on_contract_violation
       const retryCount = Number.isInteger(retryCountRaw) ? retryCountRaw : 0
@@ -2690,12 +2731,13 @@ function buildFunctions(options, runtimeContext) {
         statement,
         args: {
           prompt,
-          instructions,
+          instructions: finalInstructions,
           messages,
           tools: toolsPolicy,
           format: effectiveFormat,
           returns,
           validate,
+          decide: decideOptions,
           retry_on_contract_violation: retryCount,
         },
       }, {
@@ -2709,12 +2751,13 @@ function buildFunctions(options, runtimeContext) {
         callResult = await options.callAgent({
           model: modelName,
           prompt,
-          instructions,
+          instructions: finalInstructions,
           messages,
           tools: toolsPolicy,
           format: effectiveFormat,
           returns,
           validate,
+          decide: decideOptions,
           retry_on_contract_violation: retryCount,
           on_contract_violation: onViolationExpr,
           state,
@@ -2788,6 +2831,24 @@ function buildFunctions(options, runtimeContext) {
         sourcePath,
         sourceLine,
       })
+
+      if (decideOptions != null && !(callResult && typeof callResult === 'object' && callResult.__nextv_decide_validated__)) {
+        const raw = normalizedCallResult.value
+        try {
+          return validateDecideOutput(raw, decideOptions)
+        } catch {
+          const decideErr = nextvError({
+            line,
+            kind: 'runtime',
+            code: 'AGENT_RETURN_CONTRACT_VIOLATION',
+            statement,
+            sourcePath,
+            sourceLine,
+            message: `decide contract violation: output "${String(raw ?? '').slice(0, 80)}" does not match any allowed value.`,
+          })
+          throw decideErr
+        }
+      }
 
       if (normalizedCallResult.metadata && Array.isArray(runtimeContext.agentCallMetadata)) {
         runtimeContext.agentCallMetadata.push({

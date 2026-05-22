@@ -1,10 +1,10 @@
-## Structured Agent Return Contracts (MVP v1 Final)
+## Structured Call Return Contracts (MVP v1 Final)
 
 ---
 
 # Purpose
 
-Allow `agent(...)` calls to declare expected structured JSON output using lightweight return contracts.
+Allow `agent(...)` and `model(...)` calls to declare expected structured JSON output using lightweight return contracts.
 
 Extends JSON output hints from:
 
@@ -32,7 +32,7 @@ They provide deterministic structure over probabilistic generation.
 
 Related boundary mode:
 
-- `decide=[...]` (agent only) is supported as scalar bounded-decision shorthand for single-value routing decisions.
+- `decide=[...]` is supported as scalar bounded-decision shorthand for single-value routing decisions.
 - `returns={...}` remains the structured object/array contract mode.
 - `decide` and `returns` are mutually exclusive for the same call.
 
@@ -636,7 +636,7 @@ Relationship note:
 
 Included:
 
-* agent-only support
+* model(...) and agent(...) support
 * prompt augmentation
 * recursive validation
 * strict mode

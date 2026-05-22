@@ -126,7 +126,7 @@ For `try` with `agent(...)` or `model(...)`, the call must not use:
 
 - `on_contract_violation`
 
-`returns`, `decide` (agent only), and `retry_on_contract_violation` are supported with `try`.
+`returns`, `decide`, and `retry_on_contract_violation` are supported with `try`.
 
 Invalid combinations raise `INVALID_CALL_CONFIG`.
 
@@ -158,7 +158,7 @@ Recognized integration calls:
 
 - `tool(name, ...)`
 - `agent(agentName, prompt?, instructions?, messages=?, format=?, returns=?, validate=?, decide=?, retry_on_contract_violation=?, on_contract_violation=?)`
-- `model(modelName, prompt?, instructions?, messages=?, format=?, returns=?, validate=?, retry_on_contract_violation=?, on_contract_violation=?)`
+- `model(modelName, prompt?, instructions?, messages=?, format=?, returns=?, validate=?, decide=?, retry_on_contract_violation=?, on_contract_violation=?)`
 
 `model()` has the same signature and semantics as `agent()`, but takes a direct model identifier instead of an agent profile name. The model name is passed directly to the transport layer.
 
@@ -174,7 +174,7 @@ reply = agent("visual", messages=history)
 
 `returns` accepts a JSON-like object or array contract template for structured agent output. When present, NerveFlow treats the call as JSON output mode and validates the parsed output against the contract.
 
-`decide` (agent only) is scalar bounded-decision shorthand. It accepts an array of string options and returns a single string value constrained to that set.
+`decide` is scalar bounded-decision shorthand. It accepts an array of string options and returns a single string value constrained to that set.
 
 Example:
 

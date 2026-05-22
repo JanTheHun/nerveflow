@@ -3400,3 +3400,56 @@ test('agent() decide mismatch preserves source metadata for included files', asy
   }
 })
 
+test('model() with decide returns matched declared literal', async () => {
+  const result = await runNextVScript(
+    'result = model("llama3.2:latest", "classify this", decide=["approve", "reject"])',
+    {
+      callAgent: async () => '  Approve!  ',
+    },
+  )
+  assert.equal(result.locals.result, 'approve')
+})
+
+test('model() with decide rejects when combined with returns', async () => {
+  await assert.rejects(
+    () => runNextVScript(
+      'result = model("llama3.2:latest", "classify", decide=["yes", "no"], returns={ intent: "" })',
+      { callAgent: async () => 'yes' },
+    ),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_CALL_CONFIG')
+      assert.match(err.message, /decide.*returns|returns.*decide/i)
+      return true
+    },
+  )
+})
+
+test('model() with decide rejects when combined with validate', async () => {
+  await assert.rejects(
+    () => runNextVScript(
+      'result = model("llama3.2:latest", "classify", decide=["yes", "no"], validate="none")',
+      { callAgent: async () => 'yes' },
+    ),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_CALL_CONFIG')
+      assert.match(err.message, /decide.*validate|validate.*decide/i)
+      return true
+    },
+  )
+})
+
+test('model() with decide throws AGENT_RETURN_CONTRACT_VIOLATION on mismatch after retries exhausted', async () => {
+  await assert.rejects(
+    () => runNextVScript(
+      'result = model("llama3.2:latest", "classify", decide=["yes", "no"])',
+      { callAgent: async () => 'maybe' },
+    ),
+    (err) => {
+      assert.equal(err.code, 'AGENT_RETURN_CONTRACT_VIOLATION')
+      return true
+    },
+  )
+})
+

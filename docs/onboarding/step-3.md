@@ -26,16 +26,9 @@ Repository-local alternative:
 node nerve-studio/preview-server.js --remote-ws ws://127.0.0.1:4190/api/runtime/ws
 ```
 
-You can also use environment fallback:
+## 3. Open Nerve Studio
 
-```powershell
-$env:NERVE_STUDIO_REMOTE_WS = 'ws://127.0.0.1:4190/api/runtime/ws'
-npx nerve-studio --remote
-```
-
-## 3. Open Studio
-
-Open:
+Open it in a browser:
 
 ```text
 http://localhost:4173

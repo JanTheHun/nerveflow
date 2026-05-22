@@ -198,8 +198,8 @@ Current commands:
 
 - `minimal` copies `docs/guide` to `docs/guide`
 - `ai` copies `NERVEFLOW_AGENT_RULES.md` to the workspace root and `docs/project-generation` to `docs/project-generation`
-- in interactive terminals, `add docs ai` prompts for permission to include ecosystem feedback suggestions in generated AI docs
 - in interactive terminals, `add docs ai` also prompts for permission to scaffold managed instruction blocks in `.github/copilot-instructions.md`, `CLAUDE.md`, and `AGENTS.md`
+- in interactive terminals, `add docs ai` prompts for permission to include ecosystem feedback suggestions in generated AI docs
 - `add docs ai --with-agent-instructions` scaffolds instruction files without prompting
 - `add docs ai --no-prompts` disables prompting, skips ecosystem feedback suggestion injection, and skips instruction scaffolding
 - `add docs ai --instructions-only --with-agent-instructions` scaffolds instruction files without copying docs

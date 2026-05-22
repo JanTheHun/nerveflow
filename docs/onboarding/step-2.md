@@ -120,7 +120,7 @@ Replace state.init.json with:
 }
 ```
 
-## Paste chatbot workflow
+## Update chatbot workflow
 
 In your `workflow.nrv`, replace
 ```nrv
@@ -141,11 +141,11 @@ reply = model("llama3.2:latest", messages=state.conversation)
 state.conversation = state.conversation + [
   {
     role: "assistant",
-    content: assistant_text
+    content: reply
   }
 ]
 
-output text assistant_text
+output text reply
 ```
 
 **Remember:** swap `llama3.2:latest` in the workflow to match your chosen model label from above.
@@ -184,16 +184,16 @@ What to expect:
 2. Some events may fail if model or transport is unavailable or overloaded.
 3. The runtime process remains active and can process later events.
 
+Reference local setup used during onboarding development:
+
+- RTX 3060
+- 10th gen Intel i5
+- 32GB RAM
+- Ollama + llama3.2:latest
+
+This is sufficient for the onboarding workflows in this guide.
+
 ## Chat from CLI
-
-If runtime is not started yet:
-
-```bash
-npx nerve-runtime start --port 4190
-```
-
-Use the runtime WS endpoint:
-ws://127.0.0.1:4190/api/runtime/ws
 
 Quick connectivity check:
 

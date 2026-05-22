@@ -66,8 +66,10 @@ const DOCS_PROFILE_AI = 'ai'
 const VALID_DOCS_PROFILES = new Set([DOCS_PROFILE_MINIMAL, DOCS_PROFILE_AI])
 const AI_INSTRUCTIONS_BEGIN_MARKER = '<!-- BEGIN NERVEFLOW AI INSTRUCTIONS -->'
 const AI_INSTRUCTIONS_END_MARKER = '<!-- END NERVEFLOW AI INSTRUCTIONS -->'
-const ECOSYSTEM_FEEDBACK_BEGIN_MARKER = '<!-- BEGIN NERVEFLOW ECOSYSTEM FEEDBACK SUGGESTIONS -->'
-const ECOSYSTEM_FEEDBACK_END_MARKER = '<!-- END NERVEFLOW ECOSYSTEM FEEDBACK SUGGESTIONS -->'
+const ECOSYSTEM_FEEDBACK_BEGIN_MARKER = '## NERVEFLOW ECOSYSTEM FEEDBACK SUGGESTIONS'
+const ECOSYSTEM_FEEDBACK_END_MARKER = '## END NERVEFLOW ECOSYSTEM FEEDBACK SUGGESTIONS'
+const LEGACY_ECOSYSTEM_FEEDBACK_BEGIN_MARKER = '<!-- BEGIN NERVEFLOW ECOSYSTEM FEEDBACK SUGGESTIONS -->'
+const LEGACY_ECOSYSTEM_FEEDBACK_END_MARKER = '<!-- END NERVEFLOW ECOSYSTEM FEEDBACK SUGGESTIONS -->'
 const ECOSYSTEM_FEEDBACK_PROMPT = [
   'Include ecosystem feedback suggestions in generated AI docs?',
   'This allows generated instructions to surface recurring platform gaps and propose upstream improvements when relevant.',
@@ -205,10 +207,10 @@ function buildGeneratedMcpServerSource(serverName) {
     '',
     `const server = new McpServer({ name: 'nerveflow-${serverName}', version: '1.0.0' })`,
     '',
-    "server.registerTool('echo_message', {",
-    "  description: 'Echoes a message for integration checks',",
-    '}, async (args = {}) => {',
-    "  const text = String(args.text ?? '')",
+    "server.registerTool('get_time', {",
+    "  description: 'Returns the current server time.',",
+    '}, async () => {',
+    "  const text = new Date().toISOString()",
     '  return {',
     '    content: [',
     "      { type: 'text', text },",
@@ -1213,8 +1215,10 @@ async function promptYesNo(question) {
   })
 
   try {
-    const answer = String(await rl.question(`${question} [y/N] `)).trim().toLowerCase()
-    return answer === 'y' || answer === 'yes'
+    const answer = String(await rl.question(`\n${question}\n\n[y/N] `)).trim().toLowerCase()
+    const accepted = answer === 'y' || answer === 'yes'
+    console.log('')
+    return accepted
   } finally {
     rl.close()
   }
@@ -1341,8 +1345,10 @@ function upsertManagedEcosystemFeedback(filePath) {
 
   const beginCount = (existing.match(new RegExp(ECOSYSTEM_FEEDBACK_BEGIN_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length
   const endCount = (existing.match(new RegExp(ECOSYSTEM_FEEDBACK_END_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length
+  const legacyBeginCount = (existing.match(new RegExp(LEGACY_ECOSYSTEM_FEEDBACK_BEGIN_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length
+  const legacyEndCount = (existing.match(new RegExp(LEGACY_ECOSYSTEM_FEEDBACK_END_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length
 
-  if (beginCount !== endCount || beginCount > 1 || endCount > 1) {
+  if (beginCount !== endCount || beginCount > 1 || endCount > 1 || legacyBeginCount !== legacyEndCount || legacyBeginCount > 1 || legacyEndCount > 1) {
     return {
       action: 'skipped_manual_merge',
       path: filePath,
@@ -1350,13 +1356,29 @@ function upsertManagedEcosystemFeedback(filePath) {
     }
   }
 
-  if (beginCount === 0) {
+  if (beginCount === 0 && legacyBeginCount === 0) {
     const prefix = existing.trim() ? `${normalizeTrailingNewline(existing).trimEnd()}\n\n` : ''
     const next = `${prefix}${block}\n`
     if (next === normalizeTrailingNewline(existing)) {
       return { action: 'unchanged', path: filePath }
     }
 
+    writeFileSync(filePath, next, 'utf8')
+    return { action: 'updated', path: filePath }
+  }
+
+  if (beginCount === 0 && legacyBeginCount === 1) {
+    const beginIndex = existing.indexOf(LEGACY_ECOSYSTEM_FEEDBACK_BEGIN_MARKER)
+    const endIndex = existing.indexOf(LEGACY_ECOSYSTEM_FEEDBACK_END_MARKER, beginIndex)
+    if (beginIndex < 0 || endIndex < 0 || endIndex < beginIndex) {
+      return {
+        action: 'skipped_manual_merge',
+        path: filePath,
+        message: 'ecosystem feedback markers are malformed; manual merge required',
+      }
+    }
+
+    const next = `${existing.slice(0, beginIndex)}${block}${existing.slice(endIndex + LEGACY_ECOSYSTEM_FEEDBACK_END_MARKER.length)}`
     writeFileSync(filePath, next, 'utf8')
     return { action: 'updated', path: filePath }
   }
@@ -1606,6 +1628,11 @@ async function runAddCommand(options) {
       }
     }
   } else if (options.capability === 'docs') {
+    let scaffoldInstructions = false
+    if (options.docsProfile === DOCS_PROFILE_AI) {
+      scaffoldInstructions = await shouldScaffoldAiInstructions(options)
+    }
+
     let includeEcosystemFeedback = false
     if (options.docsProfile === DOCS_PROFILE_AI && !options.instructionsOnly) {
       includeEcosystemFeedback = await shouldIncludeEcosystemFeedbackSuggestions(options)
@@ -1618,7 +1645,6 @@ async function runAddCommand(options) {
     }
 
     if (options.docsProfile === DOCS_PROFILE_AI) {
-      const scaffoldInstructions = await shouldScaffoldAiInstructions(options)
       if (scaffoldInstructions) {
         fileResults.push(...scaffoldAiInstructionFiles(workspaceDir))
       } else if (options.instructionsOnly) {

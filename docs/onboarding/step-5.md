@@ -88,8 +88,23 @@ Expected:
 ```
 
 ---
+## 4. Add agent profile
 
-## 4. Update your workflow
+Create ```agents.json```
+
+```
+{
+  "profiles": {
+    "chat": {
+      "model": "llama3.2:latest",
+      "instructions": "You are a minimal workspace assistant. If user asks for time, try to use the tools provided to you instead of guessing."
+    }
+  }
+}
+```
+---
+
+## 5. Update your workflow
 
 Update your `workflow.nrv` to call a tool. Inside your `on external "user_message"` handler, change this line:
 
@@ -101,43 +116,62 @@ to this:
 
 ```nrv
 reply = agent(
-  "workspace_guide",
-  event.value,
+  "chat",
+  messages=state.conversation,
   tools={
     mode: "governed",
-    allow: [ "echo" ],
+    allow: [ "get_time" ],
     maxRounds: 4
   }
 )
 ```
+After updating workflow, restart your host.
 
+## 6. Test the capability boundary
 
+Send a message through the runtime surface:
+```
+npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "what time is it?"
+```
 
+What to observe:
 
+- The workflow stays deterministic.
+- The model can only access explicitly allowed tools.
+- The tool exists outside runtime execution.
+- The host realizes the capability boundary.
 
+Optional:
 
+Attach Studio while the host is running:
+```
+npx nerve-studio --remote-ws ws://127.0.0.1:4190/api/runtime/ws
+```
+Open:
+```
+http://localhost:4173
+```
+Observe:
 
+- governed tool calls
+- execution events
+- runtime orchestration
+- explicit capability usage
 
+## 7. What you learned
 
+1. Runtime orchestration and host capabilities are separate layers.
+2. Capabilities attach outside the runtime.
+3. Workflows remain inspectable while capabilities scale outward.
+4. Tool execution is governed explicitly, not hidden implicitly.
 
+This separation is one of the core design principles of Nerveflow.
 
-
-
-
-
-
-
-
-
-## 5. What you learned
-
-1. Host is the capability boundary around runtime execution.
-2. You can keep your existing WS client workflow.
-3. Tool calls are host-provided but workflow-orchestrated.
+Minimal surface. Composable depth.
 
 ## Next
 
-Add a real capability:
+Add real capability surfaces:
 
 - [step-6a.md](step-6a.md) — Add a vector database for real RAG
 - [step-6b.md](step-6b.md) — Add speech capability

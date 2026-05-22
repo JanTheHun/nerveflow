@@ -23,14 +23,14 @@ on external "user_message"
     decision = model(
       "llama3.2:latest",
       event.value,
-      "Classify user intent. Return one of: chat, knowledge, tools, other.",
-      returns={ intent:["chat","knowledge","tools","other"] },
+      "Classify user intent",
+      decide=["chat","knowledge","tools"],
       retry_on_contract_violation=1
     )
 
-    if decision.intent == "knowledge"
+    if decision == "knowledge"
       output text "Knowledge route selected. (Scaffold)"
-    else if decision.intent == "tools"
+    else if decision == "tools"
       output text "Tools route selected. (Scaffold)"
     else
       state.conversation = state.conversation + [
@@ -39,16 +39,13 @@ on external "user_message"
           content: event.value
         }
       ]
-
       reply = model("llama3.2:latest", messages=state.conversation)
-
       state.conversation = state.conversation + [
         {
           role: "assistant",
           content: reply
         }
       ]
-
       output text reply
     end
   end
@@ -94,15 +91,15 @@ Expected: chatbot response from the `chat` branch
 
 ## 5. Other bounded-call patterns
 
-`returns` is one way to bound model behavior. It is not the only way.
+`decide` is one way to bound model behavior. It is not the only way.
 
 Other useful patterns:
 
-1. `decide=[...]` on `model(...)` or `agent(...)` for a single bounded scalar decision.
+1. `returns=[...]` for more detailed contracts.
 2. `try ...` to convert supported runtime/model/tool failures into an explicit `{ ok, ... }` envelope.
 3. `format="json"` when you want JSON-shaped output formatting, even without a strict decision contract.
 
-In this step, we use `returns` because it keeps routing explicit with an enum contract.
+In this step, we use `decide` because it keeps routing explicit with bounded scalar contract.
 
 ## 6. What you learned
 

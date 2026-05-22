@@ -774,6 +774,7 @@ test('nerve-compose add docs ai copies project-generation docs and rules file', 
     const rulesPath = path.join(workspaceRoot, 'NERVEFLOW_AGENT_RULES.md')
     const rules = await readFile(rulesPath, 'utf8')
     assert.equal(rules.includes('# Nerveflow Agent Rules'), true)
+    assert.equal(rules.includes('The user explicitly enabled ecosystem feedback suggestions for this workspace.'), false)
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true })
   }
@@ -889,6 +890,9 @@ test('nerve-compose add docs ai --no-prompts does not scaffold instruction files
     assert.equal(existsSync(path.join(workspaceRoot, '.github', 'copilot-instructions.md')), false)
     assert.equal(existsSync(path.join(workspaceRoot, 'CLAUDE.md')), false)
     assert.equal(existsSync(path.join(workspaceRoot, 'AGENTS.md')), false)
+
+    const rules = await readFile(path.join(workspaceRoot, 'NERVEFLOW_AGENT_RULES.md'), 'utf8')
+    assert.equal(rules.includes('The user explicitly enabled ecosystem feedback suggestions for this workspace.'), false)
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true })
   }

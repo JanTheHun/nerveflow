@@ -66,6 +66,12 @@ const DOCS_PROFILE_AI = 'ai'
 const VALID_DOCS_PROFILES = new Set([DOCS_PROFILE_MINIMAL, DOCS_PROFILE_AI])
 const AI_INSTRUCTIONS_BEGIN_MARKER = '<!-- BEGIN NERVEFLOW AI INSTRUCTIONS -->'
 const AI_INSTRUCTIONS_END_MARKER = '<!-- END NERVEFLOW AI INSTRUCTIONS -->'
+const ECOSYSTEM_FEEDBACK_BEGIN_MARKER = '<!-- BEGIN NERVEFLOW ECOSYSTEM FEEDBACK SUGGESTIONS -->'
+const ECOSYSTEM_FEEDBACK_END_MARKER = '<!-- END NERVEFLOW ECOSYSTEM FEEDBACK SUGGESTIONS -->'
+const ECOSYSTEM_FEEDBACK_PROMPT = [
+  'Include ecosystem feedback suggestions in generated AI docs?',
+  'This allows generated instructions to surface recurring platform gaps and propose upstream improvements when relevant.',
+].join('\n')
 const AI_INSTRUCTION_TARGET_FILES = [
   path.join('.github', 'copilot-instructions.md'),
   'CLAUDE.md',
@@ -1244,6 +1250,31 @@ function buildManagedAiInstructionsBlock() {
   ].join('\n')
 }
 
+function buildEcosystemFeedbackBody() {
+  return [
+    'The user explicitly enabled ecosystem feedback suggestions for this workspace.',
+    'If you encounter an obvious capability gap, repetitive integration pattern, or missing ergonomic primitive while helping the user build the project:',
+    '',
+    '1. briefly describe the limitation',
+    '2. explain why it became visible',
+    '3. suggest a possible platform improvement',
+    '4. invite the user to consider opening a PR or discussion',
+    '',
+    'Keep suggestions concise and architecture-focused.',
+    'Do not invent speculative roadmap items.',
+    '',
+    'Only raise this when the issue is recurring or materially impacts deterministic workflow quality.',
+  ].join('\n')
+}
+
+function buildManagedEcosystemFeedbackBlock() {
+  return [
+    ECOSYSTEM_FEEDBACK_BEGIN_MARKER,
+    buildEcosystemFeedbackBody(),
+    ECOSYSTEM_FEEDBACK_END_MARKER,
+  ].join('\n')
+}
+
 function upsertManagedAiInstructions(filePath) {
   const existing = readTextFileIfExists(filePath)
   const block = buildManagedAiInstructionsBlock()
@@ -1296,6 +1327,60 @@ function upsertManagedAiInstructions(filePath) {
   return { action: 'updated', path: filePath }
 }
 
+function upsertManagedEcosystemFeedback(filePath) {
+  const existing = readTextFileIfExists(filePath)
+  const block = buildManagedEcosystemFeedbackBlock()
+
+  if (existing == null) {
+    return {
+      action: 'skipped',
+      path: filePath,
+      message: 'rules file missing; ecosystem feedback block not injected',
+    }
+  }
+
+  const beginCount = (existing.match(new RegExp(ECOSYSTEM_FEEDBACK_BEGIN_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length
+  const endCount = (existing.match(new RegExp(ECOSYSTEM_FEEDBACK_END_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length
+
+  if (beginCount !== endCount || beginCount > 1 || endCount > 1) {
+    return {
+      action: 'skipped_manual_merge',
+      path: filePath,
+      message: 'ecosystem feedback markers are malformed or duplicated; manual merge required',
+    }
+  }
+
+  if (beginCount === 0) {
+    const prefix = existing.trim() ? `${normalizeTrailingNewline(existing).trimEnd()}\n\n` : ''
+    const next = `${prefix}${block}\n`
+    if (next === normalizeTrailingNewline(existing)) {
+      return { action: 'unchanged', path: filePath }
+    }
+
+    writeFileSync(filePath, next, 'utf8')
+    return { action: 'updated', path: filePath }
+  }
+
+  const beginIndex = existing.indexOf(ECOSYSTEM_FEEDBACK_BEGIN_MARKER)
+  const endIndex = existing.indexOf(ECOSYSTEM_FEEDBACK_END_MARKER, beginIndex)
+  if (beginIndex < 0 || endIndex < 0 || endIndex < beginIndex) {
+    return {
+      action: 'skipped_manual_merge',
+      path: filePath,
+      message: 'ecosystem feedback markers are malformed; manual merge required',
+    }
+  }
+
+  const currentBlock = existing.slice(beginIndex, endIndex + ECOSYSTEM_FEEDBACK_END_MARKER.length)
+  if (currentBlock === block) {
+    return { action: 'unchanged', path: filePath }
+  }
+
+  const next = `${existing.slice(0, beginIndex)}${block}${existing.slice(endIndex + ECOSYSTEM_FEEDBACK_END_MARKER.length)}`
+  writeFileSync(filePath, next, 'utf8')
+  return { action: 'updated', path: filePath }
+}
+
 function scaffoldAiInstructionFiles(workspaceDir) {
   const results = []
   for (const relativeFilePath of AI_INSTRUCTION_TARGET_FILES) {
@@ -1313,7 +1398,14 @@ async function shouldScaffoldAiInstructions(options) {
   return promptYesNo('Also scaffold coding-agent instruction files (.github/copilot-instructions.md, CLAUDE.md, AGENTS.md)?')
 }
 
-function addDocsByProfile(workspaceDir, profile) {
+async function shouldIncludeEcosystemFeedbackSuggestions(options) {
+  if (options.noPrompts) return false
+  if (!canUseInteractivePrompt()) return false
+  return promptYesNo(ECOSYSTEM_FEEDBACK_PROMPT)
+}
+
+function addDocsByProfile(workspaceDir, profile, options = {}) {
+  const includeEcosystemFeedback = options.includeEcosystemFeedback === true
   const docsRoot = path.join(workspaceDir, 'docs')
   if (profile === DOCS_PROFILE_MINIMAL) {
     return copyDirectoryTreeNonDestructive(
@@ -1338,7 +1430,20 @@ function addDocsByProfile(workspaceDir, profile) {
         message: `source file not found: ${rulesSourcePath}`,
       })
     } else {
-      results.push(copyFileNonDestructive(rulesSourcePath, rulesTargetPath))
+      const rulesCopyResult = copyFileNonDestructive(rulesSourcePath, rulesTargetPath)
+      results.push(rulesCopyResult)
+
+      if (includeEcosystemFeedback) {
+        if (rulesCopyResult.action === 'skipped_manual_merge') {
+          results.push({
+            action: 'skipped_manual_merge',
+            path: rulesTargetPath,
+            message: 'ecosystem feedback suggestions not injected because rules file requires manual merge',
+          })
+        } else {
+          results.push(upsertManagedEcosystemFeedback(rulesTargetPath))
+        }
+      }
     }
 
     return results
@@ -1501,8 +1606,15 @@ async function runAddCommand(options) {
       }
     }
   } else if (options.capability === 'docs') {
+    let includeEcosystemFeedback = false
+    if (options.docsProfile === DOCS_PROFILE_AI && !options.instructionsOnly) {
+      includeEcosystemFeedback = await shouldIncludeEcosystemFeedbackSuggestions(options)
+    }
+
     if (!options.instructionsOnly) {
-      fileResults = addDocsByProfile(workspaceDir, options.docsProfile)
+      fileResults = addDocsByProfile(workspaceDir, options.docsProfile, {
+        includeEcosystemFeedback,
+      })
     }
 
     if (options.docsProfile === DOCS_PROFILE_AI) {

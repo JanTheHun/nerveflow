@@ -95,7 +95,22 @@ export function createRuntimeWebSocketSurface({
   return {
     wss,
     close() {
-      wss.close()
+      // Ensure upgraded WS sockets do not keep the process alive during host shutdown.
+      for (const client of wss.clients) {
+        try {
+          client.terminate()
+        } catch {
+          // best effort
+        }
+      }
+
+      return new Promise((resolveClose) => {
+        try {
+          wss.close(() => resolveClose())
+        } catch {
+          resolveClose()
+        }
+      })
     },
   }
 }

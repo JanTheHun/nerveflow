@@ -418,7 +418,7 @@ export function createComposableHost({
       // 1. Close surfaces
       if (wsurfaceInstance) {
         try {
-          wsurfaceInstance.close()
+          await Promise.resolve(wsurfaceInstance.close())
         } catch {}
       }
 

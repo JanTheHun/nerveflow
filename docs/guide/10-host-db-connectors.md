@@ -1,12 +1,14 @@
 # Host DB Connectors
 
-This page focuses on the recommended package-first path for database-backed capabilities: composable host auto-attach using the composable reference host.
+This page focuses on the recommended path for database-backed capabilities: scaffold a local reference host, then auto-attach composable capabilities from workspace config.
 
 If you need manual provider wiring and low-level host-modules composition, see [10-host-db-connectors-low-level.md](10-host-db-connectors-low-level.md).
 
-## Recommended path: composable reference host
+## Recommended path: local reference host (composable profile)
 
 The composable path keeps workflow semantics deterministic while moving infrastructure binding into workspace configuration and host capability factories.
+
+Reference hosts provide learnable starting points.
 
 Typical flow:
 
@@ -20,8 +22,12 @@ npx nerve-compose add mcp <workspaceDir>
 # 2) Validate resolved bindings before host startup
 npx nerve-compose validate <workspaceDir> --json
 
-# 3) Run host against your workflow workspace
-WORKSPACE_DIR=<workspaceDir> node node_modules/nerveflow/examples/composable-reference-host/server.js
+# 3) Scaffold a local host baseline into your workspace
+npx nerve-compose add host composable <workspaceDir>
+
+# 4) Run host from your workspace
+cd <workspaceDir>
+node host/server.js
 ```
 
 ## Workspace contract
@@ -66,7 +72,7 @@ The composable path still follows the same boundary:
 
 ## References
 
-- [examples/composable-reference-host/server.js](../../examples/composable-reference-host/server.js)
+- [examples/composable-reference-host/server.js](../../examples/composable-reference-host/server.js) (reference source)
 - [src/host_core/composable_host.js](../../src/host_core/composable_host.js)
 - [src/host_core/capabilities/storage.js](../../src/host_core/capabilities/storage.js)
 - [src/host_core/providers/local_vector.js](../../src/host_core/providers/local_vector.js)

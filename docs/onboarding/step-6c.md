@@ -72,10 +72,11 @@ Expected:
 }
 ```
 
-## 2. Start the composable host
+## 2. Scaffold and start a local reference host
 
 ```bash
-node examples/composable-reference-host/server.js
+npx nerve-compose add host composable --json
+node host/server.js
 ```
 
 Runtime WS endpoint:
@@ -118,7 +119,7 @@ Minimal surface. Composable depth.
 
 ## Reference: Next
 
-- See composable host details: `examples/composable-reference-host/README.md`
-- See provider architecture notes: `docs/guide/10-host-db-connectors.md`
+- See composable host reference source: [examples/composable-reference-host/README.md](../../examples/composable-reference-host/README.md)
+- See provider architecture notes: [docs/guide/10-host-db-connectors.md](../guide/10-host-db-connectors.md)
 
 If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../../MANIFESTO.md).

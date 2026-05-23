@@ -41,12 +41,13 @@ The host becomes the boundary where external capabilities attach.
 
 Stop the runtime if it is still running.
 
-## 2. Start the composable reference host
+## 2. Scaffold and start a local reference host
 
 From your workspace root:
 
 ```bash
-node node_modules/nerveflow/examples/composable-reference-host/server.js
+npx nerve-compose add host composable --json
+node host/server.js
 ```
 
 Host endpoint:
@@ -59,6 +60,9 @@ What changed:
 The runtime now executes inside a host process.
 The host owns external capability attachment.
 Your client workflow stays the same.
+
+The host files are now local project code.
+You can read and extend them directly under `host/`.
 
 You still send events over the same WS runtime surface.
 

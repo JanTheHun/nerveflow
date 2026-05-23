@@ -2,6 +2,17 @@
 
 This example is a host setup reference, not an application workspace. It embeds the runtime, auto-attaches capabilities from workspace config, attaches a WebSocket surface, and runs against a caller-provided workflow workspace.
 
+Reference hosts provide learnable starting points.
+
+For normal project setup, scaffold a local host baseline into your workspace first:
+
+```bash
+npx nerve-compose add host composable --json
+node host/server.js
+```
+
+Use this example source directly when you want a manual fallback path or deeper host customization from scratch.
+
 ## What This Example Owns
 
 - Host construction with `createComposableHost()`
@@ -19,6 +30,8 @@ This example is a host setup reference, not an application workspace. It embeds 
 Those come from the workspace passed to the host at startup.
 
 ## Usage
+
+This section describes direct execution of the reference source as a fallback/manual path.
 
 Start the host against an existing workspace that already contains its own runtime config and workflow files.
 

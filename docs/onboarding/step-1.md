@@ -57,19 +57,9 @@ npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "hello nerve"
 npx nerve-send <wsUrl> <eventType> [message]
 ```
 
-## Nerve Studio
+## Next
 
-Attach a visual inspector to any running runtime:
-
-```bash
-npx nerve-studio --remote-ws ws://127.0.0.1:4190/api/runtime/ws
-```
-
-Then open:
-
-```
-http://localhost:4173
-```
+Add a model and run a stateful chatbot from CLI in [step-2.md](step-2.md).
 
 ## Learn More
 
@@ -77,8 +67,5 @@ http://localhost:4173
 - [Host Integration](../guide/04-host-integration.md)
 - [User Handbook](../guide/13-user-handbook.md)
 
-## Next
-
-Add a model and run a stateful chatbot from CLI in [step-2.md](step-2.md).
 
 If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../../MANIFESTO.md).

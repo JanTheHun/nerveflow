@@ -116,13 +116,13 @@ Create ```agents.json```
 
 ## 5. Update your workflow
 
-Update your `workflow.nrv` to call a tool. Inside your `on external "user_message"` handler, change this line:
+Update your `workflow.nrv` to call a tool. replace this:
 
 ```nrv
 reply = model("llama3.2:latest", messages=state.conversation)
 ```
 
-to this:
+with this:
 
 ```nrv
 reply = agent(
@@ -150,23 +150,6 @@ What to observe:
 - The model can only access explicitly allowed tools.
 - The tool exists outside runtime execution.
 - The host realizes the capability boundary.
-
-Optional:
-
-Attach Studio while the host is running:
-```
-npx nerve-studio --remote-ws ws://127.0.0.1:4190/api/runtime/ws
-```
-Open:
-```
-http://localhost:4173
-```
-Observe:
-
-- governed tool calls
-- execution events
-- runtime orchestration
-- explicit capability usage
 
 ## 7. What you learned
 

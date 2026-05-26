@@ -13,42 +13,36 @@ Goal:
 
 ## 1. Update workflow.nrv with bounded routing
 
-Replace `workflow.nrv` with:
+In `workflow.nrv` replace your `else` branch with:
 
 ```nrv
-on external "user_message"
-  if event.value == "hello nerve"
-    output text "hello world!"
-  else
-    decision = model(
-      "llama3.2:latest",
-      event.value,
-      "Classify user intent",
-      decide=["chat","knowledge","tools"],
-      retry_on_contract_violation=1
-    )
+decision = model(
+  "llama3.2:latest",
+  event.value,
+  "Decide which workflow branch to use: if user prompt is to to play a song or any music, choose music. If user wants to manipulate lights, choose lights. Otherwise choose chat.",
+  decide=["chat","music","lights"],
+  retry_on_contract_violation=1
+)
 
-    if decision == "knowledge"
-      output text "Knowledge route selected. (Scaffold)"
-    else if decision == "tools"
-      output text "Tools route selected. (Scaffold)"
-    else
-      state.conversation = state.conversation + [
-        {
-          role: "user",
-          content: event.value
-        }
-      ]
-      reply = model("llama3.2:latest", messages=state.conversation)
-      state.conversation = state.conversation + [
-        {
-          role: "assistant",
-          content: reply
-        }
-      ]
-      output text reply
-    end
-  end
+if decision == "music"
+  output text "Music route selected. (Scaffold)"
+else if decision == "lights"
+  output text "Lights route selected. (Scaffold)"
+else
+  state.conversation = state.conversation + [
+    {
+      role: "user",
+      content: event.value
+    }
+  ]
+  reply = model("llama3.2:1b", messages=state.conversation)
+  state.conversation = state.conversation + [
+    {
+      role: "assistant",
+      content: reply
+    }
+  ]
+  output text reply
 end
 ```
 
@@ -62,7 +56,17 @@ Stop the runtime if it is running, then restart to load your updated workflow:
 npx nerve-runtime start --port 4190
 ```
 
-## 3. Attach Studio (if needed)
+## 3. Verify routing
+
+### using CLI
+
+```
+ npx nerve-send ws://127.0.0.1:5000/api/runtime/ws user_message "play me some music"
+
+ npx nerve-send ws://127.0.0.1:5000/api/runtime/ws user_message "turn off kitchen lights"
+```
+
+### Using Nerve Studio
 
 If Studio is not already running, attach it:
 
@@ -76,20 +80,9 @@ Open:
 http://localhost:4173
 ```
 
-## 4. Verify routing in Studio
+In Studio, enqueue your events on `user_message` channel.
 
-In Studio, enqueue these events:
-
-1. `hello nerve`
-Expected: `hello world!`
-2. `summarize Winston Churchill's life in 5 sentences`
-Expected: `Knowledge route selected. (Scaffold)`
-3. `list files in my working folder`
-Expected: `Tools route selected. (Scaffold)`
-4. `what do you think about cats?`
-Expected: chatbot response from the `chat` branch
-
-## 5. Other bounded-call patterns
+## 4. Other bounded-call patterns
 
 `decide` is one way to bound model behavior. It is not the only way.
 
@@ -101,11 +94,14 @@ Other useful patterns:
 
 In this step, we use `decide` because it keeps routing explicit with bounded scalar contract.
 
-## 6. What you learned
+## 5. What you learned
 
 1. Probabilistic output is bounded by a contract.
 2. Workflow routing remains explicit and deterministic.
 3. You can scale this pattern into specialized multi-agent flows.
+
+The goal of this tutorial is not to teach AI workflow architecture.
+It is to show how Nerveflow can help you design it.
 
 ## Next
 

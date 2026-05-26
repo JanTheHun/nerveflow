@@ -107,10 +107,11 @@ GEMINI_API_KEY=your_api_key_here
 
 ## Seed conversation state
 
-Replace state.init.json with:
+Expand your state.init.json with a `conversation` field:
 
 ```json
 {
+  "count": 0,
   "conversation": [
     {
       "role": "system",
@@ -124,8 +125,7 @@ Replace state.init.json with:
 
 In your `workflow.nrv`, replace
 ```nrv
-state.count = state.count + 1
-output text "(no output, ${state.count})"
+output text "(no output yet)"
 ```
 with
 ```nrv

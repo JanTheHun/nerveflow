@@ -1,6 +1,6 @@
 # Onboarding Step 6C
 
-## Add MCP-powered assistants to your host
+## Attach ecosystem capabilities through MCP
 
 In previous onboarding steps, you built:
 
@@ -30,7 +30,6 @@ Your workflow still decides:
 The runtime enforces those boundaries deterministically.
 
 
-
 ## Prerequisites
 
 - You completed the composable host setup steps.
@@ -44,72 +43,58 @@ Recommended setup:
 ollama pull qwen3:14b
 ```
 
-## 1. Scaffold MCP capability support
+## 1. Configure host MCP servers
 
-From repository root:
+Depending on how you added MCP capability to your composable reference host, you have a `servers` property either your `nerve.json` or in a separate `mcp.json` file. Here you can add your MCP servers, for example filesystem MCP:
 
-```bash
-npx nerve-compose add mcp --json
-```
-
-This adds:
-
-* `requires.mcp`
-* `modules.mcp`
-* a local MCP server scaffold
-
-Validate capability bindings:
-
-```bash
-npx nerve-compose validate --json
-```
-
-Expected:
-
+Replace or expand your `servers` list with:
 ```json
 {
-  "ok": true
-}
-```
-
-## 2. Scaffold and start a local reference host
-
-```bash
-npx nerve-compose add host composable --json
-node host/server.mjs --hot-swap
-```
-
-Hot-swap behavior (optional):
-
-- `--hot-swap` enables file-watch reload for workspace config and active workflow definition files.
-- Included workflow files loaded via `include "..."` are watched too.
-- Reload is strict: invalid changes are rejected and current runtime state remains active.
-
-Runtime WS endpoint:
-
-```text
-ws://127.0.0.1:4190/api/runtime/ws
-```
-
-
-## 3. Configure host MCP servers
-
-`node bin/nerve-compose.js add mcp --json` scaffolds a local MCP server at `mcp-servers/local-mcp.mjs` and wires it into host configuration.
-
-If you want to edit the host MCP server entry manually, use:
-
-```json
-{
-  "name": "local-mcp",
+  "name": "filesystem",
   "transport": "stdio",
   "config": {
-    "command": "node",
-    "args": ["./mcp-servers/local-mcp.mjs"]
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-filesystem",
+      "<allowed directory>"
+    ]
   }
 }
 ```
 
-Add more MCP servers later by editing the host configuration directly.
+## 2. Expose some filesystem tools to the assistant
+
+Attaching an MCP server does not automatically expose its tools to workflows.
+
+Workflows must still explicitly allow tools through governed tool policy.
+
+In your `workflow.nrv`, allow `list_directory` and `list_allowed_directories` for the assistant:
+```nrv
+tools={
+  mode: "governed",
+  allow: [ "get_time", "list_directory", "list_allowed_directories" ],
+  maxRounds: 4
+}
+```
+
+## 3. Restart host
+
+Restart host to pick up changes - unless you already use `--hot-swap` when you start it.
+
+
+## 4. Test tool calling
+
+```
+ npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "show me the structure of the first allowed directory"
+```
+
+or if you are working with a slower local call, try with raised timeout:
+
+```
+ npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "show me the structure of the first allowed directory" --timeout-ms 120000
+ ```
+
 
 # What you learned
 
@@ -124,8 +109,6 @@ You now have:
 The workflow stays inspectable while capabilities scale outward.
 
 Minimal surface. Composable depth.
-
-
 
 ## Reference: Next
 

@@ -52,6 +52,54 @@ MCP module config can optionally include:
 - `eagerConnect: true` to connect at host startup
 - `detectToolConflicts: true` to fail fast on duplicate MCP tool names
 
+## MCP Configuration Patterns
+
+Use `npx nerve-compose add mcp <workspaceDir>` to scaffold MCP wiring and a local sample server.
+
+Default scaffolding keeps module behavior in workspace config and externalizes server topology:
+
+In `nerve.json` (or `nextv.json`):
+
+```json
+{
+	"modules": {
+		"mcp": {
+			"provider": "mcp",
+			"mode": "embedded",
+			"detectToolConflicts": true,
+			"configPath": "./mcp.json"
+		}
+	}
+}
+```
+
+In `mcp.json`:
+
+```json
+{
+	"servers": [
+		{
+			"name": "local-mcp",
+			"transport": "stdio",
+			"config": {
+				"command": "node",
+				"args": ["./mcp-servers/local-mcp.mjs"]
+			}
+		}
+	]
+}
+```
+
+External MCP config is servers-only. Keep `mode`, `detectToolConflicts`, and `eagerConnect` in `modules.mcp`.
+
+If you want a single-file setup, use inline mode:
+
+```bash
+npx nerve-compose add mcp <workspaceDir> --inline
+```
+
+Inline mode stores `servers` directly under `modules.mcp`.
+
 ## Validation and failure model
 
 Use `nerve-compose validate` as the preflight gate for package workflows:

@@ -452,6 +452,163 @@ test('rejects invalid module mode in nextv.json', () => {
   }
 })
 
+test('loads mcp module config from nextv.json configPath reference', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      modules: {
+        mcp: {
+          provider: 'mcp',
+          mode: 'embedded',
+          detectToolConflicts: true,
+          configPath: './mcp.json',
+        },
+      },
+    }),
+    'mcp.json': JSON.stringify({
+      servers: [
+        {
+          name: 'local-mcp',
+          transport: 'stdio',
+          config: {
+            command: 'node',
+            args: ['./mcp-servers/local-mcp.mjs'],
+          },
+        },
+      ],
+    }),
+  })
+
+  try {
+    const config = loadConfig(workspaceDir)
+    assert.equal(config.modules.status, 'loaded')
+    assert.deepEqual(config.modules.map.mcp, {
+      provider: 'mcp',
+      mode: 'embedded',
+      detectToolConflicts: true,
+      configPath: './mcp.json',
+      servers: [
+        {
+          name: 'local-mcp',
+          transport: 'stdio',
+          config: {
+            command: 'node',
+            args: ['./mcp-servers/local-mcp.mjs'],
+          },
+        },
+      ],
+    })
+  } finally {
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})
+
+test('loads mcp module config from nextv.json legacy config string reference', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      modules: {
+        mcp: {
+          provider: 'mcp',
+          mode: 'embedded',
+          detectToolConflicts: true,
+          config: './mcp.json',
+        },
+      },
+    }),
+    'mcp.json': JSON.stringify({
+      servers: [],
+    }),
+  })
+
+  try {
+    const config = loadConfig(workspaceDir)
+    assert.equal(config.modules.status, 'loaded')
+    assert.equal(config.modules.map.mcp.provider, 'mcp')
+    assert.equal(config.modules.map.mcp.configPath, './mcp.json')
+    assert.equal(Object.prototype.hasOwnProperty.call(config.modules.map.mcp, 'config'), false)
+    assert.equal(config.modules.map.mcp.mode, 'embedded')
+    assert.equal(config.modules.map.mcp.detectToolConflicts, true)
+    assert.deepEqual(config.modules.map.mcp.servers, [])
+  } finally {
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})
+
+test('rejects inline mcp fields when external module config reference is used', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      modules: {
+        mcp: {
+          provider: 'mcp',
+          configPath: './mcp.json',
+          servers: [],
+        },
+      },
+    }),
+    'mcp.json': JSON.stringify({
+      servers: [],
+    }),
+  })
+
+  try {
+    assert.throws(
+      () => loadConfig(workspaceDir),
+      /nextv\.json#modules: module "mcp" must not define inline MCP fields \(servers\) when external config is used\./,
+    )
+  } finally {
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})
+
+test('rejects missing module configPath file', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      modules: {
+        mcp: {
+          provider: 'mcp',
+          configPath: './missing-mcp.json',
+        },
+      },
+    }),
+  })
+
+  try {
+    assert.throws(
+      () => loadConfig(workspaceDir),
+      /nextv\.json#modules: module "mcp\.configPath" file not found: missing-mcp\.json/,
+    )
+  } finally {
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})
+
+test('rejects non-server fields in external MCP module config', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      modules: {
+        mcp: {
+          provider: 'mcp',
+          mode: 'embedded',
+          detectToolConflicts: true,
+          configPath: './mcp.json',
+        },
+      },
+    }),
+    'mcp.json': JSON.stringify({
+      detectToolConflicts: true,
+      servers: [],
+    }),
+  })
+
+  try {
+    assert.throws(
+      () => loadConfig(workspaceDir),
+      /nextv\.json#modules: module "mcp\.configPath" for MCP supports only "servers"; found: detectToolConflicts\./,
+    )
+  } finally {
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})
+
 test('getConfiguredExternals returns normalized nextv.json externals only', () => {
   const workspaceConfig = {
     nextv: {

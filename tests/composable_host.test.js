@@ -477,3 +477,106 @@ test('composable host resolves relative mcp stdio script paths from workspace di
     await rm(workspace.workspaceRoot, { recursive: true, force: true })
   }
 })
+
+test('composable host loads mcp servers from external module configPath', { timeout: 15000 }, async () => {
+  const workspace = await createTempWorkspace({
+    nextvConfig: {
+      entrypointPath: 'entry.nrv',
+      externals: ['user_message'],
+      requires: {
+        mcp: {
+          required: true,
+          provider: 'mcp',
+        },
+      },
+      modules: {
+        mcp: {
+          provider: 'mcp',
+          configPath: './mcp.json',
+        },
+      },
+    },
+    entrySource: 'on external "user_message"\n  output text "ok"\nend\n',
+    extraFiles: [
+      {
+        path: 'mcp.json',
+        content: JSON.stringify({
+          mode: 'embedded',
+          eagerConnect: true,
+          servers: [
+            {
+              name: 'local-mcp',
+              transport: 'stdio',
+              config: {
+                command: process.execPath,
+                args: ['./mcp-servers/local-mcp.mjs'],
+              },
+            },
+          ],
+        }, null, 2),
+      },
+      {
+        path: 'mcp-servers/local-mcp.mjs',
+        content: `import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'\nimport { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'\n\nconst server = new McpServer({ name: 'local-mcp', version: '1.0.0' })\nserver.registerTool(\n  'fetch_url',\n  {\n    description: 'Returns a fixed response for tests.',\n  },\n  async () => ({\n    content: [\n      {\n        type: 'text',\n        text: 'ok',\n      },\n    ],\n  }),\n)\n\nconst transport = new StdioServerTransport()\nawait server.connect(transport)\n`,
+      },
+    ],
+  })
+
+  const port = await findOpenPort()
+  const host = createComposableHost({
+    workspaceDir: workspace.workspaceRelativePath,
+    autoAttachCapabilitiesFromWorkspace: true,
+    port,
+  })
+
+  host.attachSurface(wsSurface({ path: '/api/runtime/ws' }))
+
+  try {
+    const result = await host.start()
+    assert.equal(result.runtimeCore.isActive(), true)
+    await host.shutdown()
+  } finally {
+    await host.shutdown().catch(() => {})
+    await rm(workspace.workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('composable host rejects embedded mcp module with no servers', { timeout: 10000 }, async () => {
+  const workspace = await createTempWorkspace({
+    nextvConfig: {
+      entrypointPath: 'entry.nrv',
+      externals: ['user_message'],
+      requires: {
+        mcp: {
+          required: true,
+          provider: 'mcp',
+        },
+      },
+      modules: {
+        mcp: {
+          provider: 'mcp',
+          mode: 'embedded',
+          servers: [],
+        },
+      },
+    },
+    entrySource: 'on external "user_message"\n  output text "ok"\nend\n',
+  })
+
+  const port = await findOpenPort()
+  const host = createComposableHost({
+    workspaceDir: workspace.workspaceRelativePath,
+    autoAttachCapabilitiesFromWorkspace: true,
+    port,
+  })
+
+  try {
+    await assert.rejects(
+      () => host.start(),
+      /requires at least one server in "servers" when mode is embedded/i,
+    )
+  } finally {
+    await host.shutdown().catch(() => {})
+    await rm(workspace.workspaceRoot, { recursive: true, force: true })
+  }
+})

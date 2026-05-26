@@ -80,11 +80,15 @@ From your workspace root:
 ```
 npx nerve-compose add mcp --json
 ```
-This scaffolds:
+This scaffolds MCP capability wiring, a local sample MCP server, and workspace capability bindings.
 
-- MCP capability wiring
-- a local sample MCP server
-- workspace capability bindings
+Use inline mode if you prefer a minimal single-file setup:
+
+```bash
+npx nerve-compose add mcp --inline --json
+```
+
+For configuration details and examples (externalized vs inline), see [Host DB Connectors](../guide/10-host-db-connectors.md).
 
 Validate the workspace:
 ```

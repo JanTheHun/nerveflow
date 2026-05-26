@@ -381,10 +381,126 @@ function parseModulesMap(raw, sourceLabel) {
       moduleConfig.mode = mode
     }
 
+    if (moduleConfig.configPath != null && typeof moduleConfig.configPath !== 'string') {
+      throw new Error(`${sourceLabel}: module "${moduleName}.configPath" must be a string when provided.`)
+    }
+
     map[moduleName] = moduleConfig
   }
 
   return map
+}
+
+function isMcpProviderName(providerRaw) {
+  const provider = String(providerRaw ?? '').trim().toLowerCase()
+  return provider === 'mcp' || provider === 'mcp-client'
+}
+
+function isObjectMap(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function resolveModuleConfigReferences({
+  modulesMap,
+  sourceLabel,
+  workspaceDir,
+  resolvePathFromBaseDirectory,
+  readJsonObjectFile,
+}) {
+  const resolvedModulesMap = {}
+
+  for (const [moduleName, moduleConfigRaw] of Object.entries(modulesMap ?? {})) {
+    const moduleConfig = isObjectMap(moduleConfigRaw) ? { ...moduleConfigRaw } : moduleConfigRaw
+    if (!isObjectMap(moduleConfig)) {
+      resolvedModulesMap[moduleName] = moduleConfigRaw
+      continue
+    }
+
+    const configPathValue = moduleConfig.configPath
+    const configPathFromConfigPath = typeof configPathValue === 'string' ? configPathValue.trim() : ''
+    const configPathFromConfigAlias = typeof moduleConfig.config === 'string' ? moduleConfig.config.trim() : ''
+
+    if (configPathFromConfigPath && configPathFromConfigAlias && configPathFromConfigPath !== configPathFromConfigAlias) {
+      throw new Error(`${sourceLabel}: module "${moduleName}" must not define both "configPath" and "config" with different values.`)
+    }
+
+    const configPath = configPathFromConfigPath || configPathFromConfigAlias
+    if (!configPath) {
+      resolvedModulesMap[moduleName] = moduleConfig
+      continue
+    }
+
+    const isMcpProvider = isMcpProviderName(moduleConfig.provider)
+
+    if (isMcpProvider) {
+      const conflictingInlineFields = ['servers']
+        .filter((fieldName) => Object.prototype.hasOwnProperty.call(moduleConfig, fieldName))
+      if (conflictingInlineFields.length > 0) {
+        throw new Error(
+          `${sourceLabel}: module "${moduleName}" must not define inline MCP fields (${conflictingInlineFields.join(', ')}) when external config is used.`,
+        )
+      }
+    }
+
+    const configFieldName = configPathFromConfigPath ? 'configPath' : 'config'
+    const resolvedConfigPath = resolvePathFromBaseDirectory(workspaceDir.absolutePath, configPath, 'editor')
+    if (!existsSync(resolvedConfigPath.absolutePath)) {
+      throw new Error(`${sourceLabel}: module "${moduleName}.${configFieldName}" file not found: ${resolvedConfigPath.relativePath}`)
+    }
+
+    const externalRaw = readJsonObjectFile(resolvedConfigPath.absolutePath)
+    const externalConfig = resolveEnvPlaceholders(
+      externalRaw,
+      `${sourceLabel}: module "${moduleName}.${configFieldName}"`,
+      '',
+      { allowMissingEnv: allowMissingTransportApiKeyEnv },
+    )
+
+    if (!isObjectMap(externalConfig)) {
+      throw new Error(`${sourceLabel}: module "${moduleName}.${configFieldName}" must resolve to an object.`)
+    }
+
+    if (Object.prototype.hasOwnProperty.call(externalConfig, 'provider')) {
+      throw new Error(`${sourceLabel}: module "${moduleName}.${configFieldName}" must not define "provider".`)
+    }
+
+    if (isMcpProvider) {
+      const externalFieldNames = Object.keys(externalConfig)
+      const invalidFields = externalFieldNames.filter((fieldName) => fieldName !== 'servers')
+      if (invalidFields.length > 0) {
+        throw new Error(
+          `${sourceLabel}: module "${moduleName}.${configFieldName}" for MCP supports only "servers"; found: ${invalidFields.join(', ')}.`,
+        )
+      }
+
+      const mergedModuleConfig = {
+        ...moduleConfig,
+        servers: externalConfig.servers,
+        configPath,
+      }
+
+      if (Object.prototype.hasOwnProperty.call(mergedModuleConfig, 'config')) {
+        delete mergedModuleConfig.config
+      }
+
+      resolvedModulesMap[moduleName] = mergedModuleConfig
+      continue
+    }
+
+    const mergedModuleConfig = {
+      ...moduleConfig,
+      ...externalConfig,
+      configPath,
+    }
+
+    if (Object.prototype.hasOwnProperty.call(mergedModuleConfig, 'config')) {
+      delete mergedModuleConfig.config
+    }
+
+    resolvedModulesMap[moduleName] = mergedModuleConfig
+  }
+
+  return resolvedModulesMap
 }
 
 export function loadWorkspaceNextVConfig({
@@ -525,7 +641,13 @@ export function loadWorkspaceNextVConfig({
     }
 
     if (config.nextv.config.modules != null) {
-      config.modules.map = parseModulesMap(config.nextv.config.modules, rootConfigRef('#modules'))
+      config.modules.map = resolveModuleConfigReferences({
+        modulesMap: parseModulesMap(config.nextv.config.modules, rootConfigRef('#modules')),
+        sourceLabel: rootConfigRef('#modules'),
+        workspaceDir,
+        resolvePathFromBaseDirectory,
+        readJsonObjectFile,
+      })
       config.modules.status = 'loaded'
       config.modules.source = rootDisplayRef('#modules')
     }

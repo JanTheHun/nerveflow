@@ -320,7 +320,8 @@ export function createComposableHost({
         throw new Error(`Missing module config for required capability "${capabilityName}" (expected module "${moduleName}")`)
       }
 
-      if (String(moduleConfig.mode ?? 'embedded').toLowerCase() === 'external') {
+      const mode = String(moduleConfig.mode ?? 'embedded').toLowerCase()
+      if (mode === 'external') {
         continue
       }
 
@@ -329,11 +330,19 @@ export function createComposableHost({
         throw new Error(`Module "${moduleName}" must declare a provider`) 
       }
 
+      const normalizedProvider = provider.toLowerCase()
+      if (mode === 'embedded' && (normalizedProvider === 'mcp' || normalizedProvider === 'mcp-client')) {
+        const servers = moduleConfig.servers
+        if (!Array.isArray(servers) || servers.length === 0) {
+          throw new Error(`Module "${moduleName}" provider "${provider}" requires at least one server in "servers" when mode is embedded`)
+        }
+      }
+
       entries.push({
         capabilityName,
         moduleName,
         provider,
-        mode: String(moduleConfig.mode ?? 'embedded').toLowerCase(),
+        mode,
         factory: buildCapabilityFactoryFromModuleProvider(provider, moduleConfig, moduleName, workspaceAbsolutePath),
       })
     }

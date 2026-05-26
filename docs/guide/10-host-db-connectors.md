@@ -39,6 +39,21 @@ node host/server.js
 
 At startup, the composable host resolves module provider labels into capability factories and attaches tool providers/connectors/realizers.
 
+`nerve-compose add memory-pgvector` also scaffolds workspace-local helper scripts:
+
+- `db-helpers/memory-setup.js`
+- `db-helpers/memory-health.js`
+
+These are optional manual utilities. Compose does not provision Postgres and does not run DB setup automatically.
+
+Run them explicitly when needed:
+
+```bash
+cd <workspaceDir>
+MEMORY_DB_URL=postgres://user:pass@localhost:5432/your_db node db-helpers/memory-setup.js
+MEMORY_DB_URL=postgres://user:pass@localhost:5432/your_db node db-helpers/memory-health.js
+```
+
 ## Stable provider labels
 
 Current composable auto-attach provider labels:

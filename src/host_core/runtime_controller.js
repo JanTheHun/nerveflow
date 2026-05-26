@@ -82,6 +82,7 @@ export function createNextVRuntimeController({
   startTimerHandles,
   clearTimerHandles,
   runNextVScriptFromFile,
+  listWorkflowDefinitionFiles = () => [],
   validateOutputContract,
   appendAgentFormatInstructions,
   normalizeAgentFormattedOutput,
@@ -106,6 +107,8 @@ export function createNextVRuntimeController({
   let nextVWorkspaceDirResolved = null
   let nextVWorkspaceConfig = null
   let nextVRuntimeCallHooks = null
+  let nextVRunnerRunOptions = null
+  let nextVDefinitionFiles = []
   let nextVActiveDefinition = {
     activeDefinitionId: '',
     definitionHash: '',
@@ -137,6 +140,19 @@ export function createNextVRuntimeController({
     nextVTimerHandles = clearTimerHandles(nextVTimerHandles)
   }
 
+  function resolveDefinitionFiles(entrypointAbsolutePath) {
+    const discovered = listWorkflowDefinitionFiles(entrypointAbsolutePath)
+    const files = Array.isArray(discovered) ? discovered : []
+    const normalized = files
+      .map((filePath) => String(filePath ?? '').trim())
+      .filter(Boolean)
+      .map((filePath) => normalizeRuntimeEventSourcePath(filePath))
+    const withEntrypoint = normalized.includes(normalizeRuntimeEventSourcePath(entrypointAbsolutePath))
+      ? normalized
+      : [...normalized, normalizeRuntimeEventSourcePath(entrypointAbsolutePath)]
+    return [...new Set(withEntrypoint)].sort()
+  }
+
   function startNextVTimers(runner, timers) {
     clearNextVTimers()
     nextVTimerHandles = startTimerHandles({
@@ -154,6 +170,8 @@ export function createNextVRuntimeController({
     const snapshot = nextVRunner.getSnapshot()
     nextVRunner = null
     nextVRuntimeCallHooks = null
+    nextVRunnerRunOptions = null
+    nextVDefinitionFiles = []
     nextVWorkspaceConfig = null
     nextVWorkspaceDirResolved = null
     nextVActiveDefinition = {
@@ -419,6 +437,7 @@ export function createNextVRuntimeController({
     nextVEntrypointPath = entrypoint.relativePath
     nextVWorkspaceDirResolved = workspaceDir
     nextVWorkspaceConfig = workspaceConfig
+    nextVDefinitionFiles = resolveDefinitionFiles(entrypoint.absolutePath)
     const workspaceConfigSummary = summarizeWorkspaceConfig(workspaceConfig)
     const activeIdentity = buildDefinitionIdentity({
       workspaceDir: workspaceDir.relativePath,
@@ -488,20 +507,22 @@ export function createNextVRuntimeController({
 
     let lastObservedState = initialState
 
+    nextVRunnerRunOptions = {
+      emitTrace,
+      emitTraceState,
+      parallelMaxConcurrency,
+      declaredExternals: getDeclaredExternals(workspaceConfig),
+      effectChannels: declaredEffectChannels,
+      hostAdapter: runtimeCallHooks,
+    }
+
     nextVRunner = createRunner({
       entrypointPath: entrypoint.absolutePath,
       initialState,
       persistence: false,
       stopOnScriptStop: false,
       haltOnError: false,
-      runOptions: {
-        emitTrace,
-        emitTraceState,
-        parallelMaxConcurrency,
-        declaredExternals: getDeclaredExternals(workspaceConfig),
-        effectChannels: declaredEffectChannels,
-        hostAdapter: runtimeCallHooks,
-      },
+      runOptions: nextVRunnerRunOptions,
       onEvent: ({ event, runtimeEvent, snapshot }) => {
         const eventSource = String(event?.source ?? '').trim()
         if (eventSource === 'timer' && suppressTimerNoOps) {
@@ -619,6 +640,7 @@ export function createNextVRuntimeController({
       },
       activeDefinitionId: nextVActiveDefinition.activeDefinitionId,
       definitionHash: nextVActiveDefinition.definitionHash,
+      definitionFiles: [...nextVDefinitionFiles],
       timers: {
         configured: Array.isArray(workspaceConfig.nextv.timers) ? workspaceConfig.nextv.timers.length : 0,
         source: workspaceConfig.nextv.timersSource || null,
@@ -661,7 +683,51 @@ export function createNextVRuntimeController({
 
     const workspaceDir = nextVWorkspaceDirResolved || resolveWorkspaceDirectory(nextVWorkspaceDir)
     const workspaceConfig = loadWorkspaceConfig(workspaceDir)
+    let requestedEntrypointPath = nextVEntrypointPath
+    const workspacePrefix = workspaceDir.relativePath === '.' ? '' : `${workspaceDir.relativePath}/`
+    if (workspacePrefix && requestedEntrypointPath.startsWith(workspacePrefix)) {
+      requestedEntrypointPath = requestedEntrypointPath.slice(workspacePrefix.length)
+    }
+    const entrypoint = resolveEntrypoint(workspaceDir, requestedEntrypointPath, workspaceConfig)
+    const declaredEffectChannels = getDeclaredEffectChannels(workspaceConfig)
+    const requiredCapabilities = getRequiredCapabilities(workspaceConfig)
+    const configuredModules = getConfiguredModules(workspaceConfig)
     const effectsPolicy = normalizeEffectsPolicy(workspaceConfig?.nextv?.config?.effectsPolicy)
+
+    const effectBindingIssues = validateDeclaredEffectBindings({
+      declaredEffectChannels,
+      validateEffectBindings,
+    })
+    if (effectBindingIssues.length > 0) {
+      const message = `Detected ${effectBindingIssues.length} unsupported declared effect binding(s).`
+      if (effectsPolicy === 'strict') {
+        throw new Error(`${message} Set nextv.json#effectsPolicy to "warn" to allow reload.`)
+      }
+      eventBus.publish('nextv_warning', {
+        code: 'UNSUPPORTED_EFFECT_BINDING',
+        message,
+        policy: effectsPolicy,
+        issues: effectBindingIssues,
+      })
+    }
+
+    const capabilityBindingIssues = validateRequiredCapabilityBindings({
+      requiredCapabilities,
+      configuredModules,
+      validateCapabilityBindings,
+    })
+    if (capabilityBindingIssues.length > 0) {
+      const message = `Detected ${capabilityBindingIssues.length} unsupported required capability binding(s).`
+      if (effectsPolicy === 'strict') {
+        throw new Error(`${message} Set nextv.json#effectsPolicy to "warn" to allow reload.`)
+      }
+      eventBus.publish('nextv_warning', {
+        code: 'UNSUPPORTED_CAPABILITY_BINDING',
+        message,
+        policy: effectsPolicy,
+        issues: capabilityBindingIssues,
+      })
+    }
 
     const configRefIssues = validateConfigReferences(workspaceConfig)
     if (configRefIssues.length > 0) {
@@ -680,12 +746,28 @@ export function createNextVRuntimeController({
       throw new Error(`Detected ${forbiddenFieldIssues.length} forbidden agent field(s). Agents must not define transport or other execution parameters.`)
     }
 
+    const nextRunOptions = {
+      ...(nextVRunnerRunOptions ?? {}),
+      declaredExternals: getDeclaredExternals(workspaceConfig),
+      effectChannels: declaredEffectChannels,
+      hostAdapter: nextVRuntimeCallHooks,
+    }
+
+    nextVRunner.swapEntrypoint({
+      entrypointPath: entrypoint.absolutePath,
+      runOptions: nextRunOptions,
+    })
+    nextVRunnerRunOptions = nextRunOptions
+    startNextVTimers(nextVRunner, workspaceConfig.nextv.timers)
+
     nextVWorkspaceDirResolved = workspaceDir
     nextVWorkspaceConfig = workspaceConfig
+    nextVEntrypointPath = entrypoint.relativePath
+    nextVDefinitionFiles = resolveDefinitionFiles(entrypoint.absolutePath)
     const workspaceConfigSummary = summarizeWorkspaceConfig(workspaceConfig)
     const activeIdentity = buildDefinitionIdentity({
       workspaceDir: workspaceDir.relativePath,
-      entrypointPath: nextVEntrypointPath,
+      entrypointPath: entrypoint.relativePath,
       workspaceConfigSummary,
     })
     nextVActiveDefinition = {
@@ -698,7 +780,8 @@ export function createNextVRuntimeController({
 
     const payload = {
       workspaceDir: workspaceDir.relativePath,
-      entrypointPath: nextVEntrypointPath,
+      entrypointPath: entrypoint.relativePath,
+      definitionFiles: [...nextVDefinitionFiles],
       workspaceConfig: workspaceConfigSummary,
       activeDefinitionId: nextVActiveDefinition.activeDefinitionId,
       definitionHash: nextVActiveDefinition.definitionHash,
@@ -872,6 +955,7 @@ export function createNextVRuntimeController({
         running: Boolean(nextVRunner),
         workspaceDir: nextVWorkspaceDir,
         entrypointPath: nextVEntrypointPath,
+        definitionFiles: [...nextVDefinitionFiles],
         activeDefinitionId: nextVActiveDefinition.activeDefinitionId,
         definitionHash: nextVActiveDefinition.definitionHash,
         declaredExternals: getDeclaredExternals(nextVWorkspaceConfig),
@@ -894,6 +978,7 @@ export function createNextVRuntimeController({
     isActive: () => Boolean(nextVRunner),
     getWorkspaceDir: () => nextVWorkspaceDir,
     getEntrypointPath: () => nextVEntrypointPath,
+    getDefinitionFiles: () => [...nextVDefinitionFiles],
     getWorkspaceConfig: () => nextVWorkspaceConfig,
   }
 }

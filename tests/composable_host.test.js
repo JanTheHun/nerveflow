@@ -98,6 +98,15 @@ function waitForWsMessage(ws, predicate) {
   })
 }
 
+async function waitForCondition(predicate, { timeoutMs = 5000, intervalMs = 50 } = {}) {
+  const startMs = Date.now()
+  while (Date.now() - startMs < timeoutMs) {
+    if (predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+  throw new Error('Condition not met before timeout')
+}
+
 test('composable host starts with ws surface and no capabilities', { timeout: 5000 }, async () => {
   const port = await findOpenPort()
   const host = createComposableHost({
@@ -211,6 +220,129 @@ test('composable host supports method chaining', { timeout: 5000 }, async () => 
 
   await host.start()
   await host.shutdown()
+})
+
+test('composable host hot-swap reloads changed workspace config when enabled', { timeout: 15000 }, async () => {
+  const workspace = await createTempWorkspace({
+    nextvConfig: {
+      entrypointPath: 'entry.nrv',
+      externals: ['user_message'],
+    },
+    entrySource: 'on external "user_message"\n  output text "v1"\nend\n',
+    extraFiles: [
+      {
+        path: 'entry.v2.nrv',
+        content: 'on external "user_message"\n  output text "v2"\nend\n',
+      },
+    ],
+  })
+
+  const port = await findOpenPort()
+  const logs = []
+  const originalLog = console.log
+  console.log = (...args) => {
+    logs.push(args.map((value) => String(value)).join(' '))
+  }
+
+  const host = createComposableHost({
+    workspaceDir: workspace.workspaceRelativePath,
+    port,
+    hotSwap: true,
+  })
+
+  host.attachSurface(wsSurface({ path: '/api/runtime/ws' }))
+
+  try {
+    const result = await host.start()
+    assert.equal(result.runtimeCore.getStatus().entrypointPath, 'entry.nrv')
+
+    await writeFile(
+      join(workspace.workspaceRoot, 'nextv.json'),
+      `${JSON.stringify({ entrypointPath: 'entry.v2.nrv', externals: ['user_message'] }, null, 2)}\n`,
+      'utf8',
+    )
+
+    await waitForCondition(
+      () => result.runtimeCore.getStatus().entrypointPath === 'entry.v2.nrv',
+      { timeoutMs: 8000, intervalMs: 100 },
+    )
+
+    assert.equal(logs.some((entry) => entry.includes('[hot-swap] file event=')), true)
+    assert.equal(logs.some((entry) => entry.includes('[hot-swap] applied entrypoint=entry.v2.nrv')), true)
+
+    await host.shutdown()
+  } finally {
+    console.log = originalLog
+    await rm(workspace.workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('composable host hot-swap reloads when included workflow file changes', { timeout: 15000 }, async () => {
+  const workspace = await createTempWorkspace({
+    nextvConfig: {
+      entrypointPath: 'entry.nrv',
+      externals: ['user_message'],
+    },
+    entrySource: [
+      'include "flows/shared.nrv"',
+      'on external "user_message"',
+      '  emit("shared", event.value)',
+      'end',
+    ].join('\n'),
+    extraFiles: [
+      {
+        path: 'flows/shared.nrv',
+        content: [
+          'on "shared"',
+          '  output text "v1"',
+          'end',
+        ].join('\n'),
+      },
+    ],
+  })
+
+  const port = await findOpenPort()
+  const logs = []
+  const originalLog = console.log
+  console.log = (...args) => {
+    logs.push(args.map((value) => String(value)).join(' '))
+  }
+
+  const host = createComposableHost({
+    workspaceDir: workspace.workspaceRelativePath,
+    port,
+    hotSwap: true,
+  })
+
+  host.attachSurface(wsSurface({ path: '/api/runtime/ws' }))
+
+  try {
+    const result = await host.start()
+    const watchedFiles = result.runtimeCore.getDefinitionFiles()
+    assert.equal(watchedFiles.some((file) => String(file).endsWith('/flows/shared.nrv') || String(file).endsWith('\\flows\\shared.nrv')), true)
+
+    await writeFile(
+      join(workspace.workspaceRoot, 'flows', 'shared.nrv'),
+      [
+        'on "shared"',
+        '  output text "v2"',
+        'end',
+      ].join('\n'),
+      'utf8',
+    )
+
+    await waitForCondition(
+      () => logs.some((entry) => entry.includes('[hot-swap] applied entrypoint=entry.nrv')),
+      { timeoutMs: 8000, intervalMs: 100 },
+    )
+
+    assert.equal(logs.some((entry) => entry.includes('flows/shared.nrv')), true)
+
+    await host.shutdown()
+  } finally {
+    console.log = originalLog
+    await rm(workspace.workspaceRoot, { recursive: true, force: true })
+  }
 })
 
 test('composable host auto-attaches speech capability from workspace config', { timeout: 10000 }, async () => {

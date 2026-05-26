@@ -3481,6 +3481,25 @@ export function parseNextVScriptFromFile(filePath, options = {}) {
   return parseNextVScript(source, { baseDir, filePath: absolutePath })
 }
 
+export function listNextVScriptDependencyFilesFromFile(filePath, options = {}) {
+  const absolutePath = resolve(filePath)
+  const source = readFileSync(absolutePath, 'utf8')
+  const baseDir = options.baseDir ?? dirname(absolutePath)
+  const expanded = expandNextVIncludes(source, {
+    baseDir,
+    filePath: absolutePath,
+    stack: [absolutePath],
+  })
+
+  const files = new Set([absolutePath])
+  for (const sourceRef of Array.isArray(expanded?.sourceMap) ? expanded.sourceMap : []) {
+    const sourcePath = String(sourceRef?.sourcePath ?? '').trim()
+    if (sourcePath) files.add(sourcePath)
+  }
+
+  return [...files].sort()
+}
+
 export function compileNextVScriptFromFile(filePath, options = {}) {
   const absolutePath = resolve(filePath)
   const source = readFileSync(absolutePath, 'utf8')

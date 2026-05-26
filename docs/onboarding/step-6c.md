@@ -76,8 +76,14 @@ Expected:
 
 ```bash
 npx nerve-compose add host composable --json
-node host/server.js
+node host/server.mjs --hot-swap
 ```
+
+Hot-swap behavior (optional):
+
+- `--hot-swap` enables file-watch reload for workspace config and active workflow definition files.
+- Included workflow files loaded via `include "..."` are watched too.
+- Reload is strict: invalid changes are rejected and current runtime state remains active.
 
 Runtime WS endpoint:
 
@@ -86,20 +92,24 @@ ws://127.0.0.1:4190/api/runtime/ws
 ```
 
 
-## 3. Configure filesystem MCP
+## 3. Configure host MCP servers
 
-Replace your MCP servers config with:
+`node bin/nerve-compose.js add mcp --json` scaffolds a local MCP server at `mcp-servers/local-mcp.mjs` and wires it into host configuration.
+
+If you want to edit the host MCP server entry manually, use:
 
 ```json
 {
-  "name": "filesystem",
+  "name": "local-mcp",
   "transport": "stdio",
   "config": {
-    "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    "command": "node",
+    "args": ["./mcp-servers/local-mcp.mjs"]
   }
 }
 ```
+
+Add more MCP servers later by editing the host configuration directly.
 
 # What you learned
 

@@ -11,6 +11,7 @@ import {
   buildAgentRetryPrompt,
   buildDecideGuidance,
   buildDecideRetryPrompt,
+  listNextVScriptDependencyFilesFromFile,
   normalizeAgentFormattedOutput,
   parseNextVScript,
   runNextVScriptFromFile,
@@ -186,6 +187,7 @@ export function createRuntimeCore({
     startTimerHandles,
     clearTimerHandles,
     runNextVScriptFromFile,
+    listWorkflowDefinitionFiles: (entrypointPath) => listNextVScriptDependencyFilesFromFile(entrypointPath),
     validateOutputContract,
     appendAgentFormatInstructions,
     normalizeAgentFormattedOutput,
@@ -256,12 +258,20 @@ export function createRuntimeCore({
     return runtimeController.submitCandidate()
   }
 
+  function reloadConfig() {
+    return runtimeController.reloadConfig()
+  }
+
   function promoteCandidate() {
     return runtimeController.promoteCandidate()
   }
 
   function getDefinitionStatus() {
     return runtimeController.getDefinitionStatus()
+  }
+
+  function getDefinitionFiles() {
+    return runtimeController.getDefinitionFiles()
   }
 
   function getGraph(payload = {}) {
@@ -751,6 +761,7 @@ export function createRuntimeCore({
       subscribers: eventBus.size,
       workspaceDir: runtimeController.getWorkspaceDir(),
       entrypointPath: runtimeController.getEntrypointPath(),
+      definitionFiles: runtimeController.getDefinitionFiles(),
       lastError,
     }
   }
@@ -763,9 +774,11 @@ export function createRuntimeCore({
     stop,
     enqueue,
     dispatchIngress,
+    reloadConfig,
     submitCandidate,
     promoteCandidate,
     getDefinitionStatus,
+    getDefinitionFiles,
     getGraph,
     callInspectorExecute,
     getSnapshot,

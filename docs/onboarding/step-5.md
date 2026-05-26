@@ -47,7 +47,7 @@ From your workspace root:
 
 ```bash
 npx nerve-compose add host composable --json
-node host/server.js
+node host/server.mjs --hot-swap
 ```
 
 Host endpoint:
@@ -65,6 +65,12 @@ The host files are now local project code.
 You can read and extend them directly under `host/`.
 
 You still send events over the same WS runtime surface.
+
+Hot-swap notes:
+
+- `--hot-swap` is optional.
+- When enabled, the host watches workspace config and active workflow definition files (including transitive `include` files).
+- Reload uses strict policy: incompatible changes are rejected and current runtime state remains active.
 
 ---
 

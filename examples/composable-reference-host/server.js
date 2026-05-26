@@ -29,9 +29,33 @@ import {
   wsSurface,
 } from '../../src/runtime/index.js'
 
-function resolveWorkspaceDir() {
-  const workspaceArg = process.argv[2]
-  const workspaceInput = process.env.WORKSPACE_DIR || workspaceArg || '.'
+function parseCliOptions(argv) {
+  const options = {
+    workspaceArg: '',
+    hotSwap: false,
+  }
+
+  for (const rawToken of argv) {
+    const token = String(rawToken ?? '').trim()
+    if (!token) continue
+    if (token === '--hot-swap') {
+      options.hotSwap = true
+      continue
+    }
+    if (token.startsWith('--')) {
+      throw new Error(`Unknown argument: ${token}`)
+    }
+    if (options.workspaceArg) {
+      throw new Error(`Unexpected extra argument: ${token}`)
+    }
+    options.workspaceArg = token
+  }
+
+  return options
+}
+
+function resolveWorkspaceDir(options) {
+  const workspaceInput = process.env.WORKSPACE_DIR || options.workspaceArg || '.'
 
   const absolutePath = path.resolve(process.cwd(), workspaceInput)
   const stats = statSync(absolutePath)
@@ -100,12 +124,14 @@ const port = parseInt(process.env.PORT || '4190', 10)
 const callAgent = createOpenAICompatTransport()
 
 async function main() {
-  const workspace = resolveWorkspaceDir()
+  const cliOptions = parseCliOptions(process.argv.slice(2))
+  const workspace = resolveWorkspaceDir(cliOptions)
   const envLoad = loadWorkspaceEnv(workspace.absolutePath)
 
   console.log('🌐 Composable Reference Host')
   console.log(`📁 Workspace: ${workspace.absolutePath}`)
   console.log(`🔌 Port: ${port}`)
+  console.log(`♻️ Hot-swap: ${cliOptions.hotSwap ? 'enabled' : 'disabled'}`)
   if (envLoad.loaded) {
     console.log(`🔐 Loaded ${envLoad.applied} env var${envLoad.applied === 1 ? '' : 's'} from ${envLoad.filePath}`)
   }
@@ -123,6 +149,7 @@ async function main() {
     defaultModel: 'mistral',
     slowAgentWarningMs: 2000,
     parallelMaxConcurrency: 4,
+    hotSwap: cliOptions.hotSwap,
   })
 
   console.log('📦 Attaching capabilities from workspace config...')
@@ -156,7 +183,7 @@ async function main() {
 
 main().catch((err) => {
   console.error('❌ Error:', err.message)
-  console.error('Usage: WORKSPACE_DIR=path/to/workspace node examples/composable-reference-host/server.js [workspaceDir]')
+  console.error('Usage: WORKSPACE_DIR=path/to/workspace node examples/composable-reference-host/server.js [workspaceDir] [--hot-swap]')
   console.error('Tip: use nerve-compose add to declare capabilities in your workspace config')
   process.exit(1)
 })

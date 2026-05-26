@@ -115,6 +115,39 @@ export class NextVEventRunner {
     }
   }
 
+  invalidateCompiledEntrypoint() {
+    this.compiledEntrypointInstructions = null
+  }
+
+  swapEntrypoint(options = {}) {
+    const nextEntrypointPath = String(options.entrypointPath ?? '').trim()
+    if (!nextEntrypointPath) {
+      throw new Error('entrypointPath is required')
+    }
+
+    const nextRunOptions = options.runOptions ?? null
+    const nextInitSignalType = options.initSignalType
+    const nextInitSignalValue = options.initSignalValue
+
+    if (this.precompileEntrypoint) {
+      const compiled = compileNextVScriptFromFile(nextEntrypointPath, nextRunOptions ?? this.defaultRunOptions)
+      this.compiledEntrypointInstructions = compiled.instructions
+    } else {
+      this.compiledEntrypointInstructions = null
+    }
+
+    this.entrypointPath = nextEntrypointPath
+    if (nextRunOptions && typeof nextRunOptions === 'object') {
+      this.defaultRunOptions = nextRunOptions
+    }
+    if (nextInitSignalType !== undefined) {
+      this.initSignalType = String(nextInitSignalType ?? 'init').trim() || 'init'
+    }
+    if (Object.prototype.hasOwnProperty.call(options, 'initSignalValue')) {
+      this.initSignalValue = nextInitSignalValue ?? null
+    }
+  }
+
   _loadPersistedState() {
     if (!this.persistenceEnabled) return
     if (!existsSync(this.statePath)) return

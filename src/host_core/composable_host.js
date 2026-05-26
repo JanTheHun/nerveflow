@@ -1,4 +1,5 @@
 import { createServer } from 'node:http'
+import { watch } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -59,6 +60,8 @@ export function createComposableHost({
   defaultModel = '',
   slowAgentWarningMs = 15000,
   parallelMaxConcurrency = null,
+  hotSwap = false,
+  hotSwapDebounceMs = 150,
 } = {}) {
   // Resolve repo root if not provided
   const resolvedRepoRoot = repoRoot || resolveDefaultRepoRoot()
@@ -74,12 +77,133 @@ export function createComposableHost({
   let activeWsPath = '/api/runtime/ws'
   let lifecycleState = 'idle' // idle, starting, running, stopping, stopped, error
   let instantiatedCapabilities = [] // Store capability instances for later teardown
+  let hotSwapWatchers = []
+  let hotSwapTimer = null
+  let hotSwapQueued = false
+  let hotSwapInFlight = false
+  let hotSwapChangedPaths = new Set()
+  let hotSwapWorkspaceAbsolutePath = ''
 
   function resolveDefaultRepoRoot() {
     const __filename = fileURLToPath(import.meta.url)
     const __dirname = dirname(__filename)
     // src/host_core/composable_host.js -> src/host_core -> src -> repo_root
     return resolve(join(__dirname, '..', '..'))
+  }
+
+  function logHotSwap(message) {
+    console.log(`[hot-swap] ${message}`)
+  }
+
+  function clearHotSwapTimer() {
+    if (hotSwapTimer) {
+      clearTimeout(hotSwapTimer)
+      hotSwapTimer = null
+    }
+  }
+
+  function clearHotSwapWatchers() {
+    clearHotSwapTimer()
+    for (const watcher of hotSwapWatchers) {
+      try {
+        watcher.close()
+      } catch {}
+    }
+    hotSwapWatchers = []
+  }
+
+  function resolveActiveHotSwapFiles() {
+    if (!runtimeCore || !hotSwapWorkspaceAbsolutePath) return []
+
+    const runtimeStatus = runtimeCore.getStatus()
+    const files = [
+      join(hotSwapWorkspaceAbsolutePath, 'nerve.json'),
+      join(hotSwapWorkspaceAbsolutePath, 'nextv.json'),
+    ]
+
+    const definitionFiles = typeof runtimeCore.getDefinitionFiles === 'function'
+      ? runtimeCore.getDefinitionFiles()
+      : []
+    for (const filePath of Array.isArray(definitionFiles) ? definitionFiles : []) {
+      const normalized = String(filePath ?? '').trim()
+      if (!normalized || normalized.startsWith('(')) continue
+      files.push(resolve(resolvedRepoRoot, normalized))
+    }
+
+    const entrypointPath = String(runtimeStatus?.entrypointPath ?? '').trim()
+    if (entrypointPath) {
+      files.push(resolve(resolvedRepoRoot, entrypointPath))
+    }
+
+    return [...new Set(files)]
+  }
+
+  function scheduleHotSwap(filePath, eventType) {
+    if (!hotSwap || !runtimeCore?.isActive()) return
+
+    hotSwapChangedPaths.add(filePath)
+    logHotSwap(`file event=${eventType} path=${relative(resolvedRepoRoot, filePath).replace(/\\/g, '/') || filePath}`)
+
+    clearHotSwapTimer()
+    hotSwapTimer = setTimeout(() => {
+      hotSwapTimer = null
+      void applyHotSwap()
+    }, Math.max(50, Number(hotSwapDebounceMs) || 150))
+  }
+
+  async function applyHotSwap() {
+    if (!hotSwap || !runtimeCore?.isActive()) return
+    if (hotSwapInFlight) {
+      hotSwapQueued = true
+      return
+    }
+
+    hotSwapInFlight = true
+    const changedPaths = [...hotSwapChangedPaths]
+    hotSwapChangedPaths = new Set()
+
+    try {
+      const changed = changedPaths
+        .map((filePath) => relative(resolvedRepoRoot, filePath).replace(/\\/g, '/') || filePath)
+        .join(', ')
+      logHotSwap(`applying strict reload${changed ? ` for ${changed}` : ''}`)
+      const result = runtimeCore.reloadConfig()
+      configureHotSwapWatchers()
+      logHotSwap(`applied entrypoint=${result.entrypointPath} definition=${result.activeDefinitionId}`)
+    } catch (err) {
+      logHotSwap(`rejected: ${String(err?.message ?? err)}`)
+    } finally {
+      hotSwapInFlight = false
+      if (hotSwapQueued || hotSwapChangedPaths.size > 0) {
+        hotSwapQueued = false
+        clearHotSwapTimer()
+        hotSwapTimer = setTimeout(() => {
+          hotSwapTimer = null
+          void applyHotSwap()
+        }, Math.max(50, Number(hotSwapDebounceMs) || 150))
+      }
+    }
+  }
+
+  function configureHotSwapWatchers() {
+    clearHotSwapWatchers()
+    if (!hotSwap || !runtimeCore?.isActive()) return
+
+    const filesToWatch = resolveActiveHotSwapFiles()
+    for (const filePath of filesToWatch) {
+      const directoryPath = dirname(filePath)
+      const fileName = basename(filePath)
+      try {
+        const watcher = watch(directoryPath, (eventType, rawFileName) => {
+          const changedName = String(rawFileName ?? '').trim()
+          if (changedName && changedName !== fileName) return
+          scheduleHotSwap(filePath, eventType)
+        })
+        hotSwapWatchers.push(watcher)
+      } catch {}
+    }
+
+    logHotSwap(`watching ${filesToWatch.length} file(s)`)
   }
 
   function attachCapability(capabilityFactory) {
@@ -278,6 +402,7 @@ export function createComposableHost({
     lifecycleState = 'starting'
     try {
       const resolvers = createRuntimeResolvers({ repoRoot: resolvedRepoRoot })
+      hotSwapWorkspaceAbsolutePath = resolvers.resolveWorkspaceDirectory(workspaceDir).absolutePath
       const capabilityResolution = buildCapabilityResolution(resolvers)
       const capabilityFactories = capabilityResolution.factories
 
@@ -380,6 +505,7 @@ export function createComposableHost({
 
       // 7. Start the runtime
       await runtimeCore.start({ workspaceDir })
+      configureHotSwapWatchers()
 
       // 8. Listen on port
       await new Promise((resolve, reject) => {
@@ -415,6 +541,8 @@ export function createComposableHost({
     lifecycleState = 'stopping'
 
     try {
+      clearHotSwapWatchers()
+
       // 1. Close surfaces
       if (wsurfaceInstance) {
         try {
@@ -450,8 +578,10 @@ export function createComposableHost({
       }
 
       lifecycleState = 'stopped'
+      hotSwapWorkspaceAbsolutePath = ''
     } catch (err) {
       lifecycleState = 'stopped'
+      hotSwapWorkspaceAbsolutePath = ''
       throw err
     }
   }

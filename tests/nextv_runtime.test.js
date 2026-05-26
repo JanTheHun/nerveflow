@@ -9,6 +9,7 @@ import {
   buildAgentReturnContractGuidance,
   buildAgentRetryPrompt,
   compileAST,
+  listNextVScriptDependencyFilesFromFile,
   normalizeAgentFormattedOutput,
   parseNextVScript,
   runNextVScript,
@@ -2539,6 +2540,38 @@ test('script() can execute a child script file via hook', async () => {
 
     assert.equal(result.state.counter, 6)
     assert.equal(result.events.some((event) => event.type === 'output' && event.content === 'child'), true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('listNextVScriptDependencyFilesFromFile returns transitive include files', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nextv-include-deps-'))
+  const entryPath = join(dir, 'entry.nrv')
+  const authPath = join(dir, 'auth.nrv')
+  const sharedPath = join(dir, 'shared.nrv')
+
+  writeFileSync(entryPath, [
+    'include "auth.nrv"',
+    'on external "user_message"',
+    '  output text "entry"',
+    'end',
+  ].join('\n'), 'utf8')
+  writeFileSync(authPath, [
+    'include "shared.nrv"',
+    'on "auth"',
+    '  output text "auth"',
+    'end',
+  ].join('\n'), 'utf8')
+  writeFileSync(sharedPath, [
+    'on "shared"',
+    '  output text "shared"',
+    'end',
+  ].join('\n'), 'utf8')
+
+  try {
+    const files = listNextVScriptDependencyFilesFromFile(entryPath)
+    assert.deepEqual(files, [authPath, entryPath, sharedPath])
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

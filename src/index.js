@@ -17,6 +17,7 @@ export {
 
 export {
   NextVError,
+  listNextVScriptDependencyFilesFromFile,
   parseNextVScript,
   parseNextVScriptFromFile,
   runNextVScript,

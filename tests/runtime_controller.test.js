@@ -22,8 +22,10 @@ function createFakeRunnerFactory() {
   }
 
   return class FakeRunner {
-    constructor() {
+    constructor(options = {}) {
       this.state = state
+      this.entrypointPath = String(options.entrypointPath ?? '')
+      this.runOptions = options.runOptions ?? {}
     }
 
     start() {
@@ -47,6 +49,17 @@ function createFakeRunnerFactory() {
         pendingEvents: this.state.pendingEvents,
         state: this.state.state,
         locals: this.state.locals,
+      }
+    }
+
+    swapEntrypoint(options = {}) {
+      const nextEntrypointPath = String(options.entrypointPath ?? '').trim()
+      if (!nextEntrypointPath) {
+        throw new Error('entrypointPath is required')
+      }
+      this.entrypointPath = nextEntrypointPath
+      if (options.runOptions && typeof options.runOptions === 'object') {
+        this.runOptions = options.runOptions
       }
     }
   }
@@ -82,6 +95,8 @@ function createController(options = {}) {
     validateConfigReferences = () => [],
     validateNoForbiddenAgentFields = () => [],
     loadWorkspaceConfig = () => workspaceConfig,
+    resolveEntrypoint = () => ({ absolutePath: '/workspace/main.nrv', relativePath: 'main.nrv' }),
+    listWorkflowDefinitionFiles = () => ['/workspace/main.nrv'],
     getDeclaredExternals = () => [],
   } = options
 
@@ -91,7 +106,7 @@ function createController(options = {}) {
     createHostAdapter,
     resolveWorkspaceDirectory: () => ({ absolutePath: '/workspace', relativePath: '.' }),
     loadWorkspaceConfig,
-    resolveEntrypoint: () => ({ absolutePath: '/workspace/main.nrv', relativePath: 'main.nrv' }),
+    resolveEntrypoint,
     resolveOptionalStatePath: () => '',
     resolveStateDiscoveryBaseDir: () => '/workspace',
     resolveDiscoveredStatePath: () => '',
@@ -115,6 +130,7 @@ function createController(options = {}) {
     startTimerHandles: () => [],
     clearTimerHandles: () => [],
     runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    listWorkflowDefinitionFiles,
     validateOutputContract: () => {},
     appendAgentFormatInstructions: (prompt) => prompt,
     normalizeAgentFormattedOutput: (value) => value,
@@ -323,6 +339,69 @@ test('controller reloadConfig refreshes live config and clears adapter cache', a
   assert.equal(reloaded.workspaceConfig.agentsSource, 'agents.v2.json')
   assert.equal(clearConfigCacheCount, 1)
   assert.equal(published.some((entry) => entry.eventName === 'nextv_config_reloaded'), true)
+})
+
+test('controller reloadConfig swaps entrypoint and preserves live state', async () => {
+  const configA = {
+    agents: { status: 'missing', source: '' },
+    tools: { status: 'missing', source: '' },
+    nextv: { status: 'loaded', file: 'nextv.json', config: { entrypointPath: 'main.nrv' }, timers: [], timersSource: '' },
+    operators: { status: 'missing', source: '', map: {} },
+  }
+  const configB = {
+    agents: { status: 'missing', source: '' },
+    tools: { status: 'missing', source: '' },
+    nextv: { status: 'loaded', file: 'nextv.json', config: { entrypointPath: 'main.v2.nrv' }, timers: [], timersSource: '' },
+    operators: { status: 'missing', source: '', map: {} },
+  }
+
+  const loadedConfigs = [configA, configB]
+  let loadIndex = 0
+  let entrypointIndex = 0
+  let runnerRef = null
+
+  const { controller } = createController({
+    loadWorkspaceConfig: () => loadedConfigs[Math.min(loadIndex++, loadedConfigs.length - 1)],
+    resolveEntrypoint: () => {
+      const entrypoints = [
+        { absolutePath: '/workspace/main.nrv', relativePath: 'main.nrv' },
+        { absolutePath: '/workspace/main.v2.nrv', relativePath: 'main.v2.nrv' },
+      ]
+      return entrypoints[Math.min(entrypointIndex++, entrypoints.length - 1)]
+    },
+    createRunner: (options) => {
+      runnerRef = new (createFakeRunnerFactory())(options)
+      return runnerRef
+    },
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  runnerRef.state.state = { count: 7 }
+
+  const reloaded = controller.reloadConfig()
+
+  assert.equal(reloaded.entrypointPath, 'main.v2.nrv')
+  assert.deepEqual(controller.getSnapshot().state, { count: 7 })
+  assert.equal(runnerRef.entrypointPath, '/workspace/main.v2.nrv')
+})
+
+test('controller exposes definition files for active workflow and include dependencies', async () => {
+  const { controller } = createController({
+    listWorkflowDefinitionFiles: (entrypointPath) => {
+      if (String(entrypointPath).includes('main.v2.nrv')) {
+        return ['/workspace/main.v2.nrv', '/workspace/flows/common.nrv']
+      }
+      return ['/workspace/main.nrv', '/workspace/flows/shared.nrv']
+    },
+  })
+
+  const started = await controller.start({ entrypointPath: 'main.nrv' })
+  assert.deepEqual(started.definitionFiles, ['/workspace/flows/shared.nrv', '/workspace/main.nrv'])
+  assert.deepEqual(controller.getDefinitionFiles(), ['/workspace/flows/shared.nrv', '/workspace/main.nrv'])
+
+  const reloaded = controller.reloadConfig()
+  assert.deepEqual(reloaded.definitionFiles, ['/workspace/flows/shared.nrv', '/workspace/main.nrv'])
+  assert.deepEqual(controller.getDefinitionStatus().active.definitionFiles, ['/workspace/flows/shared.nrv', '/workspace/main.nrv'])
 })
 
 test('controller submitCandidate reports rejected candidate without mutating active routing', async () => {

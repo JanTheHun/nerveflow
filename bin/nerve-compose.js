@@ -248,9 +248,30 @@ function buildGeneratedReferenceHostServerSource() {
     "  wsSurface,",
     "} from '../node_modules/nerveflow/src/runtime/index.js'",
     '',
-    'function resolveWorkspaceDir() {',
-    '  const workspaceArg = process.argv[2]',
-    "  const workspaceInput = process.env.WORKSPACE_DIR || workspaceArg || '.'",
+    'function parseCliOptions(argv) {',
+    '  const options = { workspaceArg: "", hotSwap: false }',
+    '',
+    '  for (const rawToken of argv) {',
+    "    const token = String(rawToken ?? '').trim()",
+    '    if (!token) continue',
+    "    if (token === '--hot-swap') {",
+    '      options.hotSwap = true',
+    '      continue',
+    '    }',
+    "    if (token.startsWith('--')) {",
+    '      throw new Error(`Unknown argument: ${token}`)',
+    '    }',
+    '    if (options.workspaceArg) {',
+    '      throw new Error(`Unexpected extra argument: ${token}`)',
+    '    }',
+    '    options.workspaceArg = token',
+    '  }',
+    '',
+    '  return options',
+    '}',
+    '',
+    'function resolveWorkspaceDir(options) {',
+    "  const workspaceInput = process.env.WORKSPACE_DIR || options.workspaceArg || '.'",
     '',
     '  const absolutePath = path.resolve(process.cwd(), workspaceInput)',
     '  const stats = statSync(absolutePath)',
@@ -263,10 +284,10 @@ function buildGeneratedReferenceHostServerSource() {
     '',
     'function stripEnvValueQuotes(valueRaw) {',
     "  const value = String(valueRaw ?? '')",
-    '  if (value.length >= 2 && value.startsWith("\"") && value.endsWith("\"")) {',
+    '  if (value.length >= 2 && value.startsWith(\'"\') && value.endsWith(\'"\')) {',
     '    return value.slice(1, -1)',
     '  }',
-    "  if (value.length >= 2 && value.startsWith('\'') && value.endsWith('\'')) {",
+    "  if (value.length >= 2 && value.startsWith(\"'\") && value.endsWith(\"'\")) {",
     '    return value.slice(1, -1)',
     '  }',
     '  return value',
@@ -309,12 +330,14 @@ function buildGeneratedReferenceHostServerSource() {
     'const callAgent = createOpenAICompatTransport()',
     '',
     'async function main() {',
-    '  const workspace = resolveWorkspaceDir()',
+    '  const cliOptions = parseCliOptions(process.argv.slice(2))',
+    '  const workspace = resolveWorkspaceDir(cliOptions)',
     '  const envLoad = loadWorkspaceEnv(workspace.absolutePath)',
     '',
     "  console.log('Reference Host (composable profile)')",
     '  console.log(`Workspace: ${workspace.absolutePath}`)',
     '  console.log(`Port: ${port}`)',
+    '  console.log(`Hot-swap: ${cliOptions.hotSwap ? "enabled" : "disabled"}`)',
     '  if (envLoad.loaded) {',
     "    const suffix = envLoad.applied === 1 ? '' : 's'",
     '    console.log(`Loaded ${envLoad.applied} env var${suffix} from ${envLoad.filePath}`)',
@@ -330,6 +353,7 @@ function buildGeneratedReferenceHostServerSource() {
     "    defaultModel: 'mistral',",
     '    slowAgentWarningMs: 2000,',
     '    parallelMaxConcurrency: 4,',
+    '    hotSwap: cliOptions.hotSwap,',
     '  })',
     '',
     '  host.attachSurface(wsSurface({ path: \"/api/runtime/ws\" }))',
@@ -350,7 +374,7 @@ function buildGeneratedReferenceHostServerSource() {
     '',
     'main().catch((err) => {',
     "  console.error('Error:', err.message)",
-    "  console.error('Usage: WORKSPACE_DIR=path/to/workspace node host/server.js [workspaceDir]')",
+    "  console.error('Usage: WORKSPACE_DIR=path/to/workspace node host/server.mjs [workspaceDir] [--hot-swap]')",
     "  console.error('Tip: use nerve-compose add to declare capabilities in your workspace config')",
     '  process.exit(1)',
     '})',
@@ -370,13 +394,13 @@ function buildGeneratedReferenceHostReadmeSource() {
     '## Start',
     '',
     '```bash',
-    'node host/server.js',
+    'node host/server.mjs',
     '```',
     '',
     'Optional workspace override:',
     '',
     '```bash',
-    'WORKSPACE_DIR=. node host/server.js',
+    'WORKSPACE_DIR=. node host/server.mjs',
     '```',
     '',
     '## Compose Integration',
@@ -521,7 +545,7 @@ function parseCliOptions(argv) {
       continue
     }
 
-    if (options.subcommand === 'add' && options.capability === 'mcp' && !options.addName && !options.workspaceDir) {
+    if (options.subcommand === 'add' && options.capability === 'mcp' && !options.workspaceDir) {
       const nextToken = String(rest[i + 1] ?? '').trim()
       const hasFollowingPositional = Boolean(nextToken && !nextToken.startsWith('-'))
       const looksLikeWorkspace = isLikelyWorkspacePath(token)
@@ -531,8 +555,7 @@ function parseCliOptions(argv) {
         continue
       }
 
-      options.addName = token
-      continue
+      throw new Error(`Unexpected extra argument: ${token}`)
     }
 
     if (options.subcommand === 'add' && options.capability === 'host' && !options.addName && !options.workspaceDir) {
@@ -585,10 +608,6 @@ function parseCliOptions(argv) {
     throw new Error('add requires <capability>')
   }
 
-  if (options.subcommand === 'add' && options.capability === 'host' && !options.addName) {
-    options.addName = HOST_PROFILE_COMPOSABLE
-  }
-
   if (options.subcommand === 'add' && (options.capability === 'transport' || options.capability === 'model') && !options.addName) {
     throw new Error(`add ${options.capability} requires <name>`)
   }
@@ -603,6 +622,10 @@ function parseCliOptions(argv) {
 
   if (options.subcommand === 'add' && options.capability === 'host' && !SUPPORTED_HOST_PROFILES.has(normalizeHostProfileName(options.addName))) {
     throw new Error(`Unsupported host profile: ${options.addName}`)
+  }
+
+  if (options.subcommand === 'add' && options.capability === 'mcp' && options.addName) {
+    throw new Error('add mcp does not accept a server name; configure host MCP servers directly')
   }
 
   if (options.subcommand === 'add' && options.capability === 'model' && !options.modelTransport) {
@@ -1001,24 +1024,15 @@ function upsertNextVSpeechCapabilityConfig(workspaceDir) {
   )
 }
 
-function sanitizeMcpServerName(nameRaw) {
-  const normalized = String(nameRaw ?? '').trim().toLowerCase()
-  const slug = normalized
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  return slug || 'local-mcp'
-}
-
-function scaffoldMcpServer(workspaceDir, serverName) {
-  const safeServerName = sanitizeMcpServerName(serverName)
-  const mcpServerPath = path.join(workspaceDir, 'mcp-servers', `${safeServerName}.mjs`)
-  const generated = buildGeneratedMcpServerSource(safeServerName)
+function scaffoldMcpServer(workspaceDir) {
+  const mcpServerPath = path.join(workspaceDir, 'mcp-servers', 'local-mcp.mjs')
+  const generated = buildGeneratedMcpServerSource('local-mcp')
   const existing = readTextFileIfExists(mcpServerPath)
 
   if (existing == null) {
     ensureParentDir(mcpServerPath)
     writeFileSync(mcpServerPath, generated, 'utf8')
-    return { action: 'created', path: mcpServerPath, serverName: safeServerName }
+    return { action: 'created', path: mcpServerPath }
   }
 
   if (!existing.includes(GENERATED_MCP_SERVER_MARKER)) {
@@ -1026,16 +1040,15 @@ function scaffoldMcpServer(workspaceDir, serverName) {
       action: 'skipped_manual_merge',
       path: mcpServerPath,
       message: 'mcp server file already exists and is not generated by nerve-compose',
-      serverName: safeServerName,
     }
   }
 
   if (existing === generated) {
-    return { action: 'unchanged', path: mcpServerPath, serverName: safeServerName }
+    return { action: 'unchanged', path: mcpServerPath }
   }
 
   writeFileSync(mcpServerPath, generated, 'utf8')
-  return { action: 'updated', path: mcpServerPath, serverName: safeServerName }
+  return { action: 'updated', path: mcpServerPath }
 }
 
 function upsertGeneratedScaffoldFile(filePath, generatedSource, marker, manualMergeMessage) {
@@ -1072,14 +1085,14 @@ function scaffoldReferenceHost(workspaceDir, profileRaw) {
     }]
   }
 
-  const hostServerPath = path.join(workspaceDir, 'host', 'server.js')
+  const hostServerPath = path.join(workspaceDir, 'host', 'server.mjs')
   const hostReadmePath = path.join(workspaceDir, 'host', 'README.md')
   return [
     upsertGeneratedScaffoldFile(
       hostServerPath,
       buildGeneratedReferenceHostServerSource(),
       GENERATED_HOST_SERVER_MARKER,
-      'host/server.js already exists and is not generated by nerve-compose host scaffold',
+      'host/server.mjs already exists and is not generated by nerve-compose host scaffold',
     ),
     upsertGeneratedScaffoldFile(
       hostReadmePath,
@@ -1775,14 +1788,13 @@ function buildComposableGuidance(options) {
   }
 
   if (options.capability === 'mcp') {
-    const serverName = sanitizeMcpServerName(options.addName)
     return {
       providerLabel: 'mcp',
       host: 'composable-reference-host',
       autoAttach: true,
       steps: [
         'Declare MCP capability in workspace config (requires/modules).',
-        `Run the generated local MCP server (mcp-servers/${serverName}.mjs) with node when developing manually.`,
+        'Run the generated local MCP server (mcp-servers/local-mcp.mjs) with node when developing manually.',
         'Start composable-reference-host with WORKSPACE_DIR pointing to the workspace.',
       ],
     }
@@ -1795,7 +1807,7 @@ function buildComposableGuidance(options) {
       autoAttach: false,
       steps: [
         'Scaffold local host baseline files into host/.',
-        'Edit host/server.js as needed for your project runtime wiring.',
+        'Edit host/server.mjs as needed for your project runtime wiring.',
         'Add capability scaffolds (for example: nerve-compose add mcp) and restart host.',
       ],
     }
@@ -1840,13 +1852,11 @@ async function runAddCommand(options) {
       scaffoldSpeechSurface(workspaceDir),
     ]
   } else if (options.capability === 'mcp') {
-    const safeServerName = sanitizeMcpServerName(options.addName || 'local-mcp')
-    const scaffoldResult = scaffoldMcpServer(workspaceDir, safeServerName)
+    const scaffoldResult = scaffoldMcpServer(workspaceDir)
     fileResults = [
       scaffoldResult,
-      upsertNextVMcpCapabilityConfig(workspaceDir, safeServerName, `./mcp-servers/${safeServerName}.mjs`),
+      upsertNextVMcpCapabilityConfig(workspaceDir, 'local-mcp', './mcp-servers/local-mcp.mjs'),
     ]
-    options.addName = safeServerName
   } else if (options.capability === 'transport') {
     const { path: configPath, label: configLabel } = resolveWorkspaceConfigPath(workspaceDir)
     const transportEnvLines = buildTransportEnvLines(options.addName)
@@ -1939,8 +1949,10 @@ async function runAddCommand(options) {
   }))
 
   const payload = buildAddPayload({
-    capability: options.capability === 'transport' || options.capability === 'model' || options.capability === 'mcp' || options.capability === 'host'
+    capability: options.capability === 'transport' || options.capability === 'model' || options.capability === 'host'
       ? `${options.capability}:${options.addName}`
+      : options.capability === 'mcp'
+        ? 'mcp'
       : options.capability === 'docs'
         ? `docs:${options.docsProfile}`
       : options.capability,

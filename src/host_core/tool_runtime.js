@@ -3,6 +3,38 @@ function normalizeProviders(providersRaw) {
   return providersRaw.filter(Boolean)
 }
 
+function extractProviderToolNames(provider) {
+  if (!provider || typeof provider !== 'object' || Array.isArray(provider)) return []
+
+  const directNames = Object.keys(provider)
+    .filter((name) => {
+      const entry = provider[name]
+      return typeof entry === 'function'
+    })
+
+  return directNames
+}
+
+async function listAvailableToolNames(providersList, metadataProvidersList) {
+  const names = new Set()
+
+  for (const provider of providersList) {
+    for (const name of extractProviderToolNames(provider)) {
+      names.add(name)
+    }
+  }
+
+  for (const provider of metadataProvidersList) {
+    if (!provider || typeof provider !== 'object' || Array.isArray(provider)) continue
+    for (const name of Object.keys(provider)) {
+      if (!name) continue
+      names.add(name)
+    }
+  }
+
+  return [...names].sort()
+}
+
 async function resolveNamedRuntimeMetadata(providersList, name) {
   if (!name) return null
 
@@ -82,6 +114,9 @@ export function createToolRuntime({ providers = [], metadataProviders = [] } = {
     getMetadata: async (nameRaw) => {
       const toolName = String(nameRaw ?? '').trim()
       return await resolveNamedRuntimeMetadata(metadataProvidersList, toolName)
+    },
+    listAvailable: async () => {
+      return await listAvailableToolNames(providersList, metadataProvidersList)
     },
   }
 }

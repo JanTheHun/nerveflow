@@ -1402,16 +1402,6 @@ function normalizeAgentToolsPolicy(value, context, usageLabel = 'agent()') {
     denyOnUnknownTool = value.denyOnUnknownTool
   }
 
-  if (modeRaw === 'governed' && allow.length === 0) {
-    throw nextvError({
-      line: context.line,
-      kind: 'runtime',
-      code: 'INVALID_AGENT_TOOLS',
-      statement: context.statement,
-      message: `${usageLabel} tools.allow must include at least one tool when mode is "governed".`,
-    })
-  }
-
   return {
     mode: modeRaw,
     maxRounds,
@@ -2118,7 +2108,6 @@ function buildFunctions(options, runtimeContext) {
         if (!passes) break
         out.push(entry)
       }
-
       return out
     },
     pick: ({ positional, named }) => {

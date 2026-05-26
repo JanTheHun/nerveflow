@@ -77,3 +77,24 @@ test('tool runtime returns wrapped result when object provider signals handled:t
   assert.deepEqual(result, { ok: true, source: 'first' })
   assert.equal(nextProviderCalled, false)
 })
+
+test('tool runtime can list discovered tools from providers and metadata providers', async () => {
+  const runtime = createToolRuntime({
+    providers: [
+      {
+        ping: async () => ({ ok: true }),
+      },
+      {
+        search: async () => ({ ok: true }),
+      },
+    ],
+    metadataProviders: [
+      {
+        inspect: { name: 'inspect' },
+      },
+    ],
+  })
+
+  const names = await runtime.listAvailable()
+  assert.deepEqual(names, ['inspect', 'ping', 'search'])
+})

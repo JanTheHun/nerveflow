@@ -1883,6 +1883,25 @@ test('agent() accepts tools policy and forwards it to host adapter', async () =>
   })
 })
 
+test('agent() accepts governed tools policy without explicit allow', async () => {
+  const calls = []
+  await runNextVScript('result = agent("classifier", "route this", tools={ mode: "governed", maxRounds: 4 })', {
+    callAgent: async ({ tools }) => {
+      calls.push({ tools })
+      return 'ok'
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].tools, {
+    mode: 'governed',
+    maxRounds: 4,
+    allow: [],
+    timeoutMs: 0,
+    denyOnUnknownTool: true,
+  })
+})
+
 test('agent() tools mode defaults to disabled when omitted', async () => {
   const calls = []
   await runNextVScript('result = agent("classifier", "route this")', {

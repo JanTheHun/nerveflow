@@ -1216,6 +1216,97 @@ test('callAgent executes governed tool calls and feeds tool results back to mode
   assert.deepEqual(result.metadata.tools.toolsUsed, ['search'])
 })
 
+test('callAgent governed mode auto-discovers capability tools when allow is omitted', async () => {
+  let callCount = 0
+  const toolRuntime = createToolRuntime({
+    providers: [
+      {
+        search: async ({ args }) => ({ hits: ['doc-1'], q: String(args?.q ?? '') }),
+      },
+    ],
+  })
+
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: new Set(['search']), aliases: {} },
+      agents: { profiles: { chat: { model: 'gpt-4o' } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => {
+      callCount += 1
+      if (callCount === 1) {
+        return {
+          text: '',
+          metadata: {
+            provider: 'openai_compat',
+            toolCalls: [{ id: 'call-1', name: 'search', argumentsRaw: '{"q":"nerveflow"}' }],
+          },
+        }
+      }
+      return { text: 'final answer', metadata: { provider: 'openai_compat' } }
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+    toolRuntime,
+  })
+
+  const result = await adapter.callAgent({
+    agent: 'chat',
+    prompt: 'find docs',
+    tools: { mode: 'governed', maxRounds: 3 },
+    event: { type: 'user_message', source: 'external' },
+  })
+
+  assert.equal(result.value, 'final answer')
+  assert.equal(result.metadata.tools.mode, 'governed')
+  assert.equal(result.metadata.tools.toolCalls, 1)
+  assert.deepEqual(result.metadata.tools.toolsUsed, ['search'])
+})
+
+test('callAgent governed mode rejects when no effective tools are available', async () => {
+  const toolRuntime = createToolRuntime({
+    providers: [
+      {
+        search: async () => ({ ok: true }),
+      },
+    ],
+  })
+
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: new Set(['fetch']), aliases: {} },
+      agents: { profiles: { chat: { model: 'gpt-4o' } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => ({ text: 'noop', metadata: { provider: 'openai_compat' } }),
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+    toolRuntime,
+  })
+
+  await assert.rejects(
+    () => adapter.callAgent({
+      agent: 'chat',
+      prompt: 'find docs',
+      tools: { mode: 'governed', maxRounds: 2 },
+      event: { type: 'user_message', source: 'external' },
+    }),
+    /tools\.mode is "governed" but no effective tools are available/,
+  )
+})
+
 test('callAgent governed mode uses metadata-backed tool schema when available', async () => {
   const transportCalls = []
 

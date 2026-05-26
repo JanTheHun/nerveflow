@@ -508,9 +508,6 @@ export function createRuntimeCore({
     const allow = Array.isArray(rawTools.allow)
       ? [...new Set(rawTools.allow.map((value) => String(value ?? '').trim()).filter(Boolean))]
       : []
-    if (allow.length === 0) {
-      throw new Error('tools.allow must include at least one tool when tools.mode is "governed"')
-    }
 
     const maxRoundsRaw = Number(rawTools.maxRounds)
     const timeoutMsRaw = Number(rawTools.timeoutMs)

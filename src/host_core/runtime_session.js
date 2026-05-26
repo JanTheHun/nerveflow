@@ -329,6 +329,7 @@ export function createHostAdapter({
 }) {
   const normalizedModelResolutionMode = String(modelResolutionMode ?? '').trim().toLowerCase() || 'strict'
   const allowLegacyDirectModelFallback = normalizedModelResolutionMode === 'legacy'
+  let cachedDiscoveredToolNames = null
 
   const readWorkspaceConfig = () => {
     if (typeof getWorkspaceConfig === 'function') {
@@ -359,6 +360,34 @@ export function createHostAdapter({
   function resolveAgentProfile(agentName) {
     const profiles = readWorkspaceConfig()?.agents?.profiles ?? {}
     return profiles[agentName] ?? null
+  }
+
+  function normalizeToolNameList(names = []) {
+    return [...new Set(
+      (Array.isArray(names) ? names : [])
+        .map((name) => resolveToolName(name))
+        .map((name) => String(name ?? '').trim())
+        .filter(Boolean)
+    )]
+  }
+
+  async function resolveCapabilityToolNames() {
+    if (Array.isArray(cachedDiscoveredToolNames)) {
+      return cachedDiscoveredToolNames
+    }
+
+    if (!toolRuntime || typeof toolRuntime.listAvailable !== 'function') {
+      cachedDiscoveredToolNames = []
+      return cachedDiscoveredToolNames
+    }
+
+    try {
+      const discovered = await toolRuntime.listAvailable()
+      cachedDiscoveredToolNames = normalizeToolNameList(discovered)
+    } catch {
+      cachedDiscoveredToolNames = []
+    }
+    return cachedDiscoveredToolNames
   }
 
   // Session-scoped cache: avoids redundant multi-layer config lookups per callAgent invocation.
@@ -592,18 +621,37 @@ export function createHostAdapter({
       const retryLimit = Number.isInteger(retry_on_contract_violation) ? Math.max(0, retry_on_contract_violation) : 0
       const requestedToolsPolicy = normalizeRequestedToolsPolicy(tools)
 
-      const profileAllowedTools = profileTools
-        .map((name) => String(name ?? '').trim())
-        .filter(Boolean)
+      const profileAllowedTools = normalizeToolNameList(profileTools)
 
-      const requestedAllow = requestedToolsPolicy.allow
-      const effectiveAllow = profileAllowedTools.length > 0
-        ? (requestedAllow.length > 0
+      const requestedAllow = normalizeToolNameList(requestedToolsPolicy.allow)
+      const capabilityAllowedTools = requestedToolsPolicy.mode === 'governed'
+        ? await resolveCapabilityToolNames()
+        : []
+
+      let effectiveAllow = []
+      if (requestedAllow.length > 0) {
+        effectiveAllow = profileAllowedTools.length > 0
           ? requestedAllow.filter((name) => profileAllowedTools.includes(name))
-          : profileAllowedTools)
-        : requestedAllow
+          : requestedAllow
+      } else if (profileAllowedTools.length > 0) {
+        effectiveAllow = profileAllowedTools
+      } else {
+        effectiveAllow = capabilityAllowedTools
+      }
 
-      const governedToolsEnabled = requestedToolsPolicy.mode === 'governed' && effectiveAllow.length > 0
+      const workspaceAllowedTools = readWorkspaceConfig()?.tools?.allow ?? null
+      if (workspaceAllowedTools instanceof Set) {
+        effectiveAllow = effectiveAllow.filter((name) => workspaceAllowedTools.has(name))
+      }
+
+      if (requestedToolsPolicy.mode === 'governed' && effectiveAllow.length === 0) {
+        throw new Error(
+          `${callLabel} tools.mode is "governed" but no effective tools are available. Attach a capability with tools, `
+          + 'configure agent profile tools, or provide tools.allow explicitly.'
+        )
+      }
+
+      const governedToolsEnabled = requestedToolsPolicy.mode === 'governed'
       const governedMaxRounds = governedToolsEnabled ? requestedToolsPolicy.maxRounds : 0
       const governedTimeoutMs = governedToolsEnabled ? requestedToolsPolicy.timeoutMs : 0
       const governedDenyOnUnknownTool = governedToolsEnabled ? requestedToolsPolicy.denyOnUnknownTool !== false : true

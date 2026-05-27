@@ -76,6 +76,7 @@ import {
   nextVImageList,
   nextVIngressNameInput,
   nextVIngressValueInput,
+  nextVInputChannelState,
   nextVInputImageState,
   nextVLastKnownState,
   nextVManagedProcessRunning,
@@ -103,7 +104,8 @@ import {
   scriptVSplit2,
   splitter,
   storageKeys,
-  workspace
+  workspace,
+  userIOPanelState
 } from './state.js'
 import {
   isNextVMode,
@@ -124,7 +126,8 @@ import {
 import {
   buildExecutionGroup,
   renderExecutionGroups,
-  setNextVEventsLiveMode
+  setNextVEventsLiveMode,
+  appendUserInputEcho
 } from './02_user_output.js'
 import {
   reconcileNextVGraphAgentTimersFromExecution,
@@ -272,6 +275,45 @@ function scheduleExecutionSnapshotFallback() {
     executionSnapshotFallbackTimer = null
     void fetchAndRenderLatestSnapshot()
   }, 140)
+}
+
+function isDeclaredExternalInputEvent(eventType) {
+  const normalized = String(eventType ?? '').trim()
+  if (!normalized) return false
+  return Array.isArray(nextVInputChannelState?.declaredExternals)
+    && nextVInputChannelState.declaredExternals.includes(normalized)
+}
+
+function coerceInputEchoText(value) {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed || ''
+  }
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  if (typeof value === 'object') {
+    const messageLike = [
+      value.text,
+      value.message,
+      value.prompt,
+      value.input,
+      value.content,
+      value.value,
+    ]
+    for (const candidate of messageLike) {
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim()
+      }
+    }
+    try {
+      return JSON.stringify(value)
+    } catch {
+      return ''
+    }
+  }
+  return ''
 }
 
 function mergeExecutionEventsWithLiveRuntimeEvents(executionEvents, runtimeEvents) {
@@ -793,6 +835,12 @@ export function openNextVStream() {
       flashNextVGraphExternalEvent(eventType)
       flashNextVGraphEventValue(eventType, payload?.event?.value, { nodeId: eventType })
       appendNextVLogRow(`[nextv:event] queued type=${eventType} source=${source}${valueSuffix}`, 'step')
+      if (userIOPanelState.showInputEcho && isDeclaredExternalInputEvent(eventType)) {
+        const inputEchoText = coerceInputEchoText(rawValue)
+        if (inputEchoText) {
+          appendUserInputEcho(inputEchoText)
+        }
+      }
     } catch {
       // ignore malformed stream payload
     }
@@ -1362,6 +1410,9 @@ export async function sendNextVEvent() {
       clearNextVEventImages({ silent: true })
     } else {
       setStatus('nextv event queued')
+    }
+    if (!nextVEventSource && userIOPanelState.showInputEcho && value.trim()) {
+      appendUserInputEcho(value)
     }
   } catch (err) {
     appendNextVErrorLog(err)

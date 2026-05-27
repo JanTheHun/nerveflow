@@ -37,6 +37,7 @@ import {
   nextVImageList,
   nextVIngressNameInput,
   nextVIngressValueInput,
+  nextVInputChannelState,
   nextVInputImageState,
   nextVLastKnownState,
   nextVManagedProcessRunning,
@@ -52,6 +53,7 @@ import {
   splitter,
   storageKeys,
   transcript,
+  userIOPanelState,
   workspace
 } from './state.js'
 import {
@@ -119,6 +121,9 @@ import {
   appendErrorRow,
   ensureNextVEntrypointVisible
 } from './13_layout.js'
+import {
+  appendUserInputEcho
+} from './02_user_output.js'
 
 const MAX_SEEN_EXECUTION_EVENT_KEYS = 20000
 let seenExecutionEventKeys = new Set()
@@ -198,6 +203,45 @@ function scheduleExecutionSnapshotFallback() {
     executionSnapshotFallbackTimer = null
     void fetchAndRenderLatestSnapshot()
   }, 140)
+}
+
+function isDeclaredExternalInputEvent(eventType) {
+  const normalized = String(eventType ?? '').trim()
+  if (!normalized) return false
+  return Array.isArray(nextVInputChannelState?.declaredExternals)
+    && nextVInputChannelState.declaredExternals.includes(normalized)
+}
+
+function coerceInputEchoText(value) {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed || ''
+  }
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  if (typeof value === 'object') {
+    const messageLike = [
+      value.text,
+      value.message,
+      value.prompt,
+      value.input,
+      value.content,
+      value.value,
+    ]
+    for (const candidate of messageLike) {
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim()
+      }
+    }
+    try {
+      return JSON.stringify(value)
+    } catch {
+      return ''
+    }
+  }
+  return ''
 }
 
 export function openNextVStream() {
@@ -357,6 +401,12 @@ export function openNextVStream() {
         flashNextVGraphTimerPulse(eventType)
       }
     } catch {
+      if (userIOPanelState.showInputEcho && isDeclaredExternalInputEvent(eventType)) {
+        const inputEchoText = coerceInputEchoText(rawValue)
+        if (inputEchoText) {
+          appendUserInputEcho(inputEchoText)
+        }
+      }
       // ignore malformed stream payload
     }
   })
@@ -690,6 +740,9 @@ export async function sendNextVEvent() {
       clearNextVEventImages({ silent: true })
     } else {
       setStatus('nextv event queued')
+    }
+    if (userIOPanelState.showInputEcho && value.trim()) {
+      appendUserInputEcho(value)
     }
   } catch (err) {
     appendNextVErrorLog(err)

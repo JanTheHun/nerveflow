@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { createServer as createNetServer } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -208,6 +208,7 @@ async function main() {
     const attachScript = path.join(installedBinDir, 'nerve-attach.js')
     const composeScript = path.join(installedBinDir, 'nerve-compose.js')
     const workspaceDir = path.join('node_modules', 'nerveflow', 'examples', 'minimal-web-host')
+    const speechTemplateRoot = path.join(installedRoot, 'examples', 'news-agent', 'voice-spa')
 
     const composableServerPath = path.join(installedRoot, 'examples', 'composable-reference-host', 'server.js')
     const composableReadmePath = path.join(installedRoot, 'examples', 'composable-reference-host', 'README.md')
@@ -229,6 +230,14 @@ async function main() {
       throw new Error('Documentation assets required by nerve-compose add docs are missing from installed npm artifact')
     }
 
+    const speechTemplateEnvPath = path.join(speechTemplateRoot, '.env.example')
+    const speechTemplateServerPath = path.join(speechTemplateRoot, 'server.js')
+    const speechTemplateLibPath = path.join(speechTemplateRoot, 'server_lib.js')
+    const speechTemplatePublicPath = path.join(speechTemplateRoot, 'public', 'index.html')
+    if (!existsSync(speechTemplateEnvPath) || !existsSync(speechTemplateServerPath) || !existsSync(speechTemplateLibPath) || !existsSync(speechTemplatePublicPath)) {
+      throw new Error('Speech scaffold template assets are missing from installed npm artifact')
+    }
+
     console.log('[pack-smoke] validating installed nerve-compose validate command')
     const validateResult = await runCommand(process.execPath, [
       composeScript,
@@ -239,6 +248,34 @@ async function main() {
     const validatePayload = JSON.parse(String(validateResult.stdout || '{}'))
     if (validatePayload?.ok !== true || validatePayload?.command !== 'validate') {
       throw new Error(`Validate command failed in installed package: ${JSON.stringify(validatePayload)}`)
+    }
+
+    console.log('[pack-smoke] validating installed nerve-compose add speech scaffold')
+    const scaffoldWorkspaceDir = path.join(tempRoot, 'speech-scaffold-workspace')
+    await mkdir(scaffoldWorkspaceDir, { recursive: true })
+    await writeFile(
+      path.join(scaffoldWorkspaceDir, 'nextv.json'),
+      `${JSON.stringify({ entrypointPath: 'entry.nrv' }, null, 2)}\n`,
+      'utf8',
+    )
+    const addSpeechResult = await runCommand(process.execPath, [
+      composeScript,
+      'add',
+      'speech',
+      scaffoldWorkspaceDir,
+      '--json',
+    ], { cwd: tempRoot })
+    const addSpeechPayload = JSON.parse(String(addSpeechResult.stdout || '{}'))
+    if (addSpeechPayload?.ok !== true || addSpeechPayload?.capability !== 'speech') {
+      throw new Error(`Speech scaffold failed in installed package: ${JSON.stringify(addSpeechPayload)}`)
+    }
+    const scaffoldedSpeechServerPath = path.join(scaffoldWorkspaceDir, 'voice-spa', 'server.js')
+    const scaffoldedSpeechLibPath = path.join(scaffoldWorkspaceDir, 'capabilities', 'speech', 'server_lib.mjs')
+    if (!existsSync(scaffoldedSpeechServerPath)) {
+      throw new Error('Speech scaffold did not create voice-spa/server.js in installed package smoke test')
+    }
+    if (!existsSync(scaffoldedSpeechLibPath)) {
+      throw new Error('Speech scaffold did not create capabilities/speech/server_lib.mjs in installed package smoke test')
     }
 
     console.log('[pack-smoke] booting installed runtime artifact')

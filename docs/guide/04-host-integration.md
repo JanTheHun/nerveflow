@@ -188,7 +188,10 @@ Current commands:
 
 - creates or updates `.env.example` with `VOICE_*`, `WHISPER_*`, `PIPER_*`, and runtime endpoint placeholders
 - updates `nerve.json` `requires.speech` and `modules.speech` when present (falls back to `nextv.json` for compatibility)
-- creates `speech-surface/` with record/stop SPA assets and a bridge server (`/api/voice-command`, `/api/output/stream`)
+- creates `voice-spa/` with UI/server files (`server.js`, `public/*`, local `.env.example`) and a module-local `package.json` (`type: module`)
+- creates shared speech process helpers in `capabilities/speech/server_lib.mjs` consumed by `voice-spa/server.js`
+
+Speech environment settings are local to `voice-spa/.env.example` and `voice-spa/.env`; `add speech` does not modify root workspace `.env` or `.env.example`.
 
 `add transport <name>` registers a transport entry in workspace config, appends transport-specific `.env.example` placeholders, and safely upserts missing transport keys in `.env` (without overwriting existing values).
 

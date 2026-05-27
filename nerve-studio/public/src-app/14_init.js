@@ -21,7 +21,9 @@ import {
   setDeclaredEffectChannels,
   renderUserOutputChannelFilters,
   applyUserOutputChannelVisibility,
-  clearUserOutputPanel
+  clearUserOutputPanel,
+  toggleShowInputEcho,
+  initShowInputEcho
 } from './02_user_output.js'
 import {
   isNextVMode,
@@ -211,6 +213,7 @@ export function initLayoutState() {
   initNextVStateDiffPanel()
   initNextVStatePanelTools()
   initNextVUserIOPanel()
+  initShowInputEcho()
   updateOpenFileLabel('')
   renderScriptMirror()
   if (scriptInputs && scriptInputs.children.length === 0) {
@@ -312,6 +315,7 @@ syncNextVRuntimeState()
 Object.assign(window, {
   // 02_user_output.js
   clearUserOutputPanel,
+  toggleShowInputEcho,
   setNextVEventsLiveMode,
   // 03_ui_controls.js
   setNextVPrimaryView,

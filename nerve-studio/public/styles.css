@@ -1148,6 +1148,14 @@ body.mode-nextv .open-file-tabs-row + .panel-editor-shell {
   color: var(--user-output-declared-text);
 }
 
+.user-output-message.user-input-echo {
+  align-self: flex-end;
+  border-style: dashed;
+  border-color: var(--user-output-border);
+  background: transparent;
+  opacity: 0.85;
+}
+
 .user-output-empty {
   color: var(--dim);
   opacity: 0.85;

@@ -61,6 +61,7 @@ export const storageKeys = {
   nextVStateFilter: 'local-agent.nextv.stateFilter',
   nextVUserIOOpen: 'local-agent.nextv.userIOOpen',
   nextVUserIOWidth: 'local-agent.nextv.userIOWidth',
+  nextVShowInputEcho: 'local-agent.nextv.showInputEcho',
   nextVUserOutputChannels: 'local-agent.nextv.userOutputChannels',
   nextVIngressControlsVisible: 'local-agent.nextv.ingressControlsVisible',
   nextVRuntimeTarget: 'local-agent.nextv.runtimeTarget',
@@ -171,6 +172,7 @@ export const nextVPanelState = {
 
 export const userIOPanelState = {
   open: false,
+  showInputEcho: false,
 }
 
 export const nextVGraphState = {

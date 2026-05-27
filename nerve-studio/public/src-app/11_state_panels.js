@@ -25,6 +25,7 @@ import {
 } from './state.js'
 import {
   normalizeUserOutputChannel,
+  appendUserInputEcho,
   appendUserOutputMessage,
   appendUserOutputVoice,
   openVisualOutputWindow,
@@ -521,6 +522,20 @@ export function renderCanonicalNextVEvents(events) {
 
     if (event.type === 'input') {
       const source = String(event.source ?? 'external')
+      const rawValue = Object.prototype.hasOwnProperty.call(event, 'value') ? event.value : null
+      let inputValue = ''
+      if (typeof rawValue === 'string') {
+        inputValue = rawValue.trim()
+      } else if (rawValue !== null && rawValue !== undefined) {
+        try {
+          inputValue = JSON.stringify(rawValue)
+        } catch {
+          inputValue = String(rawValue)
+        }
+      }
+      if (inputValue) {
+        appendUserInputEcho(inputValue)
+      }
       appendNextVLogRow(`[nextv:input] source=${source}`, 'step')
     }
   }

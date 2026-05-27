@@ -59,7 +59,7 @@ npx nerve-send <wsUrl> <eventType> [message]
 
 ## Next
 
-Add a model and run a stateful chatbot from CLI in [step-2.md](step-2.md).
+Add a model and run a stateful chatbot from CLI in [Step 2](step-2.md).
 
 ## Learn More
 

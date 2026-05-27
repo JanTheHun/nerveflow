@@ -111,5 +111,14 @@ npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "play garbage"
 
 Even weak local models become dramatically more reliable once retrieval narrows the ambiguity space before bounded routing.
 
+
+## Next
+
+Add other capabilities:
+
+- [step 6 B](step-6b.md) — Add speech capability
+- [step 6 C](step-6c.md) — Add MCP servers
+
+
 ---
 If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../../MANIFESTO.md).

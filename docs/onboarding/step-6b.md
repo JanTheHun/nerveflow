@@ -128,4 +128,11 @@ If you also run nerve-studio:
 
 Minimal surface. Composable depth.
 
+## Next
+
+Add other capabilities:
+
+- [Step 6 A](step-6a.md) — Add a vector database for real RAG
+- [step 6 C](step-6c.md) — Add MCP servers
+
 If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../../MANIFESTO.md).

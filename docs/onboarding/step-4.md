@@ -105,6 +105,6 @@ It is to show how Nerveflow can help you design it.
 
 ## Next
 
-Meet your first host and add your first tool call in [step-5.md](step-5.md).
+Meet your first host and add your first tool call in [Step 5](step-5.md).
 
 If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../../MANIFESTO.md).

@@ -170,9 +170,9 @@ Minimal surface. Composable depth.
 
 Add real capability surfaces:
 
-- [step-6a.md](step-6a.md) — Add a vector database for real RAG
-- [step-6b.md](step-6b.md) — Add speech capability
-- [step-6c.md](step-6c.md) — Add MCP servers
+- [Step 6 A](step-6a.md) — Add a vector database for real RAG
+- [step 6 B](step-6b.md) — Add speech capability
+- [step 6 C](step-6c.md) — Add MCP servers
 
 ## If you hadn't done it yet: scaffold documentation profiles
 

@@ -222,6 +222,6 @@ npx nerve-send <wsUrl> <eventType> [message] [--timeout-ms <n>]
 ```
 ## Next
 
-Attach Nerve Studio, an observability surface in [step-3.md](step-3.md).
+Attach Nerve Studio, an observability surface in [Step 3](step-3.md).
 
 If you want to understand *why* Nerveflow is designed this way, read [MANIFESTO.md](../../MANIFESTO.md).

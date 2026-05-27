@@ -110,7 +110,15 @@ The workflow stays inspectable while capabilities scale outward.
 
 Minimal surface. Composable depth.
 
-## Reference: Next
+## Next
+
+Add real capability surfaces:
+
+- [Step 6 A](step-6a.md) — Add a vector database for real RAG
+- [step 6 B](step-6b.md) — Add speech capability
+
+
+## Reference
 
 - See composable host reference source: [examples/composable-reference-host/README.md](../../examples/composable-reference-host/README.md)
 - See provider architecture notes: [docs/guide/10-host-db-connectors.md](../guide/10-host-db-connectors.md)

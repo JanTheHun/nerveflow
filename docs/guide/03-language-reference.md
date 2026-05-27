@@ -254,8 +254,10 @@ Workflows can reference LLM models and agent profiles through a centralized thre
 
 ### Transports Registry
 
-Define transport endpoints in `nerve.json#transports` (preferred) or `nextv.json#transports` (compatibility), or in a separate `transports.json` file.
+Define transport endpoints in `nerve.json#transports` or `nextv.json#transports` (compatibility), or in a separate `transports.json` file.
+For compose workflows, `nerve-compose add transport` defaults to `transports.json` for new registries and preserves inline writes when an inline transports map already exists.
 `transports.json` is environment-specific and should not be committed to version control.
+You can also keep transports in `nerve.json#transportsConfig` / `nextv.json#transportsConfig` when you want an explicit external file reference instead of the default `transports.json` discovery.
 
 ```json
 {
@@ -291,7 +293,9 @@ Loading precedence: `nerve.json#transports` → `nextv.json#transports` → `ner
 
 ### Models Registry
 
-Define models in `nerve.json#models` (preferred) or `nextv.json#models` (compatibility), or a separate `models.json` file:
+Define models in `nerve.json#models` or `nextv.json#models` (compatibility), or a separate `models.json` file:
+For compose workflows, `nerve-compose add model` defaults to `models.json` for new registries and preserves inline writes when an inline models map already exists.
+`models.json` follows the same registry shape as inline `models` and is loaded from the workspace root by default.
 
 ```json
 {

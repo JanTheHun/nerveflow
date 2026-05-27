@@ -1,6 +1,6 @@
 # Nerveflow
 
-Deterministic control for probabilistic software.
+**Deterministic control for probabilistic software.**
 
 Nerveflow is a workflow runtime for AI systems that need:
 
@@ -25,7 +25,20 @@ npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "hello nerve"
 
 ## Start Here
 
-* [Onboarding](docs/onboarding/step-1.md)
+### [Onboarding](docs/onboarding/step-1.md)
+
+Follow the onboarding sequence to:
+- start the runtime
+- attach a model
+- inspect workflows in Studio
+- add bounded routing
+- attach host capabilities
+- connect MCP, vector DB and external systems
+
+### [Quick Language Reference](docs/guide/14-quick-language-reference.md)
+
+## Documentation
+
 * [User Handbook](docs/guide/13-user-handbook.md)
 * [Language Reference](docs/guide/03-language-reference.md)
 * [Host Integration](docs/guide/04-host-integration.md)

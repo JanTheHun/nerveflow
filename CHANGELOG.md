@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-05-27
+
 ### Added
 
 - Structured return contracts now support string scalar enum constraints via string-literal arrays.

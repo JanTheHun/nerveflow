@@ -102,15 +102,16 @@ export async function createMemoryTable(pgPool, options = {}) {
 }
 
 /**
- * Embed text using Ollama embedding API
- * (Phase 2: will be called by store/retrieve tools)
+ * Embed text using OpenAI-compatible or local embedding APIs
  *
  * @param {string} text - text to embed
- * @param {string} model - Ollama model name
- * @param {string} baseUrl - Ollama base URL
+ * @param {string} model - embedding model name
+ * @param {string} baseUrl - embedding service base URL
+ * @param {object} [options]
+ * @param {string} [options.apiKey] - optional bearer API key for OpenAI-compatible endpoints
  * @returns {Promise<number[]>} embedding vector
  */
-export async function embedText(text, model, baseUrl) {
+export async function embedText(text, model, baseUrl, options = {}) {
   if (!text || typeof text !== 'string') {
     throw new Error('embedText: text must be non-empty string')
   }
@@ -120,6 +121,14 @@ export async function embedText(text, model, baseUrl) {
   }
 
   const normalizedBaseUrl = String(baseUrl ?? '').trim().replace(/\/+$/g, '')
+  const apiKey = String(options?.apiKey ?? '').trim()
+  const headers = {
+    'Content-Type': 'application/json',
+  }
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`
+  }
+
   const endpoints = [
     {
       url: `${normalizedBaseUrl}/api/embed`,
@@ -147,12 +156,15 @@ export async function embedText(text, model, baseUrl) {
     for (const endpoint of endpoints) {
       const response = await fetch(endpoint.url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(endpoint.body),
       })
 
       if (!response.ok) {
-        lastHttpError = `Ollama embed failed: ${response.status} ${response.statusText}`
+        const authHint = response.status === 401 || response.status === 403
+          ? '; check MEMORY_EMBEDDING_API_KEY'
+          : ''
+        lastHttpError = `embedding request failed: ${response.status} ${response.statusText}${authHint}`
         if (response.status === 404) {
           continue
         }
@@ -178,8 +190,9 @@ export async function embedText(text, model, baseUrl) {
  *
  * @param {object} config
  * @param {string} config.pgUrl - PG connection string
- * @param {string} config.embeddingModel - Ollama model (default: mistral-embed)
- * @param {string} config.embeddingBaseUrl - Ollama base URL (default: http://127.0.0.1:11434)
+ * @param {string} config.embeddingModel - embedding model name
+ * @param {string} config.embeddingBaseUrl - embedding service base URL
+ * @param {string} config.embeddingApiKey - optional bearer API key for OpenAI-compatible endpoints
  * @returns {object} tool provider { memory_store, memory_retrieve, memory_delete, memory_update }
  */
 export function createMemoryProvider(config = {}) {
@@ -190,6 +203,8 @@ export function createMemoryProvider(config = {}) {
 
   const embeddingModel = String(config.embeddingModel ?? process.env.MEMORY_EMBEDDING_MODEL ?? 'mistral-embed').trim()
   const embeddingBaseUrl = String(config.embeddingBaseUrl ?? process.env.MEMORY_EMBEDDING_BASE_URL ?? 'http://127.0.0.1:11434').trim()
+  const embeddingApiKey = String(config.embeddingApiKey ?? process.env.MEMORY_EMBEDDING_API_KEY ?? '').trim()
+  const embeddingRequestOptions = embeddingApiKey ? { apiKey: embeddingApiKey } : {}
   const embeddingDimensions = resolveEmbeddingDimensions(config)
   const embedTextImpl = typeof config.embedText === 'function' ? config.embedText : embedText
 
@@ -227,7 +242,7 @@ export function createMemoryProvider(config = {}) {
 
       let embedding = input?.embedding
       if (!Array.isArray(embedding)) {
-        embedding = await embedTextImpl(text, embeddingModel, embeddingBaseUrl)
+        embedding = await embedTextImpl(text, embeddingModel, embeddingBaseUrl, embeddingRequestOptions)
       }
 
       if (!isFiniteNumberArray(embedding)) {
@@ -287,7 +302,7 @@ export function createMemoryProvider(config = {}) {
       try {
         let queryEmbedding = input?.embedding
         if (!Array.isArray(queryEmbedding)) {
-          queryEmbedding = await embedTextImpl(queryText, embeddingModel, embeddingBaseUrl)
+          queryEmbedding = await embedTextImpl(queryText, embeddingModel, embeddingBaseUrl, embeddingRequestOptions)
         }
 
         if (!isFiniteNumberArray(queryEmbedding) || queryEmbedding.length !== embeddingDimensions) {
@@ -385,7 +400,7 @@ export function createMemoryProvider(config = {}) {
       try {
         let embedding = input?.embedding
         if (!Array.isArray(embedding)) {
-          embedding = await embedTextImpl(text, embeddingModel, embeddingBaseUrl)
+          embedding = await embedTextImpl(text, embeddingModel, embeddingBaseUrl, embeddingRequestOptions)
         }
 
         if (!isFiniteNumberArray(embedding)) {

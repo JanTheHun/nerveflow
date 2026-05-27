@@ -45,7 +45,7 @@ ollama pull qwen3:14b
 
 ## 1. Configure host MCP servers
 
-Depending on how you added MCP capability to your composable reference host, you have a `servers` property either your `nerve.json` or in a separate `mcp.json` file. Here you can add your MCP servers, for example filesystem MCP:
+Depending on how you added MCP capability to your composable reference host, you have a `servers` property either your `nerve.json` or in a separate `capabilities/mcp/mcp.json` file. Here you can add your MCP servers, for example filesystem MCP:
 
 Replace or expand your `servers` list with:
 ```json

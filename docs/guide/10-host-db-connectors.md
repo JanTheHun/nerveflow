@@ -32,6 +32,8 @@ node host/server.js
 
 ## Workspace contract
 
+The registry files for models and transports already work the same way as `agents.json`: `nerve-compose add model` and `nerve-compose add transport` now default to writing `models.json` and `transports.json` at the workspace root for new registries. If inline `nerve.json` / `nextv.json` registry blocks already exist, compose preserves those inline writes for compatibility. Composable capabilities stay separate and continue to use their own generated folders.
+
 `nerve-compose add memory-pgvector` writes capability declarations into workspace config (`nerve.json`, or `nextv.json` fallback), including:
 
 - `requires.memory`
@@ -41,8 +43,12 @@ At startup, the composable host resolves module provider labels into capability 
 
 `nerve-compose add memory-pgvector` also scaffolds workspace-local helper scripts:
 
-- `db-helpers/memory-setup.js`
-- `db-helpers/memory-health.js`
+- `capabilities/memory/db-helpers/memory-setup.js`
+- `capabilities/memory/db-helpers/memory-health.js`
+
+It now appends missing memory keys to both `.env.example` and `.env`.
+Sensitive values in `.env` are scaffolded with mock placeholders (for example, a mock `MEMORY_DB_URL`) and should be replaced before connecting to real infrastructure.
+If you prefer to fill sensitive values manually, run memory scaffold with `--blank` so sensitive fields are added with empty values.
 
 These are optional manual utilities. Compose does not provision Postgres and does not run DB setup automatically.
 
@@ -50,8 +56,8 @@ Run them explicitly when needed:
 
 ```bash
 cd <workspaceDir>
-MEMORY_DB_URL=postgres://user:pass@localhost:5432/your_db node db-helpers/memory-setup.js
-MEMORY_DB_URL=postgres://user:pass@localhost:5432/your_db node db-helpers/memory-health.js
+MEMORY_DB_URL=postgres://user:pass@localhost:5432/your_db node capabilities/memory/db-helpers/memory-setup.js
+MEMORY_DB_URL=postgres://user:pass@localhost:5432/your_db node capabilities/memory/db-helpers/memory-health.js
 ```
 
 ## Stable provider labels
@@ -82,13 +88,13 @@ In `nerve.json` (or `nextv.json`):
 			"provider": "mcp",
 			"mode": "embedded",
 			"detectToolConflicts": true,
-			"configPath": "./mcp.json"
+			"configPath": "./capabilities/mcp/mcp.json"
 		}
 	}
 }
 ```
 
-In `mcp.json`:
+In `capabilities/mcp/mcp.json`:
 
 ```json
 {
@@ -98,7 +104,7 @@ In `mcp.json`:
 			"transport": "stdio",
 			"config": {
 				"command": "node",
-				"args": ["./mcp-servers/local-mcp.mjs"]
+				"args": ["./capabilities/mcp/servers/local-mcp.mjs"]
 			}
 		}
 	]

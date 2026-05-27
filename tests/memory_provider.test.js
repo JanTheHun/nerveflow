@@ -51,16 +51,74 @@ function skipIfNoPg(testFn) {
 
 test('memory provider: embedText parses Ollama embedding response', async () => {
   const originalFetch = globalThis.fetch
-  globalThis.fetch = async () => ({
+  globalThis.fetch = async (_url, init) => {
+    assert.equal(Boolean(init?.headers?.Authorization), false)
+    return {
     ok: true,
     async json() {
       return { embeddings: [[0.1, 0.2, 0.3]] }
     },
-  })
+    }
+  }
 
   try {
     const result = await embedText('semantic recall', 'mxbai-embed-large', 'http://127.0.0.1:11434')
     assert.deepEqual(result, [0.1, 0.2, 0.3])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('memory provider: embedText includes bearer Authorization for OpenAI-compatible endpoints', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (_url, init) => {
+    assert.equal(init?.headers?.Authorization, 'Bearer sk-test-key')
+    return {
+      ok: true,
+      async json() {
+        return { embeddings: [[0.4, 0.5, 0.6]] }
+      },
+    }
+  }
+
+  try {
+    const result = await embedText('semantic recall', 'text-embedding-3-small', 'https://api.openai.com', {
+      apiKey: 'sk-test-key',
+    })
+    assert.deepEqual(result, [0.4, 0.5, 0.6])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('memory provider: embedText falls back to v1 embeddings endpoint after 404 probes', async () => {
+  const originalFetch = globalThis.fetch
+  const seenUrls = []
+  globalThis.fetch = async (url) => {
+    seenUrls.push(String(url))
+    if (String(url).endsWith('/v1/embeddings')) {
+      return {
+        ok: true,
+        async json() {
+          return { data: [{ embedding: [0.7, 0.8, 0.9] }] }
+        },
+      }
+    }
+    return {
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+    }
+  }
+
+  try {
+    const result = await embedText('semantic recall', 'text-embedding-3-small', 'https://api.openai.com')
+    assert.deepEqual(result, [0.7, 0.8, 0.9])
+    assert.deepEqual(seenUrls, [
+      'https://api.openai.com/api/embed',
+      'https://api.openai.com/api/embeddings',
+      'https://api.openai.com/v1/embeddings',
+    ])
   } finally {
     globalThis.fetch = originalFetch
   }

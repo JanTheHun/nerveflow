@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
-import { join, relative, resolve } from 'node:path'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import { dirname, join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
   getConfiguredExternals,
@@ -33,7 +33,9 @@ function readJsonObjectFile(path) {
 function createWorkspace(files) {
   const dir = mkdtempSync(join(tmpdir(), 'nextv-workspace-config-'))
   for (const [name, content] of Object.entries(files)) {
-    writeFileSync(join(dir, name), content, 'utf8')
+    const targetPath = join(dir, name)
+    mkdirSync(dirname(targetPath), { recursive: true })
+    writeFileSync(targetPath, content, 'utf8')
   }
   return {
     absolutePath: dir,
@@ -460,18 +462,18 @@ test('loads mcp module config from nextv.json configPath reference', () => {
           provider: 'mcp',
           mode: 'embedded',
           detectToolConflicts: true,
-          configPath: './mcp.json',
+          configPath: './capabilities/mcp/mcp.json',
         },
       },
     }),
-    'mcp.json': JSON.stringify({
+    'capabilities/mcp/mcp.json': JSON.stringify({
       servers: [
         {
           name: 'local-mcp',
           transport: 'stdio',
           config: {
             command: 'node',
-            args: ['./mcp-servers/local-mcp.mjs'],
+            args: ['./capabilities/mcp/servers/local-mcp.mjs'],
           },
         },
       ],
@@ -485,14 +487,14 @@ test('loads mcp module config from nextv.json configPath reference', () => {
       provider: 'mcp',
       mode: 'embedded',
       detectToolConflicts: true,
-      configPath: './mcp.json',
+      configPath: './capabilities/mcp/mcp.json',
       servers: [
         {
           name: 'local-mcp',
           transport: 'stdio',
           config: {
             command: 'node',
-            args: ['./mcp-servers/local-mcp.mjs'],
+            args: ['./capabilities/mcp/servers/local-mcp.mjs'],
           },
         },
       ],
@@ -510,11 +512,11 @@ test('loads mcp module config from nextv.json legacy config string reference', (
           provider: 'mcp',
           mode: 'embedded',
           detectToolConflicts: true,
-          config: './mcp.json',
+          config: './capabilities/mcp/mcp.json',
         },
       },
     }),
-    'mcp.json': JSON.stringify({
+    'capabilities/mcp/mcp.json': JSON.stringify({
       servers: [],
     }),
   })
@@ -523,7 +525,7 @@ test('loads mcp module config from nextv.json legacy config string reference', (
     const config = loadConfig(workspaceDir)
     assert.equal(config.modules.status, 'loaded')
     assert.equal(config.modules.map.mcp.provider, 'mcp')
-    assert.equal(config.modules.map.mcp.configPath, './mcp.json')
+    assert.equal(config.modules.map.mcp.configPath, './capabilities/mcp/mcp.json')
     assert.equal(Object.prototype.hasOwnProperty.call(config.modules.map.mcp, 'config'), false)
     assert.equal(config.modules.map.mcp.mode, 'embedded')
     assert.equal(config.modules.map.mcp.detectToolConflicts, true)
@@ -539,12 +541,12 @@ test('rejects inline mcp fields when external module config reference is used', 
       modules: {
         mcp: {
           provider: 'mcp',
-          configPath: './mcp.json',
+          configPath: './capabilities/mcp/mcp.json',
           servers: [],
         },
       },
     }),
-    'mcp.json': JSON.stringify({
+    'capabilities/mcp/mcp.json': JSON.stringify({
       servers: [],
     }),
   })
@@ -589,11 +591,11 @@ test('rejects non-server fields in external MCP module config', () => {
           provider: 'mcp',
           mode: 'embedded',
           detectToolConflicts: true,
-          configPath: './mcp.json',
+          configPath: './capabilities/mcp/mcp.json',
         },
       },
     }),
-    'mcp.json': JSON.stringify({
+    'capabilities/mcp/mcp.json': JSON.stringify({
       detectToolConflicts: true,
       servers: [],
     }),

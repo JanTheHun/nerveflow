@@ -4,6 +4,14 @@ This page documents the low-level host-modules composition path for PostgreSQL +
 
 For the recommended package-first path, start with [10-host-db-connectors.md](10-host-db-connectors.md).
 
+If you want a direct browser CRUD surface for memory without workflow event wiring, run:
+
+```bash
+npx nerve-compose add memory-pgvector
+npx nerve-compose add memory-spa
+node memory-spa/server.mjs
+```
+
 ## When to use low-level mode
 
 Use this mode when you need manual control over provider composition, custom workspace host module wiring, or provider internals beyond composable auto-attach labels.
@@ -72,6 +80,7 @@ export function createProviders() {
       pgUrl: process.env.MEMORY_DB_URL,
       embeddingModel: process.env.MEMORY_EMBEDDING_MODEL,
       embeddingBaseUrl: process.env.MEMORY_EMBEDDING_BASE_URL,
+      embeddingApiKey: process.env.MEMORY_EMBEDDING_API_KEY,
       embeddingDimensions: Number(process.env.MEMORY_EMBEDDING_DIMENSIONS ?? 768),
       poolMin: Number(process.env.MEMORY_POOL_MIN ?? 2),
       poolMax: Number(process.env.MEMORY_POOL_MAX ?? 10),
@@ -105,6 +114,7 @@ results = tool("memory_retrieve", {
 - workspace env binding for credentials and embedding settings
 - provider argument shape normalization (`named` and `positional`)
 - embedding endpoint compatibility (`/api/embed`, `/api/embeddings`, `/v1/embeddings`)
+- optional bearer auth for OpenAI-compatible embedding endpoints via `MEMORY_EMBEDDING_API_KEY`
 - embedding dimension mismatch resolved through explicit config
 
 ## Files involved

@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Memory SPA</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: radial-gradient(circle at top, #1b2f24, #0e1712 55%);
+      color: #e7f5ec;
+      min-height: 100vh;
+      padding: 1.25rem;
+    }
+    .container {
+      max-width: 920px;
+      margin: 0 auto;
+      background: rgba(16, 30, 22, 0.82);
+      border: 1px solid #2b4637;
+      border-radius: 14px;
+      padding: 1rem;
+      backdrop-filter: blur(3px);
+    }
+    h1 { margin-top: 0; color: #9ae6b4; }
+    h2 {
+      margin-bottom: 0.6rem;
+      color: #b8f5cf;
+      font-size: 1rem;
+      letter-spacing: 0.03em;
+      border-bottom: 1px solid #2b4637;
+      padding-bottom: 0.35rem;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0.9rem;
+    }
+    @media (min-width: 860px) {
+      .grid { grid-template-columns: 1fr 1fr; }
+    }
+    .panel {
+      background: #12241a;
+      border: 1px solid #244032;
+      border-radius: 10px;
+      padding: 0.85rem;
+    }
+    label {
+      display: block;
+      font-size: 0.78rem;
+      color: #b5ceb8;
+      margin-bottom: 0.25rem;
+    }
+    input, textarea {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid #365943;
+      background: #0d1b13;
+      color: #e9fff1;
+      padding: 0.55rem;
+      font-size: 0.9rem;
+    }
+    textarea { min-height: 110px; resize: vertical; }
+    .actions {
+      display: flex;
+      gap: 0.45rem;
+      flex-wrap: wrap;
+      margin-top: 0.55rem;
+    }
+    button {
+      border: 1px solid #3f7653;
+      background: #1f5136;
+      color: #e8ffee;
+      border-radius: 7px;
+      padding: 0.48rem 0.8rem;
+      cursor: pointer;
+    }
+    button:hover { background: #2a6947; }
+    button.secondary {
+      background: transparent;
+      border-color: #567064;
+      color: #cde3d2;
+    }
+    .result {
+      margin-top: 0.6rem;
+      max-height: 380px;
+      overflow: auto;
+      border: 1px solid #254936;
+      border-radius: 8px;
+      background: #0d1913;
+      padding: 0.55rem;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.78rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .recall-list { margin-top: 0.7rem; display: flex; flex-direction: column; gap: 0.55rem; }
+    .item {
+      border: 1px solid #335741;
+      border-radius: 8px;
+      padding: 0.55rem;
+      background: #102419;
+    }
+    .meta {
+      color: #9dcab0;
+      font-size: 0.78rem;
+      margin-top: 0.25rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Memory SPA</h1>
+    <p>Direct CRUD against pgvector memory provider. This page does not depend on workflow events.</p>
+
+    <div class="grid">
+      <section class="panel">
+        <h2>Store</h2>
+        <label for="storeText">Text</label>
+        <textarea id="storeText" placeholder="What should be remembered?"></textarea>
+
+        <label for="storeMetadata">Metadata (JSON object)</label>
+        <textarea id="storeMetadata">{
+  "category": "general"
+}</textarea>
+
+        <div class="actions">
+          <button id="storeBtn">Store</button>
+          <button id="clearStore" class="secondary">Clear</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Recall</h2>
+        <label for="recallQuery">Query</label>
+        <input id="recallQuery" type="text" placeholder="Search memory" />
+
+        <label for="recallLimit">Limit (1-50)</label>
+        <input id="recallLimit" type="number" min="1" max="50" value="10" />
+
+        <label for="recallFilter">Filter metadata (JSON object, optional)</label>
+        <textarea id="recallFilter">{
+  "category": "general"
+}</textarea>
+
+        <div class="actions">
+          <button id="recallBtn">Recall</button>
+          <button id="clearRecall" class="secondary">Clear Results</button>
+        </div>
+        <div id="recallList" class="recall-list"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Update</h2>
+        <label for="updateId">Record id</label>
+        <input id="updateId" type="text" placeholder="UUID" />
+
+        <label for="updateText">Text</label>
+        <textarea id="updateText" placeholder="Updated text"></textarea>
+
+        <label for="updateMetadata">Metadata (JSON object)</label>
+        <textarea id="updateMetadata">{
+  "category": "general"
+}</textarea>
+
+        <div class="actions">
+          <button id="updateBtn">Update</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Delete</h2>
+        <label for="deleteId">Record id</label>
+        <input id="deleteId" type="text" placeholder="UUID" />
+
+        <div class="actions">
+          <button id="deleteBtn">Delete</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="result" class="result">Ready.</div>
+  </div>
+
+  <script>
+    const resultEl = document.getElementById('result');
+    const recallListEl = document.getElementById('recallList');
+
+    function setResult(label, payload) {
+      resultEl.textContent = label + '\n' + JSON.stringify(payload, null, 2);
+    }
+
+    function safeJsonParse(raw, fallback, fieldName) {
+      const text = String(raw || '').trim();
+      if (!text) return fallback;
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed;
+        }
+      } catch {
+        throw new Error(fieldName + ' must be valid JSON object');
+      }
+      throw new Error(fieldName + ' must be a JSON object');
+    }
+
+    async function post(path, body) {
+      const response = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const payload = await response.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.error || response.statusText || 'request failed');
+      }
+      return payload;
+    }
+
+    function renderRecallItems(items) {
+      recallListEl.innerHTML = '';
+      if (!Array.isArray(items) || items.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'item';
+        empty.textContent = 'No results';
+        recallListEl.appendChild(empty);
+        return;
+      }
+
+      for (const item of items) {
+        const node = document.createElement('div');
+        node.className = 'item';
+
+        const top = document.createElement('div');
+        top.textContent = 'id: ' + (item.id || '(missing)') + ' | similarity: ' + Number(item.similarity || 0).toFixed(4);
+        node.appendChild(top);
+
+        const text = document.createElement('div');
+        text.textContent = item.text || '';
+        node.appendChild(text);
+
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = JSON.stringify(item.metadata || {});
+        node.appendChild(meta);
+
+        const actions = document.createElement('div');
+        actions.className = 'actions';
+
+        const fillUpdateBtn = document.createElement('button');
+        fillUpdateBtn.className = 'secondary';
+        fillUpdateBtn.textContent = 'Load into update form';
+        fillUpdateBtn.onclick = () => {
+          document.getElementById('updateId').value = item.id || '';
+          document.getElementById('updateText').value = item.text || '';
+          document.getElementById('updateMetadata').value = JSON.stringify(item.metadata || {}, null, 2);
+        };
+        actions.appendChild(fillUpdateBtn);
+
+        const fillDeleteBtn = document.createElement('button');
+        fillDeleteBtn.className = 'secondary';
+        fillDeleteBtn.textContent = 'Load into delete form';
+        fillDeleteBtn.onclick = () => {
+          document.getElementById('deleteId').value = item.id || '';
+        };
+        actions.appendChild(fillDeleteBtn);
+
+        node.appendChild(actions);
+        recallListEl.appendChild(node);
+      }
+    }
+
+    document.getElementById('storeBtn').onclick = async () => {
+      try {
+        const text = document.getElementById('storeText').value.trim();
+        const metadata = safeJsonParse(document.getElementById('storeMetadata').value, {}, 'Metadata');
+        const payload = await post('/api/memory/store', { text, metadata });
+        setResult('Stored', payload);
+      } catch (error) {
+        setResult('Store failed', { ok: false, error: String(error.message || error) });
+      }
+    };
+
+    document.getElementById('recallBtn').onclick = async () => {
+      try {
+        const queryText = document.getElementById('recallQuery').value.trim();
+        const limit = Number(document.getElementById('recallLimit').value || 10);
+        const filterMetadata = safeJsonParse(document.getElementById('recallFilter').value, {}, 'Filter metadata');
+        const payload = await post('/api/memory/recall', {
+          query_text: queryText,
+          limit,
+          filter_metadata: filterMetadata,
+        });
+        renderRecallItems(payload.items || []);
+        setResult('Recall', payload);
+      } catch (error) {
+        renderRecallItems([]);
+        setResult('Recall failed', { ok: false, error: String(error.message || error) });
+      }
+    };
+
+    document.getElementById('updateBtn').onclick = async () => {
+      try {
+        const id = document.getElementById('updateId').value.trim();
+        const text = document.getElementById('updateText').value.trim();
+        const metadata = safeJsonParse(document.getElementById('updateMetadata').value, {}, 'Metadata');
+        const payload = await post('/api/memory/update', { id, text, metadata });
+        setResult('Updated', payload);
+      } catch (error) {
+        setResult('Update failed', { ok: false, error: String(error.message || error) });
+      }
+    };
+
+    document.getElementById('deleteBtn').onclick = async () => {
+      try {
+        const id = document.getElementById('deleteId').value.trim();
+        const payload = await post('/api/memory/delete', { id });
+        setResult('Deleted', payload);
+      } catch (error) {
+        setResult('Delete failed', { ok: false, error: String(error.message || error) });
+      }
+    };
+
+    document.getElementById('clearStore').onclick = () => {
+      document.getElementById('storeText').value = '';
+      document.getElementById('storeMetadata').value = '{\n  "category": "general"\n}';
+    };
+
+    document.getElementById('clearRecall').onclick = () => {
+      recallListEl.innerHTML = '';
+      setResult('Cleared', { ok: true });
+    };
+  </script>
+</body>
+</html>

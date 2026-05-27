@@ -443,7 +443,7 @@ test('composable host resolves relative mcp stdio script paths from workspace di
               transport: 'stdio',
               config: {
                 command: process.execPath,
-                args: ['./mcp-servers/local-mcp.mjs'],
+                args: ['./capabilities/mcp/servers/local-mcp.mjs'],
               },
             },
           ],
@@ -453,7 +453,7 @@ test('composable host resolves relative mcp stdio script paths from workspace di
     entrySource: 'on external "user_message"\n  output text "ok"\nend\n',
     extraFiles: [
       {
-        path: 'mcp-servers/local-mcp.mjs',
+        path: 'capabilities/mcp/servers/local-mcp.mjs',
         content: `import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'\nimport { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'\n\nconst server = new McpServer({ name: 'local-mcp', version: '1.0.0' })\nserver.registerTool(\n  'fetch_url',\n  {\n    description: 'Returns a fixed response for tests.',\n  },\n  async () => ({\n    content: [\n      {\n        type: 'text',\n        text: 'ok',\n      },\n    ],\n  }),\n)\n\nconst transport = new StdioServerTransport()\nawait server.connect(transport)\n`,
       },
     ],
@@ -492,31 +492,31 @@ test('composable host loads mcp servers from external module configPath', { time
       modules: {
         mcp: {
           provider: 'mcp',
-          configPath: './mcp.json',
+          mode: 'embedded',
+          eagerConnect: true,
+          configPath: './capabilities/mcp/mcp.json',
         },
       },
     },
     entrySource: 'on external "user_message"\n  output text "ok"\nend\n',
     extraFiles: [
       {
-        path: 'mcp.json',
+        path: 'capabilities/mcp/mcp.json',
         content: JSON.stringify({
-          mode: 'embedded',
-          eagerConnect: true,
           servers: [
             {
               name: 'local-mcp',
               transport: 'stdio',
               config: {
                 command: process.execPath,
-                args: ['./mcp-servers/local-mcp.mjs'],
+                args: ['./capabilities/mcp/servers/local-mcp.mjs'],
               },
             },
           ],
         }, null, 2),
       },
       {
-        path: 'mcp-servers/local-mcp.mjs',
+        path: 'capabilities/mcp/servers/local-mcp.mjs',
         content: `import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'\nimport { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'\n\nconst server = new McpServer({ name: 'local-mcp', version: '1.0.0' })\nserver.registerTool(\n  'fetch_url',\n  {\n    description: 'Returns a fixed response for tests.',\n  },\n  async () => ({\n    content: [\n      {\n        type: 'text',\n        text: 'ok',\n      },\n    ],\n  }),\n)\n\nconst transport = new StdioServerTransport()\nawait server.connect(transport)\n`,
       },
     ],

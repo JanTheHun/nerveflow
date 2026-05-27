@@ -335,7 +335,7 @@ export function getControlOverlayClassName(provenance) {
 }
 
 export function setNextVStateDiffTab(tab) {
-  const nextTab = tab === 'state' ? 'state' : 'diff'
+  const nextTab = 'state'
   if (nextVStateDiffTabDiff) {
     nextVStateDiffTabDiff.classList.toggle('active', nextTab === 'diff')
     nextVStateDiffTabDiff.setAttribute('aria-selected', nextTab === 'diff' ? 'true' : 'false')
@@ -353,7 +353,7 @@ export function setNextVStateDiffTab(tab) {
 
 export function setNextVDevTab(tab, options = {}) {
   const { persist = true } = options
-  const requestedTab = ['events', 'trace', 'console'].includes(tab) ? tab : 'events'
+  const requestedTab = ['events', 'console'].includes(tab) ? tab : 'events'
 
   let nextTab = requestedTab
   tracePanelState.currentTab = nextTab

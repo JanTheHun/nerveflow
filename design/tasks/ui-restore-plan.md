@@ -25,6 +25,11 @@ This plan covers controls hidden during WS remote cleanup and graph/settings sim
   - enable surface switchers
   - show surface telemetry
   - show ingress connectors
+- Script/dev panel tabs:
+  - call inspector primary tab/button
+  - trace tab in dev console
+- State panel tabs:
+  - state diff tab (state snapshot tab remains visible)
 - Graph toolbar/legend:
   - auto-follow checkbox
   - show branches toggle
@@ -35,6 +40,15 @@ This plan covers controls hidden during WS remote cleanup and graph/settings sim
 - Primary editor tab/view (graph-only primary mode)
 
 ## Restore Order (Safest First)
+
+### Phase 0: Hidden tab reintroduction guards
+1. Re-enable trace tab only with local-storage fallback to `events` when stale `trace` is present.
+2. Re-enable state diff tab only with local-storage fallback to `state` when stale `diff` is present.
+3. Re-enable call inspector primary tab/button after confirming alternate entry points are still intentional.
+
+Validation:
+- Hidden-tab defaults stay deterministic for existing users with old saved UI state.
+- Re-enabled tabs do not revive stale selection bugs.
 
 ### Phase 1: Low-risk visual restores
 1. Candidate label text.

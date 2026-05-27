@@ -1652,7 +1652,7 @@ export function restoreNextVConfig() {
   const storedAutoSave = localStorage.getItem(storageKeys.nextVAutoSave)
   const autoSaveEnabled = storedAutoSave == null ? false : storedAutoSave === '1'
   const storedDevTab = localStorage.getItem(storageKeys.nextVDevTab)
-  const devTab = ['events', 'trace', 'console'].includes(storedDevTab) ? storedDevTab : 'events'
+  const devTab = ['events', 'console'].includes(storedDevTab) ? storedDevTab : 'events'
   const storedInputTab = String(localStorage.getItem(storageKeys.nextVInputTab) ?? '').trim()
   const runtimeTarget = normalizeNextVRuntimeTarget(localStorage.getItem(storageKeys.nextVRuntimeTarget) ?? 'embedded')
   const devConsoleOpen = localStorage.getItem(storageKeys.nextVDevConsoleOpen) !== '0'

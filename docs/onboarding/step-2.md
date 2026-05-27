@@ -1,11 +1,24 @@
 # Onboarding Step 2
 
-Add an LLM and run a stateful chatbot from the command line.
+Add your first model call
+```
+state.conversation = state.conversation + [
+  {
+    role: "user",
+    content: event.value
+  }
+]
+reply = model("llama3.2:latest", messages=state.conversation)
+output text reply
+```
 
-To run this step, you need a model endpoint you can call. Choose one path:
+In this step, the runtime stays deterministic while generation becomes probabilistic.
 
-1. Local path: run a model on your machine (recommended for this tutorial: Ollama)
-2. External API path: use a hosted provider with an API key (example in this tutorial: OpenAI)
+You will:
+
+- connect a model transport
+- add conversation state
+- run a stateful chatbot from CLI
 
 ## Local path (Ollama)
 

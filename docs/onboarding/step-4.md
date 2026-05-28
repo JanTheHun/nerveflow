@@ -35,7 +35,7 @@ else
       content: event.value
     }
   ]
-  reply = model("llama3.2:1b", messages=state.conversation)
+  reply = model("llama3.2:latest", messages=state.conversation)
   state.conversation = state.conversation + [
     {
       role: "assistant",
@@ -61,9 +61,9 @@ npx nerve-runtime start --port 4190
 ### using CLI
 
 ```
- npx nerve-send ws://127.0.0.1:5000/api/runtime/ws user_message "play me some music"
+ npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "play me some music"
 
- npx nerve-send ws://127.0.0.1:5000/api/runtime/ws user_message "turn off kitchen lights"
+ npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "turn off kitchen lights"
 ```
 
 ### Using Nerve Studio

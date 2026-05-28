@@ -120,7 +120,7 @@
           <span id="script-header-title">script</span>
           <div id="nextv-primary-tabs" class="panel-tabs" role="tablist" aria-label="nextv primary views">
             <button id="nextv-view-graph" type="button" class="panel-tab" role="tab" aria-selected="true" onclick="setNextVPrimaryView('graph')">graph</button>
-            <button id="nextv-view-call-inspector" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="toggleNextVCallInspectorPanel()" hidden>call inspector</button>
+            <button id="nextv-view-call-inspector" type="button" class="panel-tab" role="tab" aria-selected="false" onclick="toggleNextVCallInspectorPanel()">call inspector</button>
           </div>
           <div class="nextv-view-actions">
             <button id="toggle-user-io-btn" type="button" class="panel-action" onclick="toggleUserIOPanel()" aria-pressed="false">input</button>
@@ -394,9 +394,11 @@
                   <option value="strict">strict</option>
                   <option value="none">none</option>
                 </select>
-                <input id="nextv-call-retry" type="number" min="0" max="8" step="1" value="0" title="retry count" style="width:86px" />
+                <label class="nextv-call-inline-field" for="nextv-call-retry">
+                  <span>retry</span>
+                  <input id="nextv-call-retry" type="number" min="0" max="8" step="1" value="0" title="retry count" />
+                </label>
                 <button type="button" onclick="executeNextVCallInspector()">run call</button>
-                <button type="button" onclick="insertNextVCallInspectorSnippet()">insert code</button>
               </div>
               <textarea id="nextv-call-instructions" rows="2" placeholder="system instructions (optional)" autocomplete="off" spellcheck="false"></textarea>
               <textarea id="nextv-call-prompt" rows="3" placeholder="prompt" autocomplete="off" spellcheck="false"></textarea>
@@ -404,24 +406,30 @@
               <input id="nextv-call-decide" type="text" placeholder="decide options (comma-separated, optional)" autocomplete="off" spellcheck="false" />
               <div id="nextv-call-tools-section" class="nextv-call-target-config">
                 <div class="nextv-call-target-config-label">governed tools policy</div>
+                <div id="nextv-call-tools-warning" class="nextv-call-tools-warning" hidden></div>
                 <div class="footer-row" style="gap:8px;flex-wrap:wrap;align-items:center">
                   <select id="nextv-call-tools-mode" title="tools mode">
                     <option value="disabled" selected>tools disabled</option>
                     <option value="governed">tools governed</option>
                   </select>
-                  <input id="nextv-call-tools-max-rounds" type="number" min="0" max="32" step="1" value="8" title="tools max rounds" style="width:96px" />
-                  <input id="nextv-call-tools-timeout-ms" type="number" min="0" step="100" value="0" title="tools timeout ms" style="width:120px" />
+                  <label class="nextv-call-inline-field" for="nextv-call-tools-max-rounds">
+                    <span>rounds</span>
+                    <input id="nextv-call-tools-max-rounds" type="number" min="0" max="32" step="1" value="8" title="tools max rounds" />
+                  </label>
+                  <label class="nextv-call-inline-field" for="nextv-call-tools-timeout-ms">
+                    <span>timeout ms</span>
+                    <input id="nextv-call-tools-timeout-ms" type="number" min="0" step="100" value="0" title="tools timeout ms" />
+                  </label>
                   <label class="check-label">
                     <input id="nextv-call-tools-deny-unknown" type="checkbox" checked>
                     deny unknown tools
                   </label>
                 </div>
-                <div id="nextv-call-tools-list" class="panel-scroll nextv-call-target-config-output" style="max-height:140px"></div>
+                <div id="nextv-call-tools-list" class="panel-scroll nextv-call-target-config-output" style="max-height:260px"></div>
+                <div class="footer-row" style="justify-content:flex-end;margin-top:6px">
+                  <button id="nextv-call-tools-reset-defaults" type="button" class="mini-btn">reset to target defaults</button>
+                </div>
                 <input id="nextv-call-tools-extra" type="text" placeholder="extra tools (comma-separated, optional)" autocomplete="off" spellcheck="false" />
-              </div>
-              <div class="nextv-call-target-config">
-                <div id="nextv-call-target-config-label" class="nextv-call-target-config-label">project config</div>
-                <pre id="nextv-call-target-config" class="panel-scroll nextv-call-target-config-output"></pre>
               </div>
               <pre id="nextv-call-generated-code" class="panel-scroll nextv-call-generated-code-output"></pre>
             </div>
@@ -484,6 +492,6 @@
   <script src="dagre.min.js"></script>
   <script src="nextv_graph_mapping.js?v=20260429a"></script>
   <script src="nextv_graph_timer_api.js?v=20260503a"></script>
-  <script type="module" src="src-app/14_init.js?v=20260520e"></script>
+  <script type="module" src="src-app/14_init.js?v=20260528a"></script>
 </body>
 </html>

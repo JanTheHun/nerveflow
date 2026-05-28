@@ -212,6 +212,7 @@ export function initLayoutState() {
   clearTracePanel({ silent: true })
   initNextVStateDiffPanel()
   initNextVStatePanelTools()
+  setNextVStateDiffTab('state')
   initNextVUserIOPanel()
   initShowInputEcho()
   updateOpenFileLabel('')

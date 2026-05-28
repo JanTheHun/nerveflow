@@ -1,4 +1,10 @@
+import { readFileSync } from 'node:fs'
 import { relative, resolve } from 'node:path'
+import {
+  joinComposedTextParts,
+  normalizeComposedTextInput,
+  resolveComposedTextParts,
+} from './structured_inputs.js'
 
 function extractEventImages(event) {
   const payload = event && typeof event === 'object' ? event.payload : null
@@ -425,7 +431,7 @@ export function createHostAdapter({
       const result = {
         agent: {
           name: agentName,
-          instructions: String(agent?.instructions ?? '').trim(),
+          instructions: agent?.instructions ?? '',
           tools: Array.isArray(agent?.tools) ? [...agent.tools] : [],
         },
         model: {
@@ -445,7 +451,7 @@ export function createHostAdapter({
     const result = {
       agent: {
         name: agentName,
-        instructions: String(agent?.instructions ?? '').trim(),
+        instructions: agent?.instructions ?? '',
         tools: Array.isArray(agent?.tools) ? [...agent.tools] : [],
       },
       model: {
@@ -606,16 +612,56 @@ export function createHostAdapter({
       }
 
       const callLabel = agentName ? `agent("${agentName}")` : `model("${resolvedModel}")`
-      const callInstructions = String(instructions ?? '').trim()
-      const baseInstructions = [profileInstructions, callInstructions].filter(Boolean).join('\n\n')
+      const callInstructionsInput = instructions
       const contractGuidance = (returns != null && typeof buildAgentReturnContractGuidance === 'function')
         ? buildAgentReturnContractGuidance(returns)
         : (decide != null && typeof buildDecideGuidance === 'function')
           ? buildDecideGuidance(decide)
           : ''
-      const baseSystemInstructions = [baseInstructions, contractGuidance].filter(Boolean).join('\n\n')
 
-      const formattedPrompt = format ? appendAgentFormatInstructions(prompt, format) : String(prompt ?? '')
+      const profileInstructionsNormalized = normalizeComposedTextInput(profileInstructions, {
+        fieldName: `agent profile "${agentName}" instructions`,
+      })
+      const callInstructionsNormalized = normalizeComposedTextInput(callInstructionsInput, {
+        fieldName: `${callLabel} instructions`,
+      })
+
+      const profileInstructionsResolved = resolveComposedTextParts(profileInstructionsNormalized.parts, {
+        workspaceDir,
+        resolvePathFromBaseDirectory,
+        readFileSync,
+        fieldName: `agent profile "${agentName}" instructions`,
+      })
+      const callInstructionsResolved = resolveComposedTextParts(callInstructionsNormalized.parts, {
+        workspaceDir,
+        resolvePathFromBaseDirectory,
+        readFileSync,
+        fieldName: `${callLabel} instructions`,
+      })
+
+      const baseInstructionSegments = [
+        ...profileInstructionsResolved.segments,
+        ...callInstructionsResolved.segments,
+      ]
+      const baseInstructions = joinComposedTextParts(baseInstructionSegments.map((text) => ({ type: 'text', text })))
+
+      const baseSystemInstructionSegments = [...baseInstructionSegments]
+      if (contractGuidance) {
+        baseSystemInstructionSegments.push(contractGuidance)
+      }
+      const baseSystemInstructions = joinComposedTextParts(baseSystemInstructionSegments.map((text) => ({ type: 'text', text })))
+
+      const promptNormalized = normalizeComposedTextInput(prompt, {
+        fieldName: `${callLabel} prompt`,
+      })
+      const promptResolved = resolveComposedTextParts(promptNormalized.parts, {
+        workspaceDir,
+        resolvePathFromBaseDirectory,
+        readFileSync,
+        fieldName: `${callLabel} prompt`,
+      })
+      const basePromptText = joinComposedTextParts(promptResolved.segments.map((text) => ({ type: 'text', text })))
+      const formattedPrompt = format ? appendAgentFormatInstructions(basePromptText, format) : basePromptText
       const inputMessages = Array.isArray(messages) ? messages : []
 
       const retryLimit = Number.isInteger(retry_on_contract_violation) ? Math.max(0, retry_on_contract_violation) : 0
@@ -704,8 +750,12 @@ export function createHostAdapter({
 
       for (let attemptNum = 0; attemptNum <= retryLimit; attemptNum += 1) {
         const chatMessages = []
-        if (baseSystemInstructions) {
-          chatMessages.push({ role: 'system', content: baseSystemInstructions })
+        if (baseSystemInstructionSegments.length > 0) {
+          for (const systemSegment of baseSystemInstructionSegments) {
+            const content = String(systemSegment ?? '').trim()
+            if (!content) continue
+            chatMessages.push({ role: 'system', content })
+          }
         }
         for (const entry of inputMessages) {
           const role = String(entry?.role ?? '').trim()

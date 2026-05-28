@@ -28,6 +28,8 @@ This plan covers controls hidden during WS remote cleanup and graph/settings sim
 - Script/dev panel tabs:
   - call inspector primary tab/button
   - trace tab in dev console
+- Call inspector action row:
+  - insert code button (kept hidden)
 - State panel tabs:
   - state diff tab (state snapshot tab remains visible)
 - Graph toolbar/legend:
@@ -114,3 +116,10 @@ Validation:
 
 ## Rollback Rule
 If a restored control causes mode confusion or runtime misuse in WS attach mode, keep it visible but disabled with explicit reason text rather than removing immediately.
+
+## Deferred Note: Call Inspector MCP Tool Visibility
+- Current behavior is acceptable for now:
+  - Studio local mode primarily surfaces tools loaded via local host-modules runtime wiring.
+  - Full MCP module tool visibility is guaranteed when attaching to a composable runtime that has MCP capability active.
+- Deferred enhancement (not in current restore scope):
+  - Auto-load workspace `modules.mcp` capability in Studio local mode so Call Inspector shows MCP tools without requiring attach mode.

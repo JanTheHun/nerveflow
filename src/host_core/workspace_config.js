@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { isComposedTextInputValue } from './structured_inputs.js'
 
 const BUILTIN_OUTPUT_CHANNELS = new Set(['text', 'console', 'voice', 'visual', 'json', 'interaction'])
 
@@ -74,8 +75,8 @@ function parseProfilesMap(raw, sourceLabel) {
     if (profile.model != null && typeof profile.model !== 'string') {
       throw new Error(`${sourceLabel}: profile "${name}.model" must be a string.`)
     }
-    if (profile.instructions != null && typeof profile.instructions !== 'string') {
-      throw new Error(`${sourceLabel}: profile "${name}.instructions" must be a string.`)
+    if (profile.instructions != null && !isComposedTextInputValue(profile.instructions)) {
+      throw new Error(`${sourceLabel}: profile "${name}.instructions" must be a string, include object, or array of those values.`)
     }
     if (profile.tools != null) {
       if (!Array.isArray(profile.tools) || profile.tools.some((tool) => typeof tool !== 'string')) {

@@ -90,6 +90,7 @@ function createController(options = {}) {
     getConfiguredModules = () => ({}),
     validateEffectBindings = null,
     validateCapabilityBindings = null,
+    toolRuntime = null,
     ingressRuntime = null,
     effectRuntime = null,
     validateConfigReferences = () => [],
@@ -134,6 +135,7 @@ function createController(options = {}) {
     validateOutputContract: () => {},
     appendAgentFormatInstructions: (prompt) => prompt,
     normalizeAgentFormattedOutput: (value) => value,
+    toolRuntime,
     ingressRuntime,
     effectRuntime,
     callAgent: async () => '',
@@ -402,6 +404,230 @@ test('controller exposes definition files for active workflow and include depend
   const reloaded = controller.reloadConfig()
   assert.deepEqual(reloaded.definitionFiles, ['/workspace/flows/shared.nrv', '/workspace/main.nrv'])
   assert.deepEqual(controller.getDefinitionStatus().active.definitionFiles, ['/workspace/flows/shared.nrv', '/workspace/main.nrv'])
+})
+
+test('controller definition status includes configured call-inspector catalog', async () => {
+  const { controller } = createController({
+    workspaceConfig: {
+      agents: {
+        status: 'loaded',
+        source: 'agents.json',
+        profiles: {
+          planner: { model: 'main-model', tools: ['search_docs', 'to_json'] },
+        },
+      },
+      models: {
+        status: 'loaded',
+        source: 'models.json',
+        map: {
+          'main-model': { provider: 'ollama', transport: 'local' },
+        },
+      },
+      transports: {
+        status: 'loaded',
+        source: 'transports.json',
+        map: {
+          local: { provider: 'ollama' },
+        },
+      },
+      tools: {
+        status: 'loaded',
+        source: 'tools.json',
+        allow: new Set(['search_docs', 'to_json']),
+        aliases: { docs: 'search_docs' },
+      },
+      nextv: { status: 'loaded', file: 'nextv.json', config: {}, timers: [], timersSource: '' },
+      operators: { status: 'missing', source: '', map: {} },
+    },
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  const status = controller.getDefinitionStatus()
+
+  assert.deepEqual(status.active.configuredAgents, ['planner'])
+  assert.deepEqual(status.active.configuredModels, ['main-model'])
+  assert.deepEqual(status.active.configuredAllowedTools, ['search_docs', 'to_json'])
+  assert.deepEqual(status.active.configuredToolAliases, { docs: 'search_docs' })
+  assert.deepEqual(status.active.configuredTransportProviders, { local: 'ollama' })
+  assert.deepEqual(status.active.configuredAgentDeclaredTools, { planner: ['search_docs', 'to_json'] })
+  assert.equal(status.active.toolCatalog.version, 1)
+  assert.equal(Array.isArray(status.active.toolCatalog.groups), true)
+  assert.deepEqual(status.active.toolCatalog.groups.map((group) => group.id), ['workspace-tools'])
+  assert.deepEqual(
+    status.active.toolCatalog.groups[0].tools.map((tool) => tool.name),
+    ['search_docs', 'to_json'],
+  )
+  assert.deepEqual(status.active.toolCatalog.groups[0].tools[0].aliases, ['docs'])
+  assert.deepEqual(status.active.toolCatalog.groups[0].tools[0].declaredByAgents, ['planner'])
+  assert.equal(status.active.configuredAgentProfiles.planner.model, 'main-model')
+  assert.equal(status.active.configuredModelConfigs['main-model'].transport, 'local')
+})
+
+test('controller definition status includes runtime-discovered tools in catalog', async () => {
+  const { controller } = createController({
+    toolRuntime: {
+      listAvailable: async () => ['mcp_file_read'],
+    },
+    workspaceConfig: {
+      agents: {
+        status: 'loaded',
+        source: 'agents.json',
+        profiles: {
+          planner: { model: 'main-model', tools: ['search_docs'] },
+        },
+      },
+      models: {
+        status: 'loaded',
+        source: 'models.json',
+        map: {
+          'main-model': { provider: 'ollama', transport: 'local' },
+        },
+      },
+      transports: {
+        status: 'loaded',
+        source: 'transports.json',
+        map: {
+          local: { provider: 'ollama' },
+        },
+      },
+      tools: {
+        status: 'loaded',
+        source: 'tools.json',
+        allow: new Set(['search_docs']),
+        aliases: {},
+      },
+      nextv: { status: 'loaded', file: 'nextv.json', config: {}, timers: [], timersSource: '' },
+      operators: { status: 'missing', source: '', map: {} },
+    },
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  const status = controller.getDefinitionStatus()
+  assert.deepEqual(status.active.runtimeDiscoveredTools, ['mcp_file_read'])
+  assert.deepEqual(status.active.toolCatalog.groups.map((group) => group.id), ['workspace-tools', 'other'])
+  assert.deepEqual(
+    status.active.toolCatalog.groups[1].tools.map((tool) => tool.name),
+    ['mcp_file_read'],
+  )
+})
+
+test('controller definition status groups runtime-discovered MCP tools by server', async () => {
+  const { controller } = createController({
+    toolRuntime: {
+      listAvailable: async () => ['mcp_file_read', 'mcp_file_write', 'local_runtime_tool'],
+      getMetadata: async (name) => {
+        if (name === 'mcp_file_read' || name === 'mcp_file_write') {
+          return { serverName: 'filesystem' }
+        }
+        return null
+      },
+    },
+    workspaceConfig: {
+      agents: {
+        status: 'loaded',
+        source: 'agents.json',
+        profiles: {
+          planner: { model: 'main-model', tools: ['search_docs'] },
+        },
+      },
+      models: {
+        status: 'loaded',
+        source: 'models.json',
+        map: {
+          'main-model': { provider: 'ollama', transport: 'local' },
+        },
+      },
+      transports: {
+        status: 'loaded',
+        source: 'transports.json',
+        map: {
+          local: { provider: 'ollama' },
+        },
+      },
+      tools: {
+        status: 'loaded',
+        source: 'tools.json',
+        allow: new Set(['search_docs']),
+        aliases: {},
+      },
+      nextv: { status: 'loaded', file: 'nextv.json', config: {}, timers: [], timersSource: '' },
+      operators: { status: 'missing', source: '', map: {} },
+    },
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  const status = controller.getDefinitionStatus()
+  assert.deepEqual(status.active.runtimeDiscoveredTools, ['local_runtime_tool', 'mcp_file_read', 'mcp_file_write'])
+  assert.deepEqual(
+    status.active.toolCatalog.groups.map((group) => group.id),
+    ['workspace-tools', 'mcp-server:filesystem', 'other'],
+  )
+  assert.equal(status.active.toolCatalog.groups[1].label, 'filesystem')
+  assert.equal(status.active.toolCatalog.groups[1].kind, 'mcp-server')
+  assert.deepEqual(
+    status.active.toolCatalog.groups[1].tools.map((tool) => tool.name),
+    ['mcp_file_read', 'mcp_file_write'],
+  )
+  assert.deepEqual(
+    status.active.toolCatalog.groups[1].tools.map((tool) => tool.serverName),
+    ['filesystem', 'filesystem'],
+  )
+  assert.deepEqual(
+    status.active.toolCatalog.groups[2].tools.map((tool) => tool.name),
+    ['local_runtime_tool'],
+  )
+})
+
+test('controller definition status keeps runtime-discovered tools when metadata lookup fails', async () => {
+  const { controller } = createController({
+    toolRuntime: {
+      listAvailable: async () => ['mcp_file_read'],
+      getMetadata: async () => {
+        throw new Error('metadata unavailable')
+      },
+    },
+    workspaceConfig: {
+      agents: {
+        status: 'loaded',
+        source: 'agents.json',
+        profiles: {
+          planner: { model: 'main-model', tools: ['search_docs'] },
+        },
+      },
+      models: {
+        status: 'loaded',
+        source: 'models.json',
+        map: {
+          'main-model': { provider: 'ollama', transport: 'local' },
+        },
+      },
+      transports: {
+        status: 'loaded',
+        source: 'transports.json',
+        map: {
+          local: { provider: 'ollama' },
+        },
+      },
+      tools: {
+        status: 'loaded',
+        source: 'tools.json',
+        allow: new Set(['search_docs']),
+        aliases: {},
+      },
+      nextv: { status: 'loaded', file: 'nextv.json', config: {}, timers: [], timersSource: '' },
+      operators: { status: 'missing', source: '', map: {} },
+    },
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  const status = controller.getDefinitionStatus()
+  assert.deepEqual(status.active.runtimeDiscoveredTools, ['mcp_file_read'])
+  assert.deepEqual(status.active.toolCatalog.groups.map((group) => group.id), ['workspace-tools', 'other'])
+  assert.deepEqual(
+    status.active.toolCatalog.groups[1].tools.map((tool) => tool.name),
+    ['mcp_file_read'],
+  )
+  assert.equal(status.active.toolCatalog.groups[1].tools[0].serverName, undefined)
 })
 
 test('controller submitCandidate reports rejected candidate without mutating active routing', async () => {

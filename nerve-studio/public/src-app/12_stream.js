@@ -49,9 +49,9 @@ import {
   nextVCallToolsDenyUnknownInput,
   nextVCallToolsExtraInput,
   nextVCallToolsList,
+  nextVCallToolsResetDefaultsBtn,
+  nextVCallToolsWarning,
   nextVCallToolsSection,
-  nextVCallTargetConfigLabel,
-  nextVCallTargetConfigOutput,
   nextVCallResolvedLabel,
   nextVCallResolvedOutput,
   nextVCallGeneratedCode,
@@ -572,6 +572,23 @@ export function openNextVStream() {
       setStatus('nextv runtime started')
     } catch {
       // ignore malformed stream payload
+    }
+  })
+
+  nextVEventSource.addEventListener('nextv_config_reloaded', (evt) => {
+    try {
+      const payload = JSON.parse(evt.data)
+      const definitionId = String(payload?.activeDefinitionId ?? '').trim()
+      const definitionSuffix = definitionId ? ` definition=${definitionId}` : ''
+      appendNextVLogRow(`[nextv:hot_swap] config reloaded${definitionSuffix}`, 'result')
+      refreshNextVGraph({
+        silent: true,
+        preserveViewport: true,
+      }).catch((err) => {
+        appendNextVErrorLog(err, '[nextv:hot_swap:graph_refresh_error]')
+      })
+    } catch (err) {
+      appendNextVErrorLog(err, '[nextv:hot_swap:event_parse_error]')
     }
   })
 
@@ -1570,6 +1587,7 @@ function stringifyInspectorPane(value) {
 
 const nextVCallInspectorToolsState = {
   checked: new Set(),
+  lastTargetKey: '',
 }
 
 function normalizeNextVCallInspectorToolsMode(modeRaw) {
@@ -1709,6 +1727,11 @@ const nextVCallInspectorProjectConfig = {
   allowedTools: [],
   toolAliases: {},
   agentDeclaredTools: {},
+  toolCatalog: null,
+  runtimeOwned: false,
+  runtimeCatalogAvailable: true,
+  runtimeCatalogReason: '',
+  runtimeCatalogHint: '',
 }
 
 function setNextVCallInspectorProjectConfig(payload = {}) {
@@ -1718,6 +1741,11 @@ function setNextVCallInspectorProjectConfig(payload = {}) {
   const allowedTools = payload?.allowedTools
   const toolAliases = payload?.toolAliases
   const agentDeclaredTools = payload?.agentDeclaredTools
+  const toolCatalog = payload?.toolCatalog
+  const runtimeOwned = payload?.runtimeOwned === true
+  const runtimeCatalogAvailable = payload?.runtimeCatalogAvailable
+  const runtimeCatalogReason = payload?.runtimeCatalogReason
+  const runtimeCatalogHint = payload?.runtimeCatalogHint
 
   nextVCallInspectorProjectConfig.agentsByName = agentsByName && typeof agentsByName === 'object' && !Array.isArray(agentsByName)
     ? agentsByName
@@ -1737,11 +1765,95 @@ function setNextVCallInspectorProjectConfig(payload = {}) {
   nextVCallInspectorProjectConfig.agentDeclaredTools = agentDeclaredTools && typeof agentDeclaredTools === 'object' && !Array.isArray(agentDeclaredTools)
     ? agentDeclaredTools
     : {}
+  nextVCallInspectorProjectConfig.toolCatalog = toolCatalog && typeof toolCatalog === 'object' && !Array.isArray(toolCatalog)
+    ? toolCatalog
+    : null
+  nextVCallInspectorProjectConfig.runtimeOwned = runtimeOwned
+  nextVCallInspectorProjectConfig.runtimeCatalogAvailable = runtimeCatalogAvailable === false ? false : true
+  nextVCallInspectorProjectConfig.runtimeCatalogReason = String(runtimeCatalogReason ?? '').trim()
+  nextVCallInspectorProjectConfig.runtimeCatalogHint = String(runtimeCatalogHint ?? '').trim()
+}
+
+function getNextVCallInspectorToolsWarningMessage() {
+  if (!nextVCallInspectorProjectConfig.runtimeOwned) return ''
+  if (nextVCallInspectorProjectConfig.runtimeCatalogAvailable) return ''
+
+  const reason = String(nextVCallInspectorProjectConfig.runtimeCatalogReason ?? '').trim()
+  const hint = String(nextVCallInspectorProjectConfig.runtimeCatalogHint ?? '').trim()
+  if (hint) return hint
+  if (reason === 'remote_runtime_missing_catalog') {
+    return 'Attached runtime did not provide tool catalog metadata. Upgrade the runtime to hydrate configured tools and models in attach mode.'
+  }
+  return 'Attached runtime metadata is incomplete for call inspector tools.'
+}
+
+function renderNextVCallInspectorToolsWarning() {
+  const warning = getNextVCallInspectorToolsWarningMessage()
+  if (nextVCallToolsWarning) {
+    nextVCallToolsWarning.textContent = warning
+    nextVCallToolsWarning.hidden = warning.length === 0
+  }
+  if (nextVCallToolsResetDefaultsBtn) {
+    const disabled = warning.length > 0
+    nextVCallToolsResetDefaultsBtn.disabled = disabled
+    nextVCallToolsResetDefaultsBtn.title = disabled
+      ? 'Target defaults unavailable: attached runtime is missing catalog metadata.'
+      : ''
+  }
 }
 
 function getNextVCallInspectorAvailableTools() {
+  const knownTools = new Set()
+
+  const catalogGroups = Array.isArray(nextVCallInspectorProjectConfig.toolCatalog?.groups)
+    ? nextVCallInspectorProjectConfig.toolCatalog.groups
+    : []
+  for (const group of catalogGroups) {
+    const tools = Array.isArray(group?.tools) ? group.tools : []
+    for (const tool of tools) {
+      const name = String(tool?.name ?? '').trim()
+      if (name) knownTools.add(name)
+    }
+  }
+
+  for (const toolName of nextVCallInspectorProjectConfig.allowedTools) {
+    const name = String(toolName ?? '').trim()
+    if (name) knownTools.add(name)
+  }
+
+  for (const profile of Object.values(nextVCallInspectorProjectConfig.agentsByName)) {
+    if (!profile || typeof profile !== 'object') continue
+    const tools = Array.isArray(profile.tools) ? profile.tools : []
+    for (const toolName of tools) {
+      const name = String(toolName ?? '').trim()
+      if (name) knownTools.add(name)
+    }
+  }
+
+  for (const declaredToolsRaw of Object.values(nextVCallInspectorProjectConfig.agentDeclaredTools)) {
+    const tools = Array.isArray(declaredToolsRaw) ? declaredToolsRaw : []
+    for (const toolName of tools) {
+      const name = String(toolName ?? '').trim()
+      if (name) knownTools.add(name)
+    }
+  }
+
+  for (const modelConfig of Object.values(nextVCallInspectorProjectConfig.modelsByName)) {
+    if (!modelConfig || typeof modelConfig !== 'object') continue
+    const tools = Array.isArray(modelConfig.tools) ? modelConfig.tools : []
+    for (const toolName of tools) {
+      const name = String(toolName ?? '').trim()
+      if (name) knownTools.add(name)
+    }
+  }
+
+  return [...knownTools].sort((left, right) => left.localeCompare(right))
+}
+
+function getNextVCallInspectorTargetDefaults() {
   const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
   const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+
   if (targetKind === 'agent') {
     const agentName = String(nextVCallTargetAgentInput?.value ?? '').trim()
     const profile = nextVCallInspectorProjectConfig.agentsByName[agentName]
@@ -1752,7 +1864,47 @@ function getNextVCallInspectorAvailableTools() {
       return [...new Set(profileTools.map((value) => String(value ?? '').trim()).filter(Boolean))]
     }
   }
+
+  if (targetKind === 'model') {
+    const modelName = String(nextVCallTargetInput?.value ?? '').trim()
+    const modelConfig = nextVCallInspectorProjectConfig.modelsByName[modelName]
+    const modelTools = Array.isArray(modelConfig?.tools)
+      ? [...new Set(modelConfig.tools.map((value) => String(value ?? '').trim()).filter(Boolean))]
+      : []
+    if (modelTools.length > 0) {
+      return modelTools
+    }
+  }
+
   return [...nextVCallInspectorProjectConfig.allowedTools]
+}
+
+function getNextVCallInspectorTargetKey() {
+  const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
+  const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  const targetValue = targetKind === 'model'
+    ? String(nextVCallTargetInput?.value ?? '').trim()
+    : String(nextVCallTargetAgentInput?.value ?? '').trim()
+  return `${targetKind}:${targetValue}`
+}
+
+function applyNextVCallInspectorTargetDefaults({ force = false } = {}) {
+  const targetKey = getNextVCallInspectorTargetKey()
+  const targetChanged = targetKey !== nextVCallInspectorToolsState.lastTargetKey
+  if (!force && !targetChanged) {
+    return false
+  }
+
+  nextVCallInspectorToolsState.checked = new Set(getNextVCallInspectorTargetDefaults())
+  nextVCallInspectorToolsState.lastTargetKey = targetKey
+  return true
+}
+
+function resetNextVCallInspectorToolsToDefaults() {
+  applyNextVCallInspectorTargetDefaults({ force: true })
+  persistNextVCallInspectorInputs()
+  renderNextVCallInspectorSnippet()
+  renderNextVCallInspectorToolsChecklist()
 }
 
 function syncNextVCallInspectorToolsModeUi() {
@@ -1777,52 +1929,169 @@ function syncNextVCallInspectorToolsModeUi() {
   }
 }
 
+function getNextVCallInspectorAliasesByToolName() {
+  const output = {}
+  const aliasEntries = Object.entries(nextVCallInspectorProjectConfig.toolAliases)
+  for (const [aliasRaw, targetRaw] of aliasEntries) {
+    const alias = String(aliasRaw ?? '').trim()
+    const target = String(targetRaw ?? '').trim()
+    if (!alias || !target) continue
+    if (!output[target]) output[target] = []
+    output[target].push(alias)
+  }
+  for (const key of Object.keys(output)) {
+    output[key] = [...new Set(output[key])].sort((left, right) => left.localeCompare(right))
+  }
+  return output
+}
+
+function buildNextVCallInspectorToolGroups(availableTools) {
+  const availableSet = new Set(availableTools)
+  const aliasesByTool = getNextVCallInspectorAliasesByToolName()
+  const normalizedGroups = []
+  const rawGroups = Array.isArray(nextVCallInspectorProjectConfig.toolCatalog?.groups)
+    ? nextVCallInspectorProjectConfig.toolCatalog.groups
+    : []
+
+  for (const groupRaw of rawGroups) {
+    if (!groupRaw || typeof groupRaw !== 'object') continue
+    const groupToolsRaw = Array.isArray(groupRaw.tools) ? groupRaw.tools : []
+    const normalizedTools = []
+    for (const toolRaw of groupToolsRaw) {
+      const toolName = String(toolRaw?.name ?? '').trim()
+      if (!toolName || !availableSet.has(toolName)) continue
+      const mergedAliases = [...new Set([
+        ...(Array.isArray(toolRaw?.aliases) ? toolRaw.aliases.map((value) => String(value ?? '').trim()).filter(Boolean) : []),
+        ...(aliasesByTool[toolName] ?? []),
+      ])].sort((left, right) => left.localeCompare(right))
+      normalizedTools.push({
+        name: toolName,
+        aliases: mergedAliases,
+      })
+    }
+    if (normalizedTools.length === 0) continue
+    normalizedGroups.push({
+      id: String(groupRaw.id ?? '').trim() || `group-${normalizedGroups.length + 1}`,
+      label: String(groupRaw.label ?? '').trim() || 'Tools',
+      tools: normalizedTools.sort((left, right) => left.name.localeCompare(right.name)),
+    })
+  }
+
+  if (normalizedGroups.length > 0) {
+    return normalizedGroups
+  }
+
+  return [{
+    id: 'workspace-tools',
+    label: 'Workspace tools',
+    tools: availableTools.map((toolName) => ({
+      name: toolName,
+      aliases: aliasesByTool[toolName] ?? [],
+    })),
+  }]
+}
+
 function renderNextVCallInspectorToolsChecklist() {
   if (!nextVCallToolsList) return
+  renderNextVCallInspectorToolsWarning()
   const availableTools = getNextVCallInspectorAvailableTools()
   const validChecked = [...nextVCallInspectorToolsState.checked].filter((name) => availableTools.includes(name))
   nextVCallInspectorToolsState.checked = new Set(validChecked)
   nextVCallToolsList.innerHTML = ''
 
   if (availableTools.length === 0) {
-    nextVCallToolsList.textContent = '(no configured tools available for this target)'
+    nextVCallToolsList.textContent = '(no configured tools available)'
     return
   }
 
-  const aliasEntries = Object.entries(nextVCallInspectorProjectConfig.toolAliases)
-  for (const toolName of availableTools) {
-    const wrapper = document.createElement('label')
-    wrapper.className = 'check-label'
-    wrapper.style.display = 'block'
-    wrapper.style.marginBottom = '4px'
+  const groups = buildNextVCallInspectorToolGroups(availableTools)
+  for (const group of groups) {
+    const groupContainer = document.createElement('div')
+    groupContainer.className = 'nextv-call-tools-group'
 
-    const input = document.createElement('input')
-    input.type = 'checkbox'
-    input.className = 'nextv-call-tool-checkbox'
-    input.value = toolName
-    input.checked = nextVCallInspectorToolsState.checked.has(toolName)
-    input.addEventListener('change', () => {
-      if (input.checked) {
-        nextVCallInspectorToolsState.checked.add(toolName)
-      } else {
-        nextVCallInspectorToolsState.checked.delete(toolName)
+    const tools = Array.isArray(group.tools) ? group.tools : []
+    const checkedCount = tools.filter((tool) => nextVCallInspectorToolsState.checked.has(tool.name)).length
+
+    const details = document.createElement('details')
+    details.className = 'nextv-call-tools-group-details'
+    details.open = true
+
+    const summary = document.createElement('summary')
+    summary.className = 'nextv-call-tools-group-summary'
+    summary.textContent = `${group.label} (${checkedCount}/${tools.length})`
+
+    const actions = document.createElement('div')
+    actions.className = 'nextv-call-tools-group-actions'
+
+    const selectAllBtn = document.createElement('button')
+    selectAllBtn.type = 'button'
+    selectAllBtn.className = 'mini-btn'
+    selectAllBtn.textContent = 'all'
+    selectAllBtn.addEventListener('click', (event) => {
+      event.preventDefault()
+      for (const tool of tools) {
+        nextVCallInspectorToolsState.checked.add(tool.name)
       }
       persistNextVCallInspectorInputs()
       renderNextVCallInspectorSnippet()
+      renderNextVCallInspectorToolsChecklist()
     })
 
-    const labelText = document.createElement('span')
-    const aliases = aliasEntries
-      .filter(([, target]) => String(target ?? '').trim() === toolName)
-      .map(([alias]) => String(alias ?? '').trim())
-      .filter(Boolean)
-    labelText.textContent = aliases.length > 0
-      ? `${toolName} (aliases: ${aliases.join(', ')})`
-      : toolName
+    const clearAllBtn = document.createElement('button')
+    clearAllBtn.type = 'button'
+    clearAllBtn.className = 'mini-btn'
+    clearAllBtn.textContent = 'none'
+    clearAllBtn.addEventListener('click', (event) => {
+      event.preventDefault()
+      for (const tool of tools) {
+        nextVCallInspectorToolsState.checked.delete(tool.name)
+      }
+      persistNextVCallInspectorInputs()
+      renderNextVCallInspectorSnippet()
+      renderNextVCallInspectorToolsChecklist()
+    })
 
-    wrapper.appendChild(input)
-    wrapper.appendChild(labelText)
-    nextVCallToolsList.appendChild(wrapper)
+    actions.appendChild(selectAllBtn)
+    actions.appendChild(clearAllBtn)
+
+    const list = document.createElement('div')
+    list.className = 'nextv-call-tools-group-list'
+
+    for (const tool of tools) {
+      const wrapper = document.createElement('label')
+      wrapper.className = 'check-label nextv-call-tool-row'
+
+      const input = document.createElement('input')
+      input.type = 'checkbox'
+      input.className = 'nextv-call-tool-checkbox'
+      input.value = tool.name
+      input.checked = nextVCallInspectorToolsState.checked.has(tool.name)
+      input.addEventListener('change', () => {
+        if (input.checked) {
+          nextVCallInspectorToolsState.checked.add(tool.name)
+        } else {
+          nextVCallInspectorToolsState.checked.delete(tool.name)
+        }
+        persistNextVCallInspectorInputs()
+        renderNextVCallInspectorSnippet()
+        renderNextVCallInspectorToolsChecklist()
+      })
+
+      const labelText = document.createElement('span')
+      labelText.textContent = Array.isArray(tool.aliases) && tool.aliases.length > 0
+        ? `${tool.name} (aliases: ${tool.aliases.join(', ')})`
+        : tool.name
+
+      wrapper.appendChild(input)
+      wrapper.appendChild(labelText)
+      list.appendChild(wrapper)
+    }
+
+    details.appendChild(summary)
+    details.appendChild(actions)
+    details.appendChild(list)
+    groupContainer.appendChild(details)
+    nextVCallToolsList.appendChild(groupContainer)
   }
 }
 
@@ -1863,72 +2132,6 @@ function buildNextVCallInspectorToolsPolicy() {
       denyOnUnknownTool: nextVCallToolsDenyUnknownInput?.checked === false ? false : true,
     },
   }
-}
-
-function renderNextVCallInspectorTargetConfig() {
-  if (!nextVCallTargetConfigOutput || !nextVCallTargetConfigLabel) return
-
-  const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
-  const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
-  const targetName = getNextVCallInspectorTargetValue(targetKind)
-
-  if (!targetName) {
-    nextVCallTargetConfigLabel.textContent = 'project config'
-    nextVCallTargetConfigOutput.textContent = '(select a configured target)'
-    return
-  }
-
-  if (targetKind === 'agent') {
-    const profile = nextVCallInspectorProjectConfig.agentsByName[targetName]
-    nextVCallTargetConfigLabel.textContent = `project config · agent.${targetName}`
-    if (!profile || typeof profile !== 'object') {
-      nextVCallTargetConfigOutput.textContent = stringifyInspectorPane({ status: 'agent not found in workspace config' })
-      return
-    }
-
-    const modelName = String(profile?.model ?? profile?.modelId ?? '').trim()
-    const model = modelName ? nextVCallInspectorProjectConfig.modelsByName[modelName] : null
-    const transportName = String(model?.transport ?? '').trim()
-    const provider = transportName
-      ? String(nextVCallInspectorProjectConfig.transportProvidersByName[transportName] ?? '').trim()
-      : ''
-
-    nextVCallTargetConfigOutput.textContent = stringifyInspectorPane({
-      agent: profile,
-      model: model
-        ? {
-            name: modelName,
-            ...model,
-            transportProvider: provider || undefined,
-          }
-        : (modelName
-          ? {
-              name: modelName,
-              status: 'model referenced by agent not found in workspace config',
-            }
-          : {
-              status: 'agent does not declare a model',
-            }),
-      availableTools: getNextVCallInspectorAvailableTools(),
-      toolAliases: nextVCallInspectorProjectConfig.toolAliases,
-    })
-    return
-  }
-
-  const model = nextVCallInspectorProjectConfig.modelsByName[targetName]
-  const transportName = String(model?.transport ?? '').trim()
-  const provider = transportName
-    ? String(nextVCallInspectorProjectConfig.transportProvidersByName[transportName] ?? '').trim()
-    : ''
-  nextVCallTargetConfigLabel.textContent = `project config · model.${targetName}`
-  nextVCallTargetConfigOutput.textContent = stringifyInspectorPane(model
-    ? {
-        ...model,
-        transportProvider: provider || undefined,
-        availableTools: getNextVCallInspectorAvailableTools(),
-        toolAliases: nextVCallInspectorProjectConfig.toolAliases,
-      }
-    : { status: 'model not found in workspace config' })
 }
 
 function renderNextVCallInspectorResolvedCall(resolvedCall = null) {
@@ -1973,6 +2176,7 @@ function syncNextVCallInspectorTargetMode() {
     nextVCallTargetInput.hidden = isAgentMode
     nextVCallTargetInput.disabled = isAgentMode
   }
+  applyNextVCallInspectorTargetDefaults()
   syncNextVCallInspectorToolsModeUi()
   renderNextVCallInspectorToolsChecklist()
 }
@@ -2068,6 +2272,11 @@ export async function refreshNextVCallInspectorAgents(options = {}) {
       allowedTools: data?.configuredAllowedTools,
       toolAliases: data?.configuredToolAliases,
       agentDeclaredTools: data?.configuredAgentDeclaredTools,
+      toolCatalog: data?.toolCatalog,
+      runtimeOwned: data?.runtimeOwned === true,
+      runtimeCatalogAvailable: data?.runtimeCatalogAvailable,
+      runtimeCatalogReason: data?.runtimeCatalogReason,
+      runtimeCatalogHint: data?.runtimeCatalogHint,
     })
     setNextVCallInspectorAgentOptions(configuredAgents, { emptyLabel: noAgentsLabel })
     setNextVCallInspectorModelOptions(configuredModels, { emptyLabel: noModelsLabel })
@@ -2083,8 +2292,8 @@ export async function refreshNextVCallInspectorAgents(options = {}) {
       if (modelOptions.includes(storedModel)) nextVCallTargetInput.value = storedModel
     }
 
+    applyNextVCallInspectorTargetDefaults()
     syncNextVCallInspectorTargetMode()
-    renderNextVCallInspectorTargetConfig()
     renderNextVCallInspectorSnippet()
   } catch (err) {
     setNextVCallInspectorProjectConfig({})
@@ -2095,7 +2304,6 @@ export async function refreshNextVCallInspectorAgents(options = {}) {
       emptyLabel: workspaceDir ? '(workspace config unavailable)' : noModelsLabel,
     })
     syncNextVCallInspectorTargetMode()
-    renderNextVCallInspectorTargetConfig()
     if (!quiet) {
       appendNextVErrorLog(err)
       setStatus('could not load configured agents', 'responding')
@@ -2189,7 +2397,6 @@ export async function openNextVCallInspectorForToken(kind, value, options = {}) 
   applyNextVCallInspectorPrefill(options?.prefill)
 
   persistNextVCallInspectorInputs()
-  renderNextVCallInspectorTargetConfig()
   renderNextVCallInspectorSnippet()
 
   if (options?.focusPrompt !== false && nextVCallPromptInput) {
@@ -2372,7 +2579,6 @@ export function buildNextVCallInspectorSnippet() {
 }
 
 export function renderNextVCallInspectorSnippet() {
-  renderNextVCallInspectorTargetConfig()
   if (!nextVCallGeneratedCode) return
   nextVCallGeneratedCode.textContent = buildNextVCallInspectorSnippet()
 }
@@ -2446,6 +2652,13 @@ export function initNextVCallInspector() {
     nextVCallToolsList.addEventListener('change', () => {
       persistNextVCallInspectorInputs()
       renderNextVCallInspectorSnippet()
+    })
+  }
+
+  if (nextVCallToolsResetDefaultsBtn && nextVCallToolsResetDefaultsBtn.dataset.callInspectorBound !== '1') {
+    nextVCallToolsResetDefaultsBtn.dataset.callInspectorBound = '1'
+    nextVCallToolsResetDefaultsBtn.addEventListener('click', () => {
+      resetNextVCallInspectorToolsToDefaults()
     })
   }
 

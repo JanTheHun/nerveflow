@@ -272,8 +272,7 @@ export function toggleShowInputEcho() {
 }
 
 export function initShowInputEcho() {
-  const stored = localStorage.getItem(storageKeys.nextVShowInputEcho)
-  setShowInputEcho(stored === '1', { persist: false })
+  setShowInputEcho(true, { persist: false })
 }
 
 export function appendUserOutputVoice(event, channel = 'voice') {
@@ -702,6 +701,15 @@ function getExecutionEventDebugPayload(event) {
     return {
       agent: String(event.agent ?? ''),
       metadata,
+    }
+  }
+
+  if (event.type === 'tool_result') {
+    const metadata = (event.metadata && typeof event.metadata === 'object') ? event.metadata : null
+    return {
+      tool: String(event.tool ?? ''),
+      result: event.result ?? null,
+      ...(metadata ? { metadata } : {}),
     }
   }
 

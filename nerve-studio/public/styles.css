@@ -4473,6 +4473,73 @@ body.mode-nextv #nextv-stop-btn:hover {
   white-space: nowrap;
 }
 
+.nextv-call-inline-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--dim);
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.nextv-call-inline-field input[type="number"] {
+  width: 50px;
+  padding: 3px 6px;
+}
+
+#nextv-call-tools-timeout-ms {
+  width: 80px;
+}
+
+.nextv-call-tools-group {
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  background: color-mix(in srgb, var(--panel-soft-bg) 80%, transparent);
+}
+
+.nextv-call-tools-group-details {
+  padding: 6px 8px;
+}
+
+.nextv-call-tools-group-summary {
+  cursor: pointer;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.nextv-call-tools-group-actions {
+  display: flex;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.nextv-call-tools-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 0 2px 4px;
+}
+
+.nextv-call-tool-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: normal;
+}
+
+.nextv-call-tools-warning {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--status-warning) 45%, var(--border));
+  border-radius: 6px;
+  color: var(--status-warning);
+  background: color-mix(in srgb, var(--status-warning) 10%, transparent);
+  font-size: 12px;
+}
+
 .nextv-attach-start-override {
   margin-left: 4px;
   font-size: 11px;

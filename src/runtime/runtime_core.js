@@ -45,6 +45,11 @@ import {
   validateNoForbiddenAgentFields,
   validateRequiredCapabilityBindings,
 } from '../host_core/index.js'
+import {
+  extractComposedInput,
+  hasMeaningfulComposedParts,
+  renderComposedTextPreview,
+} from '../host_core/structured_inputs.js'
 
 export function createRuntimeResolvers({ repoRoot }) {
   function toWorkspaceDisplayPath(absolutePath) {
@@ -531,8 +536,18 @@ export function createRuntimeCore({
     const mode = modeRaw === 'try' ? 'try' : 'call'
     const agentName = String(payload?.agent ?? '').trim()
     const modelName = String(payload?.model ?? '').trim()
-    const prompt = String(payload?.prompt ?? '')
-    const instructions = String(payload?.instructions ?? '')
+    const promptInput = extractComposedInput(payload, {
+      legacyKey: 'prompt',
+      partsKey: 'promptParts',
+      fieldName: 'prompt',
+    })
+    const instructionsInput = extractComposedInput(payload, {
+      legacyKey: 'instructions',
+      partsKey: 'instructionParts',
+      fieldName: 'instructions',
+    })
+    const prompt = promptInput.value
+    const instructions = instructionsInput.value
     const validateModeRaw = String(payload?.validate ?? '').trim().toLowerCase()
     const validateMode = ['strict', 'coerce', 'none'].includes(validateModeRaw) ? validateModeRaw : 'coerce'
     const retryOnViolationRaw = Number(payload?.retry_on_contract_violation)
@@ -596,7 +611,7 @@ export function createRuntimeCore({
     if (targetKind === 'model' && !modelName) {
       throw new Error('model target is required when targetKind is "model"')
     }
-    if (!prompt.trim() && normalizedMessages.length === 0) {
+    if (!hasMeaningfulComposedParts(promptInput.parts) && normalizedMessages.length === 0) {
       throw new Error('prompt or messages is required')
     }
     if (returnsContract != null && decideContract != null) {
@@ -658,7 +673,7 @@ export function createRuntimeCore({
         event: {
           type: 'call_inspector.execute',
           source: 'call-inspector',
-          value: prompt,
+          value: renderComposedTextPreview(promptInput.parts),
           payload: {},
         },
       })
@@ -697,8 +712,8 @@ export function createRuntimeCore({
       resolvedCall: buildResolvedCallSummary({
         targetKind,
         target: targetKind === 'agent' ? agentName : modelName,
-        prompt,
-        instructions,
+        prompt: renderComposedTextPreview(promptInput.parts),
+        instructions: renderComposedTextPreview(instructionsInput.parts),
         validate: validateMode,
         retryOnViolation,
         returnsContract,

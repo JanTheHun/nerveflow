@@ -109,6 +109,8 @@ export function createNextVRuntimeController({
   let nextVRuntimeCallHooks = null
   let nextVRunnerRunOptions = null
   let nextVDefinitionFiles = []
+  let nextVRuntimeDiscoveredTools = []
+  let nextVRuntimeDiscoveredToolMetadata = {}
   let nextVActiveDefinition = {
     activeDefinitionId: '',
     definitionHash: '',
@@ -172,6 +174,8 @@ export function createNextVRuntimeController({
     nextVRuntimeCallHooks = null
     nextVRunnerRunOptions = null
     nextVDefinitionFiles = []
+    nextVRuntimeDiscoveredTools = []
+    nextVRuntimeDiscoveredToolMetadata = {}
     nextVWorkspaceConfig = null
     nextVWorkspaceDirResolved = null
     nextVActiveDefinition = {
@@ -194,6 +198,242 @@ export function createNextVRuntimeController({
       toolsSource: workspaceConfig?.tools?.source || null,
       nextvSource: workspaceConfig?.nextv?.file || null,
       operatorsSource: workspaceConfig?.operators?.source || null,
+    }
+  }
+
+  function sortNames(values) {
+    return [...new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean))]
+      .sort((left, right) => left.localeCompare(right))
+  }
+
+  function normalizeCatalogGroupToken(valueRaw) {
+    const value = String(valueRaw ?? '').trim().toLowerCase()
+    if (!value) return 'unknown'
+    const normalized = value
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+    return normalized || 'unknown'
+  }
+
+  function buildConfiguredToolCatalog({
+    configuredAllowedTools,
+    configuredToolAliases,
+    configuredAgentDeclaredTools,
+    configuredModelDeclaredTools,
+    runtimeDiscoveredTools,
+    runtimeDiscoveredToolMetadata,
+  }) {
+    const allowedSet = new Set(configuredAllowedTools)
+    const aliasEntries = Object.entries(configuredToolAliases)
+    const declaredToolAgents = new Map()
+    const declaredToolModels = new Map()
+    const discoveredToolMetadata = runtimeDiscoveredToolMetadata && typeof runtimeDiscoveredToolMetadata === 'object'
+      ? runtimeDiscoveredToolMetadata
+      : {}
+    const allToolNames = new Set([...configuredAllowedTools, ...runtimeDiscoveredTools])
+
+    for (const [agentName, declaredToolsRaw] of Object.entries(configuredAgentDeclaredTools)) {
+      const declaredTools = Array.isArray(declaredToolsRaw)
+        ? sortNames(declaredToolsRaw)
+        : []
+      for (const toolName of declaredTools) {
+        allToolNames.add(toolName)
+        const current = declaredToolAgents.get(toolName) ?? []
+        current.push(agentName)
+        declaredToolAgents.set(toolName, current)
+      }
+    }
+
+    for (const [modelName, declaredToolsRaw] of Object.entries(configuredModelDeclaredTools)) {
+      const declaredTools = Array.isArray(declaredToolsRaw)
+        ? sortNames(declaredToolsRaw)
+        : []
+      for (const toolName of declaredTools) {
+        allToolNames.add(toolName)
+        const current = declaredToolModels.get(toolName) ?? []
+        current.push(modelName)
+        declaredToolModels.set(toolName, current)
+      }
+    }
+
+    const toolsByGroup = {
+      'workspace-tools': [],
+      other: [],
+    }
+    const mcpServerGroups = new Map()
+
+    const sortedToolNames = [...allToolNames].sort((left, right) => left.localeCompare(right))
+    for (const toolName of sortedToolNames) {
+      const aliases = aliasEntries
+        .filter(([, target]) => String(target ?? '').trim() === toolName)
+        .map(([alias]) => String(alias ?? '').trim())
+        .filter(Boolean)
+        .sort((left, right) => left.localeCompare(right))
+      const declaredByAgents = sortNames(declaredToolAgents.get(toolName) ?? [])
+      const declaredByModels = sortNames(declaredToolModels.get(toolName) ?? [])
+      const entry = {
+        name: toolName,
+      }
+      if (aliases.length > 0) {
+        entry.aliases = aliases
+      }
+      if (declaredByAgents.length > 0) {
+        entry.declaredByAgents = declaredByAgents
+      }
+      if (declaredByModels.length > 0) {
+        entry.declaredByModels = declaredByModels
+      }
+      const serverName = String(discoveredToolMetadata?.[toolName]?.serverName ?? '').trim()
+      if (serverName) {
+        entry.serverName = serverName
+      }
+
+      if (allowedSet.has(toolName)) {
+        toolsByGroup['workspace-tools'].push(entry)
+      } else if (serverName) {
+        const current = mcpServerGroups.get(serverName) ?? []
+        current.push(entry)
+        mcpServerGroups.set(serverName, current)
+      } else {
+        toolsByGroup.other.push(entry)
+      }
+    }
+
+    const groups = []
+    if (toolsByGroup['workspace-tools'].length > 0) {
+      groups.push({
+        id: 'workspace-tools',
+        label: 'Workspace tools',
+        kind: 'workspace-tools',
+        tools: toolsByGroup['workspace-tools'],
+      })
+    }
+    const sortedMcpServerNames = [...mcpServerGroups.keys()]
+      .sort((left, right) => left.localeCompare(right))
+    for (const serverName of sortedMcpServerNames) {
+      groups.push({
+        id: `mcp-server:${normalizeCatalogGroupToken(serverName)}`,
+        label: serverName,
+        kind: 'mcp-server',
+        tools: mcpServerGroups.get(serverName),
+      })
+    }
+    if (toolsByGroup.other.length > 0) {
+      groups.push({
+        id: 'other',
+        label: 'Other tools',
+        kind: 'other',
+        tools: toolsByGroup.other,
+      })
+    }
+
+    return {
+      version: 1,
+      groups,
+    }
+  }
+
+  async function refreshRuntimeDiscoveredTools() {
+    if (!toolRuntime || typeof toolRuntime.listAvailable !== 'function') {
+      nextVRuntimeDiscoveredTools = []
+      nextVRuntimeDiscoveredToolMetadata = {}
+      return []
+    }
+
+    try {
+      const discovered = await toolRuntime.listAvailable()
+      nextVRuntimeDiscoveredTools = Array.isArray(discovered)
+        ? sortNames(discovered)
+        : []
+      const discoveredMetadata = {}
+      if (typeof toolRuntime.getMetadata === 'function') {
+        await Promise.all(nextVRuntimeDiscoveredTools.map(async (toolName) => {
+          try {
+            const metadata = await toolRuntime.getMetadata(toolName)
+            if (metadata && typeof metadata === 'object' && !Array.isArray(metadata)) {
+              discoveredMetadata[toolName] = metadata
+            }
+          } catch {
+            // Metadata lookup failures should not remove tool discovery results.
+          }
+        }))
+      }
+      nextVRuntimeDiscoveredToolMetadata = discoveredMetadata
+    } catch {
+      nextVRuntimeDiscoveredTools = []
+      nextVRuntimeDiscoveredToolMetadata = {}
+    }
+
+    return [...nextVRuntimeDiscoveredTools]
+  }
+
+  function collectConfiguredCallInspectorCatalog(workspaceConfig) {
+    const configuredProfiles = workspaceConfig?.agents?.profiles && typeof workspaceConfig.agents.profiles === 'object'
+      ? workspaceConfig.agents.profiles
+      : {}
+    const configuredModelsMap = workspaceConfig?.models?.map && typeof workspaceConfig.models.map === 'object'
+      ? workspaceConfig.models.map
+      : {}
+    const transportsMap = workspaceConfig?.transports?.map && typeof workspaceConfig.transports.map === 'object'
+      ? workspaceConfig.transports.map
+      : {}
+
+    const workspaceToolsAllowRaw = workspaceConfig?.tools?.allow
+    const workspaceToolsAllow = workspaceToolsAllowRaw instanceof Set
+      ? [...workspaceToolsAllowRaw]
+      : (Array.isArray(workspaceToolsAllowRaw) ? workspaceToolsAllowRaw : [])
+
+    const configuredAgents = sortNames(Object.keys(configuredProfiles))
+    const configuredModels = sortNames(Object.keys(configuredModelsMap))
+    const configuredTransportProviders = Object.fromEntries(
+      Object.entries(transportsMap).map(([name, transport]) => [name, String(transport?.provider ?? '').trim()])
+    )
+    const configuredAllowedTools = sortNames(workspaceToolsAllow)
+    const configuredToolAliases = workspaceConfig?.tools?.aliases && typeof workspaceConfig.tools.aliases === 'object'
+      ? Object.fromEntries(
+        Object.entries(workspaceConfig.tools.aliases)
+          .map(([alias, target]) => [String(alias ?? '').trim(), String(target ?? '').trim()])
+          .filter(([alias, target]) => alias && target)
+      )
+      : {}
+    const configuredAgentDeclaredTools = Object.fromEntries(
+      Object.entries(configuredProfiles).map(([agentName, profile]) => {
+        const tools = Array.isArray(profile?.tools)
+          ? [...new Set(profile.tools.map((value) => String(value ?? '').trim()).filter(Boolean))]
+          : []
+        return [agentName, tools]
+      })
+    )
+    const configuredModelDeclaredTools = Object.fromEntries(
+      Object.entries(configuredModelsMap).map(([modelName, modelConfig]) => {
+        const tools = Array.isArray(modelConfig?.tools)
+          ? [...new Set(modelConfig.tools.map((value) => String(value ?? '').trim()).filter(Boolean))]
+          : []
+        return [modelName, tools]
+      })
+    )
+    const toolCatalog = buildConfiguredToolCatalog({
+      configuredAllowedTools,
+      configuredToolAliases,
+      configuredAgentDeclaredTools,
+      configuredModelDeclaredTools,
+      runtimeDiscoveredTools: nextVRuntimeDiscoveredTools,
+      runtimeDiscoveredToolMetadata: nextVRuntimeDiscoveredToolMetadata,
+    })
+
+    return {
+      configuredAgents,
+      configuredModels,
+      configuredAgentProfiles: configuredProfiles,
+      configuredModelConfigs: configuredModelsMap,
+      configuredTransportProviders,
+      configuredAllowedTools,
+      configuredToolAliases,
+      configuredAgentDeclaredTools,
+      configuredModelDeclaredTools,
+      runtimeDiscoveredTools: [...nextVRuntimeDiscoveredTools],
+      runtimeDiscoveredToolMetadata: { ...nextVRuntimeDiscoveredToolMetadata },
+      toolCatalog,
     }
   }
 
@@ -478,6 +718,8 @@ export function createNextVRuntimeController({
       toolRuntime,
     })
     nextVRuntimeCallHooks = runtimeCallHooks
+
+    await refreshRuntimeDiscoveredTools()
 
     // Preload phase — blocking, best-effort, must not abort startup
     const preloadMode = String(workspaceConfig?.runtime?.preload ?? 'none').trim()
@@ -777,6 +1019,7 @@ export function createNextVRuntimeController({
     if (nextVRuntimeCallHooks && typeof nextVRuntimeCallHooks.clearConfigCache === 'function') {
       nextVRuntimeCallHooks.clearConfigCache()
     }
+    void refreshRuntimeDiscoveredTools()
 
     const payload = {
       workspaceDir: workspaceDir.relativePath,
@@ -950,6 +1193,7 @@ export function createNextVRuntimeController({
   }
 
   function getDefinitionStatus() {
+    const callInspectorCatalog = collectConfiguredCallInspectorCatalog(nextVWorkspaceConfig)
     return {
       active: {
         running: Boolean(nextVRunner),
@@ -959,6 +1203,7 @@ export function createNextVRuntimeController({
         activeDefinitionId: nextVActiveDefinition.activeDefinitionId,
         definitionHash: nextVActiveDefinition.definitionHash,
         declaredExternals: getDeclaredExternals(nextVWorkspaceConfig),
+        ...callInspectorCatalog,
       },
       candidate: nextVCandidateStatus,
     }

@@ -126,6 +126,53 @@ test('mcpCapability with default empty servers', () => {
 
   assert.equal(Array.isArray(capability.toolProviders), true)
   assert.equal(capability.toolProviders.length, 0)
+  assert.equal(Array.isArray(capability.toolProviderEnumerators), true)
+  assert.equal(capability.toolProviderEnumerators.length, 0)
+})
+
+test('mcpCapability exports toolProviderEnumerators for server tool discovery', async () => {
+  const server = await createMockStdioMcpServer({
+    serverName: 'enumerator-roundtrip',
+    toolName: 'enumerator_tool',
+    responsePrefix: 'enumerator',
+  })
+
+  const capability = mcpCapability({
+    servers: [{
+      name: 'enumerator-server',
+      transport: 'stdio',
+      config: {
+        command: process.execPath,
+        args: [server.scriptPath],
+      },
+    }],
+  })
+
+  try {
+    assert.equal(Array.isArray(capability.toolProviderEnumerators), true)
+    assert.equal(capability.toolProviderEnumerators.length, 1)
+    const discovered = await capability.toolProviderEnumerators[0]()
+    assert.equal(Array.isArray(discovered), true)
+    assert.deepEqual(discovered, ['enumerator_tool'])
+  } finally {
+    if (typeof capability.teardown === 'function') {
+      await capability.teardown()
+    }
+    await server.cleanup()
+  }
+})
+
+test('mcpCapability toolProviderEnumerators return empty names when server init fails', async () => {
+  const capability = mcpCapability({
+    servers: [{
+      name: 'broken-enumerator-server',
+      transport: 'stdio',
+      config: {},
+    }],
+  })
+
+  const discovered = await capability.toolProviderEnumerators[0]()
+  assert.deepEqual(discovered, [])
 })
 
 test('mcpCapability rejects non-boolean eagerConnect', () => {

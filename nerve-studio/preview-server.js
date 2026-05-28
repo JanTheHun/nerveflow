@@ -70,6 +70,11 @@ import {
 import {
   loadHostModulesByRole,
 } from '../src/host_modules/index.js'
+import {
+  extractComposedInput,
+  hasMeaningfulComposedParts,
+  renderComposedTextPreview,
+} from '../src/host_core/structured_inputs.js'
 import { createOllamaTransport } from '../src/host_core/agent_transports/ollama.js'
 import { createMqttRemoteBridge } from './mqtt-remote-bridge.js'
 import { createAttachSession } from './attach-session.js'
@@ -831,6 +836,68 @@ async function requestRemoteGraph(runtimeTarget, url = null, payload = {}) {
   return await runtimeBridge.sendCommand({ type: 'graph', payload })
 }
 
+function buildCallInspectorToolCatalog({ configuredAllowedTools = [], configuredToolAliases = {}, configuredAgentDeclaredTools = {} } = {}) {
+  const normalizeUnique = (values) => [...new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right))
+  const allowedSet = new Set(normalizeUnique(configuredAllowedTools))
+  const aliasEntries = Object.entries(configuredToolAliases)
+  const declaredByTool = new Map()
+  const allToolNames = new Set(allowedSet)
+
+  for (const [agentName, declaredToolsRaw] of Object.entries(configuredAgentDeclaredTools)) {
+    const declaredTools = Array.isArray(declaredToolsRaw) ? normalizeUnique(declaredToolsRaw) : []
+    for (const toolName of declaredTools) {
+      allToolNames.add(toolName)
+      const current = declaredByTool.get(toolName) ?? []
+      current.push(agentName)
+      declaredByTool.set(toolName, current)
+    }
+  }
+
+  const workspaceTools = []
+  const otherTools = []
+  const sortedToolNames = [...allToolNames].sort((left, right) => left.localeCompare(right))
+  for (const toolName of sortedToolNames) {
+    const aliases = aliasEntries
+      .filter(([, target]) => String(target ?? '').trim() === toolName)
+      .map(([alias]) => String(alias ?? '').trim())
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right))
+    const declaredByAgents = normalizeUnique(declaredByTool.get(toolName) ?? [])
+    const entry = { name: toolName }
+    if (aliases.length > 0) entry.aliases = aliases
+    if (declaredByAgents.length > 0) entry.declaredByAgents = declaredByAgents
+    if (allowedSet.has(toolName)) {
+      workspaceTools.push(entry)
+    } else {
+      otherTools.push(entry)
+    }
+  }
+
+  const groups = []
+  if (workspaceTools.length > 0) {
+    groups.push({
+      id: 'workspace-tools',
+      label: 'Workspace tools',
+      kind: 'workspace-tools',
+      tools: workspaceTools,
+    })
+  }
+  if (otherTools.length > 0) {
+    groups.push({
+      id: 'other',
+      label: 'Other tools',
+      kind: 'other',
+      tools: otherTools,
+    })
+  }
+
+  return {
+    version: 1,
+    groups,
+  }
+}
+
 async function buildRemoteWorkspaceConfigResponse(runtimeTarget, url = null) {
   const response = await requestRemoteDefinitionStatus(runtimeTarget, url)
   if (response?.ok !== true) {
@@ -850,6 +917,64 @@ async function buildRemoteWorkspaceConfigResponse(runtimeTarget, url = null) {
     ? rawEntrypointPath.slice(workspaceDir.length + 1)
     : rawEntrypointPath
 
+  const hasOwn = (key) => Object.prototype.hasOwnProperty.call(activeStatus, key)
+  const runtimeProvidesCatalog = (
+    hasOwn('configuredAgents')
+    || hasOwn('configuredModels')
+    || hasOwn('configuredAgentProfiles')
+    || hasOwn('configuredModelConfigs')
+    || hasOwn('configuredTransportProviders')
+    || hasOwn('configuredAllowedTools')
+    || hasOwn('configuredToolAliases')
+    || hasOwn('configuredAgentDeclaredTools')
+    || hasOwn('toolCatalog')
+  )
+
+  let configuredAgents = []
+  let configuredModels = []
+  let configuredAgentProfiles = {}
+  let configuredModelConfigs = {}
+  let configuredTransportProviders = {}
+  let configuredAllowedTools = []
+  let configuredToolAliases = {}
+  let configuredAgentDeclaredTools = {}
+  let toolCatalog = null
+  const runtimeCatalogAvailable = runtimeProvidesCatalog
+  const runtimeCatalogReason = runtimeProvidesCatalog ? '' : 'remote_runtime_missing_catalog'
+  const runtimeCatalogHint = runtimeProvidesCatalog
+    ? ''
+    : 'Attached runtime did not provide call inspector catalog metadata. Upgrade the runtime to hydrate configured tools and models in attach mode.'
+
+  if (runtimeProvidesCatalog) {
+    configuredAgents = Array.isArray(activeStatus.configuredAgents)
+      ? activeStatus.configuredAgents.map((value) => String(value ?? '').trim()).filter(Boolean)
+      : []
+    configuredModels = Array.isArray(activeStatus.configuredModels)
+      ? activeStatus.configuredModels.map((value) => String(value ?? '').trim()).filter(Boolean)
+      : []
+    configuredAgentProfiles = activeStatus.configuredAgentProfiles && typeof activeStatus.configuredAgentProfiles === 'object' && !Array.isArray(activeStatus.configuredAgentProfiles)
+      ? activeStatus.configuredAgentProfiles
+      : {}
+    configuredModelConfigs = activeStatus.configuredModelConfigs && typeof activeStatus.configuredModelConfigs === 'object' && !Array.isArray(activeStatus.configuredModelConfigs)
+      ? activeStatus.configuredModelConfigs
+      : {}
+    configuredTransportProviders = activeStatus.configuredTransportProviders && typeof activeStatus.configuredTransportProviders === 'object' && !Array.isArray(activeStatus.configuredTransportProviders)
+      ? activeStatus.configuredTransportProviders
+      : {}
+    configuredAllowedTools = Array.isArray(activeStatus.configuredAllowedTools)
+      ? activeStatus.configuredAllowedTools.map((value) => String(value ?? '').trim()).filter(Boolean)
+      : []
+    configuredToolAliases = activeStatus.configuredToolAliases && typeof activeStatus.configuredToolAliases === 'object' && !Array.isArray(activeStatus.configuredToolAliases)
+      ? activeStatus.configuredToolAliases
+      : {}
+    configuredAgentDeclaredTools = activeStatus.configuredAgentDeclaredTools && typeof activeStatus.configuredAgentDeclaredTools === 'object' && !Array.isArray(activeStatus.configuredAgentDeclaredTools)
+      ? activeStatus.configuredAgentDeclaredTools
+      : {}
+    toolCatalog = activeStatus.toolCatalog && typeof activeStatus.toolCatalog === 'object' && !Array.isArray(activeStatus.toolCatalog)
+      ? activeStatus.toolCatalog
+      : null
+  }
+
   return {
     ok: true,
     source: 'runtime',
@@ -859,14 +984,18 @@ async function buildRemoteWorkspaceConfigResponse(runtimeTarget, url = null) {
     baselineStatePath: '',
     declaredExternals: Array.isArray(activeStatus.declaredExternals) ? activeStatus.declaredExternals : [],
     declaredEffects: [],
-    configuredAgents: [],
-    configuredModels: [],
-    configuredAgentProfiles: {},
-    configuredModelConfigs: {},
-    configuredTransportProviders: {},
-    configuredAllowedTools: [],
-    configuredToolAliases: {},
-    configuredAgentDeclaredTools: {},
+    configuredAgents,
+    configuredModels,
+    configuredAgentProfiles,
+    configuredModelConfigs,
+    configuredTransportProviders,
+    configuredAllowedTools,
+    configuredToolAliases,
+    configuredAgentDeclaredTools,
+    toolCatalog,
+    runtimeCatalogAvailable,
+    runtimeCatalogReason,
+    runtimeCatalogHint,
     timers: [],
     definitionStatus: response.data,
     activeDefinitionId: String(activeStatus.activeDefinitionId ?? ''),
@@ -1384,6 +1513,15 @@ async function configureRuntimeHostModules(workspaceDirValueRaw) {
 
 const dynamicToolRuntime = {
   call: async (payload = {}) => activeToolRuntime.call(payload),
+  getMetadata: async (nameRaw) => {
+    if (typeof activeToolRuntime.getMetadata !== 'function') return null
+    return await activeToolRuntime.getMetadata(nameRaw)
+  },
+  listAvailable: async () => {
+    if (typeof activeToolRuntime.listAvailable !== 'function') return []
+    const names = await activeToolRuntime.listAvailable()
+    return Array.isArray(names) ? names : []
+  },
 }
 
 const dynamicIngressRuntime = {
@@ -1753,6 +1891,42 @@ async function handleApi(req, res, url) {
       )
       const configuredAgents = Object.keys(configuredAgentProfiles).sort((left, right) => left.localeCompare(right))
       const configuredModels = Object.keys(configuredModelConfigs).sort((left, right) => left.localeCompare(right))
+      let effectiveConfiguredAllowedTools = configuredAllowedTools
+      let effectiveConfiguredToolAliases = configuredToolAliases
+      let effectiveConfiguredAgentDeclaredTools = configuredAgentDeclaredTools
+      let effectiveToolCatalog = buildCallInspectorToolCatalog({
+        configuredAllowedTools,
+        configuredToolAliases,
+        configuredAgentDeclaredTools,
+      })
+
+      // If local runtime is active for this workspace, prefer runtime-owned catalog fields
+      // so Studio can surface runtime-discovered tools in the inspector.
+      if (runtimeController.isActive()) {
+        try {
+          const definitionStatus = runtimeController.getDefinitionStatus()
+          const activeStatus = definitionStatus?.active && typeof definitionStatus.active === 'object'
+            ? definitionStatus.active
+            : {}
+          const runtimeWorkspaceDir = String(activeStatus.workspaceDir ?? '').trim()
+          if (runtimeWorkspaceDir && runtimeWorkspaceDir === workspaceDir.relativePath) {
+            effectiveConfiguredAllowedTools = Array.isArray(activeStatus.configuredAllowedTools)
+              ? activeStatus.configuredAllowedTools.map((value) => String(value ?? '').trim()).filter(Boolean)
+              : effectiveConfiguredAllowedTools
+            effectiveConfiguredToolAliases = activeStatus.configuredToolAliases && typeof activeStatus.configuredToolAliases === 'object' && !Array.isArray(activeStatus.configuredToolAliases)
+              ? activeStatus.configuredToolAliases
+              : effectiveConfiguredToolAliases
+            effectiveConfiguredAgentDeclaredTools = activeStatus.configuredAgentDeclaredTools && typeof activeStatus.configuredAgentDeclaredTools === 'object' && !Array.isArray(activeStatus.configuredAgentDeclaredTools)
+              ? activeStatus.configuredAgentDeclaredTools
+              : effectiveConfiguredAgentDeclaredTools
+            effectiveToolCatalog = activeStatus.toolCatalog && typeof activeStatus.toolCatalog === 'object' && !Array.isArray(activeStatus.toolCatalog)
+              ? activeStatus.toolCatalog
+              : effectiveToolCatalog
+          }
+        } catch {
+          // Keep workspace-config response usable even when runtime status read fails.
+        }
+      }
       return sendJson(res, 200, {
         ok: true,
         source: 'workspace',
@@ -1767,9 +1941,10 @@ async function handleApi(req, res, url) {
         configuredAgentProfiles,
         configuredModelConfigs,
         configuredTransportProviders,
-        configuredAllowedTools,
-        configuredToolAliases,
-        configuredAgentDeclaredTools,
+        configuredAllowedTools: effectiveConfiguredAllowedTools,
+        configuredToolAliases: effectiveConfiguredToolAliases,
+        configuredAgentDeclaredTools: effectiveConfiguredAgentDeclaredTools,
+        toolCatalog: effectiveToolCatalog,
         timers: Array.isArray(workspaceConfig.nextv.timers)
           ? workspaceConfig.nextv.timers.map((timer) => ({
               event: timer.event,
@@ -1902,6 +2077,23 @@ async function handleApi(req, res, url) {
       body = await readRequestBody(req)
     } catch (err) {
       return sendJson(res, 400, { error: err.message })
+    }
+
+    let promptInput
+    let instructionsInput
+    try {
+      promptInput = extractComposedInput(body, {
+        legacyKey: 'prompt',
+        partsKey: 'promptParts',
+        fieldName: 'prompt',
+      })
+      instructionsInput = extractComposedInput(body, {
+        legacyKey: 'instructions',
+        partsKey: 'instructionParts',
+        fieldName: 'instructions',
+      })
+    } catch (err) {
+      return sendJson(res, 400, { error: String(err?.message ?? err) })
     }
 
     try {
@@ -2273,6 +2465,23 @@ async function handleApi(req, res, url) {
       return sendJson(res, 400, { error: err.message })
     }
 
+    let promptInput
+    let instructionsInput
+    try {
+      promptInput = extractComposedInput(body, {
+        legacyKey: 'prompt',
+        partsKey: 'promptParts',
+        fieldName: 'prompt',
+      })
+      instructionsInput = extractComposedInput(body, {
+        legacyKey: 'instructions',
+        partsKey: 'instructionParts',
+        fieldName: 'instructions',
+      })
+    } catch (err) {
+      return sendJson(res, 400, { error: String(err?.message ?? err) })
+    }
+
     if (runtimeTarget === 'remote-control' || runtimeTarget === 'external' || runtimeTarget === 'attach') {
       let runtimeBridge
       let response
@@ -2285,9 +2494,20 @@ async function handleApi(req, res, url) {
         if (!status.connected) {
           return sendRemoteConnectionUnavailable(res, 'remote runtime websocket is not connected', runtimeTarget)
         }
+        const remotePayload = body && typeof body === 'object' && !Array.isArray(body)
+          ? { ...body }
+          : {}
+        remotePayload.prompt = promptInput.value
+        delete remotePayload.promptParts
+        remotePayload.instructions = instructionsInput.value
+        delete remotePayload.instructionParts
+        const remoteWorkspaceDir = String(remotePayload.workspaceDir ?? '').trim()
+        if (!remoteWorkspaceDir || remoteWorkspaceDir === '.' || isAbsolute(remoteWorkspaceDir)) {
+          delete remotePayload.workspaceDir
+        }
         response = await runtimeBridge.sendCommand({
           type: 'call_inspector_execute',
-          payload: body,
+          payload: remotePayload,
         })
       } catch (err) {
         if (String(err?.code ?? '') === 'validation_error') {
@@ -2313,8 +2533,8 @@ async function handleApi(req, res, url) {
     const mode = modeRaw === 'try' ? 'try' : 'call'
     const agentName = String(body?.agent ?? '').trim()
     const modelName = String(body?.model ?? '').trim()
-    const prompt = String(body?.prompt ?? '')
-    const instructions = String(body?.instructions ?? '')
+    const prompt = promptInput.value
+    const instructions = instructionsInput.value
     const validateModeRaw = String(body?.validate ?? '').trim().toLowerCase()
     const validateMode = ['strict', 'coerce', 'none'].includes(validateModeRaw) ? validateModeRaw : 'coerce'
     const retryOnViolationRaw = Number(body?.retry_on_contract_violation)
@@ -2383,7 +2603,7 @@ async function handleApi(req, res, url) {
     if (targetKind === 'model' && !modelName) {
       return sendJson(res, 400, { error: 'model target is required when targetKind is "model"' })
     }
-    if (!prompt.trim() && normalizedMessages.length === 0) {
+    if (!hasMeaningfulComposedParts(promptInput.parts) && normalizedMessages.length === 0) {
       return sendJson(res, 400, { error: 'prompt or messages is required' })
     }
     if (returnsContract != null && decideContract != null) {
@@ -2451,7 +2671,7 @@ async function handleApi(req, res, url) {
           event: {
             type: 'call_inspector.execute',
             source: 'call-inspector',
-            value: prompt,
+            value: renderComposedTextPreview(promptInput.parts),
             payload: {},
           },
         })

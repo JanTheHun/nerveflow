@@ -418,6 +418,7 @@ export function createComposableHost({
       // 1. Instantiate all capabilities and collect their providers
       const allToolProviders = []
       const allToolMetadataProviders = []
+      const allToolEnumerators = []
       const allIngressConnectors = []
       const allEffectRealizers = []
       const setupHooks = []
@@ -439,6 +440,10 @@ export function createComposableHost({
 
         if (Array.isArray(capability.toolMetadataProviders)) {
           allToolMetadataProviders.push(...capability.toolMetadataProviders.filter((entry) => typeof entry === 'function'))
+        }
+
+        if (Array.isArray(capability.toolProviderEnumerators)) {
+          allToolEnumerators.push(...capability.toolProviderEnumerators.filter((entry) => typeof entry === 'function'))
         }
 
         if (typeof capability.getToolMetadata === 'function') {
@@ -465,7 +470,11 @@ export function createComposableHost({
 
       // 3. Assemble the three runtimes
       const toolRuntime = allToolProviders.length > 0
-        ? createToolRuntime({ providers: allToolProviders, metadataProviders: allToolMetadataProviders })
+        ? createToolRuntime({
+            providers: allToolProviders,
+            metadataProviders: allToolMetadataProviders,
+            toolNameEnumerators: allToolEnumerators,
+          })
         : null
 
       const ingressRuntime = allIngressConnectors.length > 0

@@ -3,6 +3,13 @@ import { dirname, resolve } from 'node:path'
 import { NEXTV_AGENT_OUTPUT_FORMATS, validateAgentReturnContract, normalizeAgentFormattedOutput, assertValidDecideOptions, validateDecideOutput } from './nextv_agent_output.js'
 import { compileAST } from './nextv_compiler.js'
 import { extractEventGraph } from './nextv_event_graph.js'
+import {
+  appendTextToComposedInput,
+  hasMeaningfulComposedParts,
+  materializeComposedTextInput,
+  normalizeComposedTextInput,
+  renderComposedTextPreview,
+} from './host_core/structured_inputs.js'
 
 const DEFAULT_MAX_STEPS = 500
 const OUTPUT_FORMATS = new Set(['text', 'console', 'voice', 'visual', 'json', 'interaction'])
@@ -1192,6 +1199,25 @@ function coerceTextValue(value, context, usage) {
   return String(value)
 }
 
+function normalizeAgentComposedInput(value, context, usage) {
+  try {
+    const normalized = normalizeComposedTextInput(value, { fieldName: usage })
+    return {
+      normalized,
+      value: materializeComposedTextInput(normalized),
+      preview: renderComposedTextPreview(normalized.parts),
+    }
+  } catch (err) {
+    throw nextvError({
+      line: context.line,
+      kind: 'runtime',
+      code: 'INVALID_AGENT_ARGUMENT',
+      statement: context.statement,
+      message: String(err?.message ?? err),
+    })
+  }
+}
+
 function requireArithmeticNumber(value, context, usage) {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value
@@ -2348,9 +2374,8 @@ function buildFunctions(options, runtimeContext) {
       }
 
       const agentName = String(positional[0] ?? named?.agent ?? '').trim()
-      const promptRaw = positional[1] ?? named?.prompt
-      const prompt = coerceTextValue(promptRaw, context, 'agent() prompt').trim()
-      const instructions = coerceTextValue(positional[2] ?? named?.instructions, context, 'agent() instructions').trim()
+      const promptInput = normalizeAgentComposedInput(positional[1] ?? named?.prompt, context, 'agent() prompt')
+      const instructionsInput = normalizeAgentComposedInput(positional[2] ?? named?.instructions, context, 'agent() instructions')
       const messages = normalizeAgentMessagesValue(named?.messages, context)
       const format = String(named?.format ?? '').trim().toLowerCase()
       const toolsPolicy = normalizeAgentToolsPolicy(named?.tools ?? null, context, 'agent()')
@@ -2358,7 +2383,7 @@ function buildFunctions(options, runtimeContext) {
       if (!agentName) {
         runtimeUnavailable('AGENT_NAME_REQUIRED', 'agent() requires an agent profile name.')
       }
-      if (!prompt && messages.length === 0) {
+      if (!hasMeaningfulComposedParts(promptInput.normalized.parts) && messages.length === 0) {
         runtimeUnavailable('AGENT_PROMPT_REQUIRED', 'agent() requires a prompt as second argument, or provide messages=... .')
       }
       if (format && !NEXTV_AGENT_OUTPUT_FORMATS.has(format)) {
@@ -2419,10 +2444,12 @@ function buildFunctions(options, runtimeContext) {
       const validate = returns != null ? (validateRaw || 'coerce') : validateRaw
       const effectiveFormat = returns != null ? '' : format
 
-      let finalInstructions = instructions
+      let finalInstructions = instructionsInput.value
       if (decideOptions != null && typeof options.buildDecideGuidance === 'function') {
         const decideGuidance = options.buildDecideGuidance(decideOptions)
-        finalInstructions = finalInstructions ? `${finalInstructions}\n\n${decideGuidance}` : decideGuidance
+        finalInstructions = appendTextToComposedInput(finalInstructions, decideGuidance, {
+          fieldName: 'agent() instructions',
+        })
       }
 
       const retryCountRaw = named?.retry_on_contract_violation
@@ -2459,8 +2486,8 @@ function buildFunctions(options, runtimeContext) {
         line,
         statement,
         args: {
-          prompt,
-          instructions: finalInstructions,
+          prompt: promptInput.preview,
+          instructions: renderComposedTextPreview(normalizeComposedTextInput(finalInstructions, { fieldName: 'agent() instructions' }).parts),
           messages,
           tools: toolsPolicy,
           format: effectiveFormat,
@@ -2479,7 +2506,7 @@ function buildFunctions(options, runtimeContext) {
       try {
         callResult = await options.callAgent({
           agent: agentName,
-          prompt,
+          prompt: promptInput.value,
           instructions: finalInstructions,
           messages,
           tools: toolsPolicy,
@@ -2608,9 +2635,8 @@ function buildFunctions(options, runtimeContext) {
       }
 
       const modelName = String(positional[0] ?? named?.model ?? '').trim()
-      const promptRaw = positional[1] ?? named?.prompt
-      const prompt = coerceTextValue(promptRaw, context, 'model() prompt').trim()
-      const instructions = coerceTextValue(positional[2] ?? named?.instructions, context, 'model() instructions').trim()
+      const promptInput = normalizeAgentComposedInput(positional[1] ?? named?.prompt, context, 'model() prompt')
+      const instructionsInput = normalizeAgentComposedInput(positional[2] ?? named?.instructions, context, 'model() instructions')
       const messages = normalizeAgentMessagesValue(named?.messages, context)
       const format = String(named?.format ?? '').trim().toLowerCase()
       const toolsPolicy = normalizeAgentToolsPolicy(named?.tools ?? null, context, 'model()')
@@ -2618,7 +2644,7 @@ function buildFunctions(options, runtimeContext) {
       if (!modelName) {
         runtimeUnavailable('MODEL_NAME_REQUIRED', 'model() requires a model name as first argument.')
       }
-      if (!prompt && messages.length === 0) {
+      if (!hasMeaningfulComposedParts(promptInput.normalized.parts) && messages.length === 0) {
         runtimeUnavailable('MODEL_PROMPT_REQUIRED', 'model() requires a prompt as second argument, or provide messages=... .')
       }
       if (format && !NEXTV_AGENT_OUTPUT_FORMATS.has(format)) {
@@ -2679,10 +2705,12 @@ function buildFunctions(options, runtimeContext) {
       const validate = returns != null ? (validateRaw || 'coerce') : validateRaw
       const effectiveFormat = returns != null ? '' : format
 
-      let finalInstructions = instructions
+      let finalInstructions = instructionsInput.value
       if (decideOptions != null && typeof options.buildDecideGuidance === 'function') {
         const decideGuidance = options.buildDecideGuidance(decideOptions)
-        finalInstructions = finalInstructions ? `${finalInstructions}\n\n${decideGuidance}` : decideGuidance
+        finalInstructions = appendTextToComposedInput(finalInstructions, decideGuidance, {
+          fieldName: 'model() instructions',
+        })
       }
 
       const retryCountRaw = named?.retry_on_contract_violation
@@ -2719,8 +2747,8 @@ function buildFunctions(options, runtimeContext) {
         line,
         statement,
         args: {
-          prompt,
-          instructions: finalInstructions,
+          prompt: promptInput.preview,
+          instructions: renderComposedTextPreview(normalizeComposedTextInput(finalInstructions, { fieldName: 'model() instructions' }).parts),
           messages,
           tools: toolsPolicy,
           format: effectiveFormat,
@@ -2739,7 +2767,7 @@ function buildFunctions(options, runtimeContext) {
       try {
         callResult = await options.callAgent({
           model: modelName,
-          prompt,
+          prompt: promptInput.value,
           instructions: finalInstructions,
           messages,
           tools: toolsPolicy,

@@ -1543,6 +1543,26 @@ test('agent() delegates to runtime agent hook', async () => {
   assert.equal(result.locals.summary, 'short summary')
 })
 
+test('agent() supports structured prompt and instructions values', async () => {
+  const calls = []
+  const result = await runNextVScript([
+    'prompt_parts = ["hello", { include: "docs/prompt.md" }]',
+    'instruction_parts = ["be concise", { include: "docs/policy.md" }]',
+    'summary = agent("research", prompt_parts, instructions=instruction_parts)',
+  ].join('\n'), {
+    callAgent: async ({ agent, prompt, instructions }) => {
+      calls.push({ agent, prompt, instructions })
+      return 'done'
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].agent, 'research')
+  assert.deepEqual(calls[0].prompt, ['hello', { include: 'docs/prompt.md' }])
+  assert.deepEqual(calls[0].instructions, ['be concise', { include: 'docs/policy.md' }])
+  assert.equal(result.locals.summary, 'done')
+})
+
 test('agent() can use hostAdapter callAgent fallback', async () => {
   const calls = []
   const result = await runNextVScript('summary = agent("research", "summarize this")', {
@@ -1573,6 +1593,25 @@ test('model() delegates to runtime agent hook with explicit model name', async (
   assert.equal(calls[0].instructions, '')
   assert.equal(calls[0].format, '')
   assert.equal(result.locals.summary, 'short summary')
+})
+
+test('model() supports structured instructions values', async () => {
+  const calls = []
+  const result = await runNextVScript([
+    'instruction_parts = ["answer in JSON", { include: "docs/schema.md" }]',
+    'summary = model("phi3:mini-128k", "q", instructions=instruction_parts)',
+  ].join('\n'), {
+    callAgent: async ({ model, prompt, instructions }) => {
+      calls.push({ model, prompt, instructions })
+      return 'done'
+    },
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].model, 'phi3:mini-128k')
+  assert.equal(calls[0].prompt, 'q')
+  assert.deepEqual(calls[0].instructions, ['answer in JSON', { include: 'docs/schema.md' }])
+  assert.equal(result.locals.summary, 'done')
 })
 
 test('model() supports returns contract and on_contract_violation fallback routing', async () => {
@@ -1760,7 +1799,7 @@ test('agent() preserves positional instructions when named format is used', asyn
   assert.equal(result.locals.summary, 'Brief summary')
 })
 
-test('agent() rejects structured prompt values without to_json', async () => {
+test('agent() rejects unsupported structured prompt object shapes', async () => {
   await assert.rejects(
     () => runNextVScript([
       'raw = "{\\"intent\\":\\"chat\\"}"',
@@ -1771,14 +1810,14 @@ test('agent() rejects structured prompt values without to_json', async () => {
     }),
     (err) => {
       assert.equal(err instanceof NextVError, true)
-      assert.equal(err.code, 'STRUCTURED_STRING_COERCION')
+      assert.equal(err.code, 'INVALID_AGENT_ARGUMENT')
       assert.match(err.message, /agent\(\) prompt/)
       return true
     },
   )
 })
 
-test('agent() rejects structured instructions without to_json', async () => {
+test('agent() rejects unsupported structured instruction object shapes', async () => {
   await assert.rejects(
     () => runNextVScript([
       'raw = "{\\"intent\\":\\"chat\\"}"',
@@ -1789,7 +1828,7 @@ test('agent() rejects structured instructions without to_json', async () => {
     }),
     (err) => {
       assert.equal(err instanceof NextVError, true)
-      assert.equal(err.code, 'STRUCTURED_STRING_COERCION')
+      assert.equal(err.code, 'INVALID_AGENT_ARGUMENT')
       assert.match(err.message, /agent\(\) instructions/)
       return true
     },
@@ -2007,10 +2046,10 @@ test('agent() returns contract works end-to-end via hostAdapter path', async () 
   })
 
   assert.equal(calls.length, 1)
-  assert.equal(calls[0][0].role, 'system')
-  assert.match(calls[0][0].content, /Return only valid JSON matching this structure/)
-  assert.equal(calls[0][1].role, 'user')
-  assert.equal(calls[0][1].content, 'route this')
+  assert.equal(calls[0].some((message) => message.role === 'system' && /profile baseline/.test(message.content)), true)
+  assert.equal(calls[0].some((message) => message.role === 'system' && /Return only valid JSON matching this structure/.test(message.content)), true)
+  const userMessage = calls[0].find((message) => message.role === 'user')
+  assert.equal(userMessage?.content, 'route this')
   assert.equal(result.state.intent, 'search')
   assert.equal(result.state.confidence, 0)
 })

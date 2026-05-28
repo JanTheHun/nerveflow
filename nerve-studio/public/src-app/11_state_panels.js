@@ -130,9 +130,7 @@ function shouldRenderCanonicalEvent(event) {
 }
 
 export function initNextVUserIOPanel() {
-  const stored = localStorage.getItem(storageKeys.nextVUserIOOpen)
-  const shouldOpen = stored === '1'
-  setUserIOPanelOpen(shouldOpen, { persist: false })
+  setUserIOPanelOpen(true, { persist: false })
 }
 
 export function setupNextVUserIOSplitter() {

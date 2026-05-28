@@ -35,6 +35,27 @@ async function listAvailableToolNames(providersList, metadataProvidersList) {
   return [...names].sort()
 }
 
+async function collectToolNamesFromEnumerators(enumeratorsList) {
+  const names = new Set()
+
+  for (const enumerator of enumeratorsList) {
+    if (typeof enumerator !== 'function') continue
+    try {
+      const discovered = await enumerator()
+      if (!Array.isArray(discovered)) continue
+      for (const nameRaw of discovered) {
+        const name = String(nameRaw ?? '').trim()
+        if (!name) continue
+        names.add(name)
+      }
+    } catch {
+      // Enumerator failures should not fail global tool discovery.
+    }
+  }
+
+  return [...names]
+}
+
 async function resolveNamedRuntimeMetadata(providersList, name) {
   if (!name) return null
 
@@ -102,9 +123,10 @@ function resolveNamedRuntimeCall(providersList, runtimeLabel, name, payload) {
   })()
 }
 
-export function createToolRuntime({ providers = [], metadataProviders = [] } = {}) {
+export function createToolRuntime({ providers = [], metadataProviders = [], enumerators = [], toolNameEnumerators = [] } = {}) {
   const providersList = normalizeProviders(providers)
   const metadataProvidersList = normalizeProviders(metadataProviders)
+  const enumeratorsList = normalizeProviders([...enumerators, ...toolNameEnumerators])
 
   return {
     call: async (payload = {}) => {
@@ -116,7 +138,11 @@ export function createToolRuntime({ providers = [], metadataProviders = [] } = {
       return await resolveNamedRuntimeMetadata(metadataProvidersList, toolName)
     },
     listAvailable: async () => {
-      return await listAvailableToolNames(providersList, metadataProvidersList)
+      const names = new Set(await listAvailableToolNames(providersList, metadataProvidersList))
+      for (const name of await collectToolNamesFromEnumerators(enumeratorsList)) {
+        names.add(name)
+      }
+      return [...names].sort()
     },
   }
 }

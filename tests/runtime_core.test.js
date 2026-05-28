@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { resolve } from 'node:path'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { join, relative, resolve } from 'node:path'
 
 import {
   createRuntimeCommandRouter,
@@ -432,6 +433,139 @@ test('runtime core callInspectorExecute rejects invalid tools mode', async () =>
     }),
     /tools.mode must be either "disabled" or "governed"/i,
   )
+})
+
+test('runtime core callInspectorExecute accepts structured prompt/instruction parts', async () => {
+  const previousModelResolution = process.env.AGENT_MODEL_RESOLUTION
+  process.env.AGENT_MODEL_RESOLUTION = 'legacy'
+
+  let capturedPayload = null
+  const runtime = createRuntimeCore({
+    resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
+    callAgent: async (payload) => {
+      capturedPayload = payload
+      return 'ok'
+    },
+  })
+
+  try {
+    const response = await runtime.callInspectorExecute({
+      workspaceDir: 'examples/mqtt-simple-host',
+      targetKind: 'model',
+      mode: 'call',
+      model: 'test-model',
+      promptParts: ['hello from parts'],
+      instructionParts: ['be concise'],
+    })
+
+    assert.equal(response.call.targetKind, 'model')
+    assert.equal(Array.isArray(capturedPayload?.messages), true)
+    assert.equal(
+      capturedPayload.messages.some((message) => (
+        String(message?.role ?? '') === 'system'
+        && String(message?.content ?? '').includes('be concise')
+      )),
+      true,
+    )
+    assert.equal(
+      capturedPayload.messages.some((message) => (
+        String(message?.role ?? '') === 'user'
+        && String(message?.content ?? '').includes('hello from parts')
+      )),
+      true,
+    )
+  } finally {
+    if (previousModelResolution == null) {
+      delete process.env.AGENT_MODEL_RESOLUTION
+    } else {
+      process.env.AGENT_MODEL_RESOLUTION = previousModelResolution
+    }
+  }
+})
+
+test('runtime core callInspectorExecute rejects mixed prompt legacy and parts fields', async () => {
+  const runtime = createRuntimeCore({
+    resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
+    callAgent: async () => 'ignored',
+  })
+
+  await assert.rejects(
+    () => runtime.callInspectorExecute({
+      workspaceDir: 'examples/mqtt-simple-host',
+      targetKind: 'model',
+      mode: 'call',
+      model: 'test-model',
+      prompt: 'legacy',
+      promptParts: ['structured'],
+    }),
+    /prompt and promptParts cannot both be set/i,
+  )
+})
+
+test('runtime core callInspectorExecute rejects mixed instructions legacy and parts fields', async () => {
+  const runtime = createRuntimeCore({
+    resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
+    callAgent: async () => 'ignored',
+  })
+
+  await assert.rejects(
+    () => runtime.callInspectorExecute({
+      workspaceDir: 'examples/mqtt-simple-host',
+      targetKind: 'model',
+      mode: 'call',
+      model: 'test-model',
+      prompt: 'ok',
+      instructions: 'legacy',
+      instructionParts: ['structured'],
+    }),
+    /instructions and instructionParts cannot both be set/i,
+  )
+})
+
+test('runtime core callInspectorExecute resolves include files from instruction parts', async () => {
+  const previousModelResolution = process.env.AGENT_MODEL_RESOLUTION
+  process.env.AGENT_MODEL_RESOLUTION = 'legacy'
+
+  const tempWorkspaceAbsolute = mkdtempSync(join(REPO_ROOT, '.tmp-runtime-core-'))
+  const tempWorkspaceRelative = relative(REPO_ROOT, tempWorkspaceAbsolute).replace(/\\/g, '/')
+  const includePath = 'rules.txt'
+  writeFileSync(join(tempWorkspaceAbsolute, includePath), 'always answer in json', 'utf8')
+
+  let capturedPayload = null
+  const runtime = createRuntimeCore({
+    resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
+    callAgent: async (payload) => {
+      capturedPayload = payload
+      return 'ok'
+    },
+  })
+
+  try {
+    await runtime.callInspectorExecute({
+      workspaceDir: tempWorkspaceRelative,
+      targetKind: 'model',
+      mode: 'call',
+      model: 'test-model',
+      prompt: 'hello',
+      instructionParts: [{ include: includePath }],
+    })
+
+    assert.equal(Array.isArray(capturedPayload?.messages), true)
+    assert.equal(
+      capturedPayload.messages.some((message) => (
+        String(message?.role ?? '') === 'system'
+        && String(message?.content ?? '').includes('always answer in json')
+      )),
+      true,
+    )
+  } finally {
+    rmSync(tempWorkspaceAbsolute, { recursive: true, force: true })
+    if (previousModelResolution == null) {
+      delete process.env.AGENT_MODEL_RESOLUTION
+    } else {
+      process.env.AGENT_MODEL_RESOLUTION = previousModelResolution
+    }
+  }
 })
 
 test('controller startup exposes configured models in nextv_started event', async () => {

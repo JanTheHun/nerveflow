@@ -98,3 +98,43 @@ test('tool runtime can list discovered tools from providers and metadata provide
   const names = await runtime.listAvailable()
   assert.deepEqual(names, ['inspect', 'ping', 'search'])
 })
+
+test('tool runtime can merge tools discovered by enumerators', async () => {
+  const runtime = createToolRuntime({
+    providers: [
+      {
+        ping: async () => ({ ok: true }),
+      },
+    ],
+    metadataProviders: [
+      {
+        inspect: { name: 'inspect' },
+      },
+    ],
+    toolNameEnumerators: [
+      async () => ['proxy_tool_a', 'proxy_tool_b', 'ping'],
+    ],
+  })
+
+  const names = await runtime.listAvailable()
+  assert.deepEqual(names, ['inspect', 'ping', 'proxy_tool_a', 'proxy_tool_b'])
+})
+
+test('tool runtime ignores failed enumerators during list discovery', async () => {
+  const runtime = createToolRuntime({
+    providers: [
+      {
+        ping: async () => ({ ok: true }),
+      },
+    ],
+    toolNameEnumerators: [
+      async () => {
+        throw new Error('enumerator failed')
+      },
+      async () => ['proxy_tool_c'],
+    ],
+  })
+
+  const names = await runtime.listAvailable()
+  assert.deepEqual(names, ['ping', 'proxy_tool_c'])
+})

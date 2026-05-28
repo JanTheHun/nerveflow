@@ -56,6 +56,7 @@ export function mcpCapability({
 
   const capability = {
     toolProviders,
+    toolProviderEnumerators: providers.map((entry) => entry.getAvailableToolNames),
     toolMetadataProviders: providers.map((entry) => entry.getToolMetadata),
     getToolMetadata: async (toolName) => {
       const requestedName = String(toolName ?? '').trim()
@@ -170,6 +171,19 @@ function createMcpServerProvider(serverConfig) {
     }
   }
 
+  async function getAvailableToolNames() {
+    try {
+      const tools = await listTools()
+      return [...new Set(
+        tools
+          .map((tool) => String(tool?.name ?? '').trim())
+          .filter(Boolean)
+      )].sort((left, right) => left.localeCompare(right))
+    } catch {
+      return []
+    }
+  }
+
   async function closeClient() {
     if (!clientPromise) return
 
@@ -191,6 +205,7 @@ function createMcpServerProvider(serverConfig) {
     serverName: name,
     getOrInitializeClient,
     closeClient,
+    getAvailableToolNames,
     getToolMetadata,
     toolProvider: new Proxy(toolProvider, {
     get(target, prop, receiver) {

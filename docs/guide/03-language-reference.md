@@ -172,6 +172,32 @@ history = [
 reply = agent("visual", messages=history)
 ```
 
+`prompt` and `instructions` accept either plain text values or composed text parts:
+
+- plain text value: string, number, boolean, bigint, or null
+- composed value: array of text values and/or include objects shaped like `{ include: "relative/path.txt" }`
+
+Composed parts are materialized into final text in order, with blank-line joins between parts. Include objects resolve from workspace-relative paths.
+
+Example:
+
+```
+summary = model(
+  "router",
+  prompt=[
+    "Summarize this event:",
+    event.value,
+    { include: "prompts/summary-style.txt" }
+  ],
+  instructions=[
+    "Return concise output.",
+    { include: "prompts/safety-constraints.txt" }
+  ]
+)
+```
+
+Invalid composed-input shapes raise `INVALID_AGENT_ARGUMENT`.
+
 `returns` accepts a JSON-like object or array contract template for structured agent output. When present, NerveFlow treats the call as JSON output mode and validates the parsed output against the contract.
 
 `decide` is scalar bounded-decision shorthand. It accepts an array of string options and returns a single string value constrained to that set.

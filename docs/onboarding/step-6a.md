@@ -66,15 +66,16 @@ relevant_lights = cut(lights_result.items, "similarity", ">=", limit)
 lights = to_json(relevant_lights)
 
 decision = model(
-    "gpt-4o-mini",
+    "qwen3:14b",
     "knowledge retrieval result: lights:${lights}, music: ${music}, user prompt:${event.value}",
-    "Decide workflow branching based on relevant knowledge retrieved. Only choose music if there is relevant knowledge from music category. Only choose lights if there is relevant knowledge from lights category. Otherwise choose chat.",
+    "Decide workflow branching based on relevant knowledge retrieved. DO NOT select music if there is no relevant knowledge from music category. DO NOT select lights if there is no relevant knowledge from lights category. Choose chat if you don't choose lights or music.",
     decide=["chat","music","lights"],
     retry_on_contract_violation=1
 )
 ```
 
 `filter_metadata` must be an object map, not a string.
+
 
 ## 4. Verify
 
@@ -109,8 +110,20 @@ Add a chunk with:
 npx nerve-send ws://127.0.0.1:4190/api/runtime/ws user_message "play garbage"
 ```
 
-Even weak local models become dramatically more reliable once retrieval narrows the ambiguity space before bounded routing.
+## Model quality still matters
 
+Retrieval narrows ambiguity before bounded routing, but model capability still affects outcomes significantly.
+
+Stronger models generally:
+- follow routing constraints more reliably
+- use retrieved evidence more consistently
+- obey negative instructions more strictly
+- recover better from ambiguous prompts
+
+Weak local models may still misclassify routes even with retrieval augmentation.
+
+Deterministic orchestration reduces probabilistic burden.
+It does not eliminate model variability.
 
 ## Next
 

@@ -331,11 +331,40 @@ Supported WebSocket command types map directly to protocol v1 commands:
 }
 ```
 
+The same payload also supports structured composed text fields:
+
+- `prompt` or `promptParts`
+- `instructions` or `instructionParts`
+
+`prompt` and `promptParts` are mutually exclusive in the same payload. `instructions` and `instructionParts` are also mutually exclusive.
+
+Composed input example:
+
+```json
+{
+  "type": "call_inspector_execute",
+  "requestId": "call-2",
+  "payload": {
+    "targetKind": "model",
+    "model": "router",
+    "mode": "try",
+    "promptParts": [
+      "Route this request",
+      { "include": "prompts/router-style.txt" }
+    ],
+    "instructionParts": [
+      "Return JSON only"
+    ]
+  }
+}
+```
+
 Notes:
 
 - Omit `tools` or set `tools.mode` to `disabled` to keep tool execution off.
 - When `tools.mode` is `governed`, `tools.allow` must contain at least one tool name.
 - For agent targets, runtime policy still intersects requested tools with any agent profile tools declared in workspace config.
+- Mixed legacy and structured input fields are rejected as validation errors before execution.
 
 ## Standalone runtime process and attach CLI
 

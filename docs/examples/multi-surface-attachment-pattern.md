@@ -195,7 +195,7 @@ Command support is host-dependent. The list below is the protocol v1 command sur
 | `stop` | Halt runtime | `{ type: 'stop' }` |
 | `enqueue_event` | Feed input event to runtime | `{ type: 'enqueue_event', payload: { eventType: 'user_message', value: 'hello' } }` |
 | `dispatch_ingress` | Dispatch ingress output into runtime queue | `{ type: 'dispatch_ingress', payload: { name: 'webhook', body: { ... } } }` |
-| `call_inspector_execute` | Execute a structured direct model/agent call (runtime command router hosts) | `{ type: 'call_inspector_execute', payload: { targetKind: 'agent', agent: 'router', prompt: 'route this', mode: 'call' } }` |
+| `call_inspector_execute` | Execute a structured direct model/agent call (runtime command router hosts) | `{ type: 'call_inspector_execute', payload: { targetKind: 'agent', agent: 'router', promptParts: ['route this', { include: 'prompts/router.txt' }], instructionParts: ['return concise output'], mode: 'call' } }` |
 | `submit_candidate` | Validate current active workspace/config as candidate | `{ type: 'submit_candidate' }` |
 | `promote_candidate` | Promote current validated candidate to active runtime | `{ type: 'promote_candidate' }` |
 | `snapshot` | Get current state | `{ type: 'snapshot' }` |

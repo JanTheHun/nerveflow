@@ -110,6 +110,26 @@ returns={
 
 ---
 
+## Additive Input Composition Compatibility
+
+Structured return contracts are independent from prompt/instruction text composition.
+
+`agent(...)` and `model(...)` calls now also accept composed prompt/instruction values in addition to plain text:
+
+- plain text value: string/number/boolean/bigint/null
+- composed value: array of text values and include objects (`{ include: "relative/path.txt" }`)
+
+Composition affects only how prompt/instruction text is materialized. It does not change `returns`, `decide`, validation, or retry semantics.
+
+For runtime command payloads (`call_inspector_execute`), structured aliases are supported:
+
+- `prompt` or `promptParts`
+- `instructions` or `instructionParts`
+
+Mixed usage in the same payload is invalid (`prompt` with `promptParts`, or `instructions` with `instructionParts`) and must be rejected as a validation error.
+
+---
+
 # Contract Semantics
 
 Template exemplar values serve two intentional roles.

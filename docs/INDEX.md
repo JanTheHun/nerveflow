@@ -28,6 +28,7 @@ After Step 5, choose your path:
 - [onboarding/step-6a.md](onboarding/step-6a.md) — Add a vector database for real RAG
 - [onboarding/step-6b.md](onboarding/step-6b.md) — Add speech capability
 - [onboarding/step-6c.md](onboarding/step-6c.md) — Add MCP servers
+- [onboarding/step-6d.md](onboarding/step-6d.md) — Add semantic-surface capability
 
 ## Agent docs
 
@@ -49,6 +50,7 @@ Legacy transition pages were retired. Use [project-generation/](project-generati
 - [../design/specs/spec-bounded-control-flow-provenance.md](../design/specs/spec-bounded-control-flow-provenance.md)
 - [../design/specs/spec-parallel-group-evaluation.md](../design/specs/spec-parallel-group-evaluation.md)
 - [../design/specs/spec-explicit-runtime-failure-envelopes.md](../design/specs/spec-explicit-runtime-failure-envelopes.md)
+- [../design/specs/spec-semantic-surface-capability.md](../design/specs/spec-semantic-surface-capability.md)
 
 ## Operational & Release
 

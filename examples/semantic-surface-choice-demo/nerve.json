@@ -1,0 +1,11 @@
+{
+  "entrypointPath": "workflow.nrv",
+  "baselineStatePath": "state.init.json",
+  "externals": ["user_message", "semantic_surface_event"],
+  "effects": {
+    "semantic_surface": {
+      "kind": "surface",
+      "format": "json"
+    }
+  }
+}

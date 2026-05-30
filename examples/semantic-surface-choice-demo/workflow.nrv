@@ -1,0 +1,40 @@
+on external "user_message"
+  if event.value == "open choice"
+    state.last_prompt = "Delete reminders?"
+    state.last_selection = null
+
+    output semantic_surface {
+      schemaVersion: "1.0",
+      capability: "semantic-surface",
+      effectName: "semantic_surface",
+      interactionId: "confirm_delete_1",
+      target: "main",
+      intent: {
+        type: "choice",
+        text: "Delete reminders?",
+        options: [
+          { id: "yes", label: "Yes" },
+          { id: "no", label: "No" }
+        ]
+      },
+      timestamp: "2026-05-29T12:00:00Z",
+      runtimeEventId: "demo_confirm_delete_1"
+    }
+
+    output text "choice opened"
+  else
+    output text "send 'open choice' to emit semantic choice intent"
+  end
+end
+
+on external "semantic_surface_event"
+  state.last_selection = event.value.payload.selected
+
+  if event.value.action == "selected" && event.value.payload.selected == "yes"
+    output text "confirmed yes"
+  else if event.value.action == "selected" && event.value.payload.selected == "no"
+    output text "confirmed no"
+  else
+    output text "interaction updated"
+  end
+end

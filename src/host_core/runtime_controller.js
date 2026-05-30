@@ -1203,6 +1203,7 @@ export function createNextVRuntimeController({
         activeDefinitionId: nextVActiveDefinition.activeDefinitionId,
         definitionHash: nextVActiveDefinition.definitionHash,
         declaredExternals: getDeclaredExternals(nextVWorkspaceConfig),
+        declaredEffects: Object.keys(getDeclaredEffectChannels(nextVWorkspaceConfig)),
         ...callInspectorCatalog,
       },
       candidate: nextVCandidateStatus,

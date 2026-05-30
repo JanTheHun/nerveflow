@@ -102,6 +102,7 @@ test('runtime command router returns protocol responses', async () => {
 
   assert.equal(definitionStatusResponse.ok, true)
   assert.equal(definitionStatusResponse.data.active.running, true)
+  assert.equal(Array.isArray(definitionStatusResponse.data.active.declaredEffects), true)
   assert.equal(typeof definitionStatusResponse.data.candidate?.status, 'string')
 
   const unsubscribeResponse = await router.handleRawCommand({

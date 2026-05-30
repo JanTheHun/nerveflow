@@ -503,6 +503,12 @@ test('preview server attach mode uses runtime workspace metadata without env-dep
   writeFileSync(join(workspaceAbsolutePath, 'nextv.json'), JSON.stringify({
     entrypointPath: 'workflow.nrv',
     externals: ['ping'],
+    effects: {
+      semantic_surface: {
+        kind: 'surface',
+        format: 'json',
+      },
+    },
     transports: {
       openai: {
         provider: 'openai_compat',
@@ -576,6 +582,7 @@ test('preview server attach mode uses runtime workspace metadata without env-dep
     assert.equal(workspaceConfigPayload.workspaceDir, workspaceRelativePath)
     assert.equal(workspaceConfigPayload.entrypointPath, 'workflow.nrv')
     assert.deepEqual(workspaceConfigPayload.declaredExternals, ['ping'])
+    assert.deepEqual(workspaceConfigPayload.declaredEffects, ['semantic_surface'])
 
     const definitionStatusResponse = await fetch(
       `http://127.0.0.1:${studioPort}/api/nextv/definition-status?runtimeTarget=attach&attachWsUrl=${encodedAttachWsUrl}`,
@@ -586,6 +593,7 @@ test('preview server attach mode uses runtime workspace metadata without env-dep
     assert.equal(definitionStatusPayload.ok, true)
     assert.equal(definitionStatusPayload.active?.workspaceDir, workspaceRelativePath)
     assert.equal(definitionStatusPayload.active?.entrypointPath, 'workflow.nrv')
+    assert.deepEqual(definitionStatusPayload.active?.declaredEffects, ['semantic_surface'])
     assert.equal(typeof definitionStatusPayload.active?.activeDefinitionId, 'string')
     assert.equal(typeof definitionStatusPayload.active?.definitionHash, 'string')
 

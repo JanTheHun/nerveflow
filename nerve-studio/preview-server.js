@@ -983,7 +983,7 @@ async function buildRemoteWorkspaceConfigResponse(runtimeTarget, url = null) {
     entrypointPath,
     baselineStatePath: '',
     declaredExternals: Array.isArray(activeStatus.declaredExternals) ? activeStatus.declaredExternals : [],
-    declaredEffects: [],
+    declaredEffects: Array.isArray(activeStatus.declaredEffects) ? activeStatus.declaredEffects : [],
     configuredAgents,
     configuredModels,
     configuredAgentProfiles,

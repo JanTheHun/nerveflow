@@ -611,7 +611,18 @@ export function applyUserOutputChannelVisibility() {
 
 export function appendUserOutputMessage(text, channel = 'text') {
   if (!userOutput) return
-  const content = String(text ?? '').trim()
+  let content = ''
+  if (typeof text === 'string') {
+    content = text.trim()
+  } else if (text && typeof text === 'object') {
+    try {
+      content = JSON.stringify(text, null, 2).trim()
+    } catch {
+      content = String(text).trim()
+    }
+  } else {
+    content = String(text ?? '').trim()
+  }
   if (!content) return
 
   const empty = userOutput.querySelector('.user-output-empty')
@@ -1059,8 +1070,39 @@ function formatExecutionEventContent(event) {
   const type = event.type
   if (type === 'output') {
     const format = event.format || 'text'
-    const content = event.content || ''
-    const snippet = content.length > 60 ? content.slice(0, 60) + '…' : content
+    let content = event.content || ''
+
+    if (format === 'json') {
+      const hasValue = Object.prototype.hasOwnProperty.call(event, 'value')
+      const hasPayload = Object.prototype.hasOwnProperty.call(event, 'payload')
+      const candidate = hasValue
+        ? event.value
+        : (hasPayload ? event.payload : parseMaybeJson(event.content))
+
+      if (candidate != null) {
+        if (typeof candidate === 'string') {
+          const parsed = parseMaybeJson(candidate)
+          if (parsed != null) {
+            try {
+              content = JSON.stringify(parsed, null, 2)
+            } catch {
+              content = candidate
+            }
+          } else {
+            content = candidate
+          }
+        } else {
+          try {
+            content = JSON.stringify(candidate, null, 2)
+          } catch {
+            content = String(candidate)
+          }
+        }
+      }
+    }
+
+    const text = String(content ?? '')
+    const snippet = text.length > 60 ? text.slice(0, 60) + '…' : text
     return `${format}: ${snippet}`
   }
   if (type === 'tool_call') {
@@ -9408,13 +9450,37 @@ export function renderCanonicalNextVEvents(events) {
         appendUserOutputMessage(String(event.content ?? ''), outputChannel)
       } else if (format === 'json') {
         const hasValue = Object.prototype.hasOwnProperty.call(event, 'value')
-        const rawValue = hasValue ? event.value : parseMaybeJson(event.content)
+        const hasPayload = Object.prototype.hasOwnProperty.call(event, 'payload')
+        const rawValue = hasValue
+          ? event.value
+          : (hasPayload ? event.payload : parseMaybeJson(event.content))
         let formatted = String(event.content ?? '')
         if (rawValue !== null && rawValue !== undefined) {
+          if (typeof rawValue === 'string') {
+            const parsed = parseMaybeJson(rawValue)
+            if (parsed !== null) {
+              try {
+                formatted = JSON.stringify(parsed, null, 2)
+              } catch {
+                formatted = rawValue
+              }
+            } else {
+              formatted = rawValue
+            }
+          } else {
+            try {
+              formatted = JSON.stringify(rawValue, null, 2)
+            } catch {
+              formatted = String(rawValue)
+            }
+          }
+        }
+
+        if (formatted === '[object Object]') {
           try {
-            formatted = JSON.stringify(rawValue, null, 2)
+            formatted = JSON.stringify(event, null, 2)
           } catch {
-            formatted = String(rawValue)
+            // Keep fallback string
           }
         }
         appendUserOutputMessage(formatted, outputChannel)

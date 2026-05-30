@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
-import { watch } from 'node:fs'
+import { existsSync, watch } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import {
   createRuntimeCore,
@@ -31,6 +31,10 @@ import {
 import {
   mcpCapability,
 } from './capabilities/mcp.js'
+
+import {
+  semanticSurfaceCapability,
+} from './capabilities/semantic_surface.js'
 
 import {
   localVectorProviderFromEnv,
@@ -277,6 +281,44 @@ export function createComposableHost({
     })
   }
 
+  function resolveWorkspaceSemanticSurfaceModulePath(workspaceAbsolutePath) {
+    const workspaceRoot = String(workspaceAbsolutePath ?? '').trim()
+    if (!workspaceRoot) return ''
+
+    const candidatePath = resolve(workspaceRoot, 'capabilities', 'semantic-surface', 'server.mjs')
+    if (!existsSync(candidatePath)) return ''
+    return candidatePath
+  }
+
+  async function buildWorkspaceSemanticSurfaceCapability(workspaceAbsolutePath) {
+    const modulePath = resolveWorkspaceSemanticSurfaceModulePath(workspaceAbsolutePath)
+    if (!modulePath) return null
+
+    const moduleUrl = pathToFileURL(modulePath).href
+    const moduleNamespace = await import(moduleUrl)
+    const createIngressConnector = moduleNamespace?.createSemanticSurfaceIngressConnector
+    const createEffectRealizer = moduleNamespace?.createSemanticSurfaceEffectRealizer
+
+    if (typeof createIngressConnector !== 'function' || typeof createEffectRealizer !== 'function') {
+      throw new Error(
+        `Workspace semantic-surface module must export createSemanticSurfaceIngressConnector and createSemanticSurfaceEffectRealizer (${modulePath})`
+      )
+    }
+
+    return {
+      ingressConnectors: [
+        createIngressConnector({
+          ingressName: process.env.SEMANTIC_SURFACE_INGRESS_NAME || 'semantic_surface_event',
+        }),
+      ],
+      effectRealizers: [
+        createEffectRealizer({
+          effectName: process.env.SEMANTIC_SURFACE_EFFECT_NAME || 'semantic_surface',
+        }),
+      ],
+    }
+  }
+
   function buildCapabilityFactoryFromModuleProvider(provider, moduleConfig = {}, moduleName = '', workspaceAbsolutePath = '') {
     const normalizedProvider = String(provider ?? '').trim().toLowerCase()
 
@@ -288,6 +330,16 @@ export function createComposableHost({
 
     if (normalizedProvider === 'speech-surface') {
       return () => speechCapability()
+    }
+
+    if (normalizedProvider === 'semantic-surface') {
+      return async () => {
+        const workspaceCapability = await buildWorkspaceSemanticSurfaceCapability(workspaceAbsolutePath)
+        if (workspaceCapability) {
+          return workspaceCapability
+        }
+        return semanticSurfaceCapability()
+      }
     }
 
     if (normalizedProvider === 'mcp' || normalizedProvider === 'mcp-client') {

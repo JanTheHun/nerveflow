@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer as createNetServer } from 'node:net'
 import { dirname, join, relative, resolve } from 'node:path'
 import { WebSocket } from 'ws'
@@ -379,6 +380,163 @@ test('composable host auto-attaches speech capability from workspace config', { 
     assert.equal(result.runtimeCore.isActive(), true)
     await host.shutdown()
   } finally {
+    await rm(workspace.workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('composable host auto-attaches semantic-surface capability from workspace config', { timeout: 10000 }, async () => {
+  const workspace = await createTempWorkspace({
+    nextvConfig: {
+      entrypointPath: 'entry.nrv',
+      externals: ['user_message', 'semantic_surface_event'],
+      requires: {
+        'semantic-surface': {
+          required: true,
+          provider: 'semantic-surface',
+        },
+      },
+      modules: {
+        'semantic-surface': {
+          provider: 'semantic-surface',
+          mode: 'embedded',
+        },
+      },
+    },
+    entrySource: 'on external "user_message"\n  output text "ok"\nend\n',
+  })
+
+  const host = createComposableHost({
+    workspaceDir: workspace.workspaceRelativePath,
+    autoAttachCapabilitiesFromWorkspace: true,
+    port: 41975,
+  })
+
+  host.attachSurface(wsSurface({ path: '/api/runtime/ws' }))
+
+  try {
+    const result = await host.start()
+    assert.equal(result.runtimeCore.isActive(), true)
+    await host.shutdown()
+  } finally {
+    await host.shutdown().catch(() => {})
+    await rm(workspace.workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('composable host semantic-surface provider prefers workspace module implementation', { timeout: 10000 }, async () => {
+  const workspace = await createTempWorkspace({
+    nextvConfig: {
+      entrypointPath: 'entry.nrv',
+      externals: ['user_message', 'semantic_surface_event'],
+      effects: {
+        semantic_surface: {
+          kind: 'surface',
+          format: 'json',
+        },
+      },
+      requires: {
+        'semantic-surface': {
+          required: true,
+          provider: 'semantic-surface',
+        },
+      },
+      modules: {
+        'semantic-surface': {
+          provider: 'semantic-surface',
+          mode: 'embedded',
+        },
+      },
+    },
+    entrySource: [
+      'on external "user_message"',
+      '  if event.value == "open choice"',
+      '    output semantic_surface {',
+      '      schemaVersion: "1.0",',
+      '      capability: "semantic-surface",',
+      '      effectName: "semantic_surface",',
+      '      interactionId: "confirm_delete_1",',
+      '      target: "main",',
+      '      intent: {',
+      '        type: "choice",',
+      '        text: "Delete reminders?",',
+      '        options: [',
+      '          { id: "yes", label: "Yes" },',
+      '          { id: "no", label: "No" }',
+      '        ]',
+      '      },',
+      '      timestamp: "2026-05-29T12:00:00Z",',
+      '      runtimeEventId: "demo_confirm_delete_1"',
+      '    }',
+      '  end',
+      'end',
+    ].join('\n'),
+    extraFiles: [
+      {
+        path: 'capabilities/semantic-surface/server.mjs',
+        content: [
+          "import { writeFile } from 'node:fs/promises'",
+          "import { dirname, resolve } from 'node:path'",
+          "import { fileURLToPath } from 'node:url'",
+          '',
+          'const moduleDir = dirname(fileURLToPath(import.meta.url))',
+          "const markerPath = resolve(moduleDir, '..', '..', 'workspace-semantic-marker.json')",
+          '',
+          "export function createSemanticSurfaceIngressConnector({ ingressName = 'semantic_surface_event' } = {}) {",
+          '  return {',
+          '    [ingressName]: async (payload = {}) => ({',
+          "      type: 'semantic_surface_event',",
+          "      source: 'external',",
+          '      value: payload,',
+          '    }),',
+          '  }',
+          '}',
+          '',
+          "export function createSemanticSurfaceEffectRealizer({ effectName = 'semantic_surface' } = {}) {",
+          '  return {',
+          '    [effectName]: async (payload = {}) => {',
+          '      await writeFile(markerPath, JSON.stringify({',
+          "        source: 'workspace-module',",
+          "        interactionId: payload?.event?.value?.interactionId ?? payload?.value?.interactionId ?? '',",
+          '      }), "utf8")',
+          '      return { ok: true }',
+          '    },',
+          '  }',
+          '}',
+          '',
+        ].join('\n'),
+      },
+    ],
+  })
+
+  const host = createComposableHost({
+    workspaceDir: workspace.workspaceRelativePath,
+    autoAttachCapabilitiesFromWorkspace: true,
+    port: 41976,
+  })
+
+  host.attachSurface(wsSurface({ path: '/api/runtime/ws' }))
+
+  const markerPath = join(workspace.workspaceRoot, 'workspace-semantic-marker.json')
+
+  try {
+    const result = await host.start()
+    assert.equal(result.runtimeCore.isActive(), true)
+
+    result.runtimeCore.enqueue({
+      type: 'user_message',
+      source: 'external',
+      value: 'open choice',
+    })
+
+    await waitForCondition(() => existsSync(markerPath), { timeoutMs: 5000, intervalMs: 50 })
+
+    const markerRaw = await readFile(markerPath, 'utf8')
+    const marker = JSON.parse(markerRaw)
+    assert.equal(marker.source, 'workspace-module')
+
+    await host.shutdown()
+  } finally {
+    await host.shutdown().catch(() => {})
     await rm(workspace.workspaceRoot, { recursive: true, force: true })
   }
 })

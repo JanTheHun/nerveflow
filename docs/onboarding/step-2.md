@@ -1,6 +1,6 @@
 # Onboarding Step 2
 
-Add your first model call
+Add your first model call:
 ```
 state.conversation = state.conversation + [
   {
@@ -20,7 +20,8 @@ You will:
 - add conversation state
 - run a stateful chatbot from CLI
 
-## Local path (Ollama)
+<details>
+<summary>Local path (Ollama)</summary>
 
 ### 1. Install Ollama
 Download and install Ollama:
@@ -53,8 +54,10 @@ Repository-local alternative:
 node bin/nerve-compose.js add transport ollama
 node bin/nerve-compose.js add model llama3.2:latest --transport ollama
 ```
+</details>
 
-## External API path (OpenAI-compatible)
+<details>
+<summary>External API path (OpenAI-compatible)</summary>
 
 ### 1. Register transport and model
 From your workspace root, choose one provider:
@@ -117,6 +120,8 @@ GROQ_API_KEY=your_api_key_here
 # or
 GEMINI_API_KEY=your_api_key_here
 ```
+
+</details>
 
 ## Seed conversation state
 

@@ -67,6 +67,10 @@ export {
 } from './capabilities/mcp.js'
 
 export {
+  semanticSurfaceCapability,
+} from './capabilities/semantic_surface.js'
+
+export {
   localVectorProvider,
   localVectorProviderFromEnv,
   resolveLocalVectorConfig,

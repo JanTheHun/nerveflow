@@ -150,6 +150,55 @@ First provider with a handler for a given tool name wins. This allows workspace 
 - `ingressConnectors`: event ingress connectors for host surfaces
 - `effectRealizers`: output/effect channel realizers
 
+### Semantic Surface Capability Boundary (RFC-aligned)
+
+A semantic-surface capability should use role-aware host modules without changing runtime orchestration semantics:
+
+- runtime emits semantic interaction intent through effect channels
+- capability realizes intent into local UI mechanics (browser/window/tab/dialog/etc.)
+- capability reduces mechanics into semantic ingress events and dispatches them back
+
+Boundary rule:
+
+- runtime should receive semantic outcomes only (for example `confirm_yes`, `item_selected`)
+- runtime should not receive raw mechanical events (for example click/mousemove/dom mutation)
+
+This keeps deterministic control flow in runtime core while allowing detachable or replaceable surface realizations.
+
+See [../../design/specs/spec-semantic-surface-capability.md](../../design/specs/spec-semantic-surface-capability.md) for the RFC draft contract and lifecycle model.
+
+Minimal MVP authoring pattern:
+
+```nrv
+on external "user_message"
+  output semantic_surface {
+    schemaVersion: "1.0",
+    capability: "semantic-surface",
+    effectName: "semantic_surface",
+    interactionId: "confirm_delete_1",
+    target: "main",
+    intent: {
+      type: "choice",
+      text: "Delete reminders?",
+      options: [
+        { id: "yes", label: "Yes" },
+        { id: "no", label: "No" }
+      ]
+    },
+    timestamp: "2026-05-29T12:00:00Z",
+    runtimeEventId: "demo_confirm_delete_1"
+  }
+end
+
+on external "semantic_surface_event"
+  output text event.value.payload.selected
+end
+```
+
+Runnable example workspace:
+
+- [../../examples/semantic-surface-choice-demo/README.md](../../examples/semantic-surface-choice-demo/README.md)
+
 Compatibility note:
 
 - `loadHostModules()` remains tool-only and is preserved for existing hosts

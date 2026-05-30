@@ -1,0 +1,28 @@
+{
+  "interactions": [
+    {
+      "interactionId": "demo_choice_1",
+      "target": "main",
+      "value": {
+        "interactionId": "demo_choice_1",
+        "target": "main",
+        "intent": {
+          "type": "choice",
+          "text": "Delete reminders?",
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ]
+        }
+      },
+      "renderedAt": "2026-05-29T13:18:15.301Z"
+    }
+  ],
+  "updatedAt": "2026-05-29T13:18:15.302Z"
+}

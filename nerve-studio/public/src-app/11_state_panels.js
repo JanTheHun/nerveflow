@@ -385,13 +385,37 @@ export function renderCanonicalNextVEvents(events) {
         appendUserOutputMessage(String(event.content ?? ''), outputChannel)
       } else if (format === 'json') {
         const hasValue = Object.prototype.hasOwnProperty.call(event, 'value')
-        const rawValue = hasValue ? event.value : parseMaybeJson(event.content)
+        const hasPayload = Object.prototype.hasOwnProperty.call(event, 'payload')
+        const rawValue = hasValue
+          ? event.value
+          : (hasPayload ? event.payload : parseMaybeJson(event.content))
         let formatted = String(event.content ?? '')
         if (rawValue !== null && rawValue !== undefined) {
+          if (typeof rawValue === 'string') {
+            const parsed = parseMaybeJson(rawValue)
+            if (parsed !== null) {
+              try {
+                formatted = JSON.stringify(parsed, null, 2)
+              } catch {
+                formatted = rawValue
+              }
+            } else {
+              formatted = rawValue
+            }
+          } else {
+            try {
+              formatted = JSON.stringify(rawValue, null, 2)
+            } catch {
+              formatted = String(rawValue)
+            }
+          }
+        }
+
+        if (formatted === '[object Object]') {
           try {
-            formatted = JSON.stringify(rawValue, null, 2)
+            formatted = JSON.stringify(event, null, 2)
           } catch {
-            formatted = String(rawValue)
+            // Keep fallback string
           }
         }
         appendUserOutputMessage(formatted, outputChannel)

@@ -1299,6 +1299,63 @@ test('controller dispatchIngress routes ingress connector output into runtime qu
   )
 })
 
+test('controller dispatchIngress preserves object event value', async () => {
+  const enqueuedEvents = []
+
+  class IngressRunner {
+    constructor() {
+      this.running = false
+    }
+
+    start() {
+      this.running = true
+    }
+
+    stop() {
+      this.running = false
+    }
+
+    enqueue(event) {
+      if (!this.running) return false
+      enqueuedEvents.push(event)
+      return true
+    }
+
+    getSnapshot() {
+      return {
+        running: this.running,
+        executionCount: 0,
+        pendingEvents: 0,
+        state: {},
+        locals: {},
+      }
+    }
+  }
+
+  const { controller } = createController({
+    createRunner: () => new IngressRunner(),
+    ingressRuntime: {
+      dispatch: async ({ name, payload }) => ({
+        type: `ingress_${name}`,
+        value: payload?.value ?? null,
+        payload,
+        source: 'ingress',
+      }),
+    },
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  const selected = { selected: 'no' }
+  await controller.dispatchIngress({
+    name: 'semantic_surface_event',
+    payload: { value: selected },
+  })
+
+  assert.equal(enqueuedEvents.length, 1)
+  assert.equal(enqueuedEvents[0].type, 'ingress_semantic_surface_event')
+  assert.deepEqual(enqueuedEvents[0].value, selected)
+})
+
 // --- Multi-Surface Attachment Acceptance Criteria Tests ---
 
 test('[AC-1] Multiple simultaneous subscribers receive events', () => {

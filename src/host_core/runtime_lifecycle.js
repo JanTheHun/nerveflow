@@ -37,7 +37,7 @@ export function resolveDiscoveredStatePath(baseDir, fileName, existsSync) {
 export function normalizeInputEvent(body = {}) {
   const hasExplicitSource = Object.prototype.hasOwnProperty.call(body, 'source')
   return {
-    value: String(body.value ?? ''),
+    value: body.value ?? '',
     type: String(body.type ?? body.eventType ?? '').trim(),
     source: hasExplicitSource ? String(body.source ?? '').trim() : 'external',
     payload: body.payload ?? null,

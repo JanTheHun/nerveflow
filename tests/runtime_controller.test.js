@@ -7,6 +7,9 @@ import {
   createNextVRuntimeController,
 } from '../src/host_core/runtime_controller.js'
 import {
+  semanticSurfaceCapability,
+} from '../src/host_core/index.js'
+import {
   normalizeEffectsPolicy,
   validateDeclaredEffectBindings,
   validateRequiredCapabilityBindings,
@@ -1295,6 +1298,218 @@ test('controller dispatchIngress routes ingress connector output into runtime qu
   assert.equal(enqueuedEvents[0].source, 'ingress')
   assert.equal(
     published.some((entry) => entry.eventName === 'nextv_ingress_dispatched' && entry.payload?.ingressName === 'mqtt_bridge'),
+    true,
+  )
+})
+
+test('controller dispatchIngress preserves object event value', async () => {
+  const enqueuedEvents = []
+
+  class IngressRunner {
+    constructor() {
+      this.running = false
+    }
+
+    start() {
+      this.running = true
+    }
+
+    stop() {
+      this.running = false
+    }
+
+    enqueue(event) {
+      if (!this.running) return false
+      enqueuedEvents.push(event)
+      return true
+    }
+
+    getSnapshot() {
+      return {
+        running: this.running,
+        executionCount: 0,
+        pendingEvents: 0,
+        state: {},
+        locals: {},
+      }
+    }
+  }
+
+  const { controller } = createController({
+    createRunner: () => new IngressRunner(),
+    ingressRuntime: {
+      dispatch: async ({ name, payload }) => ({
+        type: `ingress_${name}`,
+        value: payload?.value ?? null,
+        payload,
+        source: 'ingress',
+      }),
+    },
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  const selected = { selected: 'no' }
+  await controller.dispatchIngress({
+    name: 'semantic_surface_event',
+    payload: { value: selected },
+  })
+
+  assert.equal(enqueuedEvents.length, 1)
+  assert.equal(enqueuedEvents[0].type, 'ingress_semantic_surface_event')
+  assert.deepEqual(enqueuedEvents[0].value, selected)
+})
+
+test('controller realizes semantic-surface effect payloads through effect runtime', async () => {
+  class SemanticEffectRunner {
+    constructor(options = {}) {
+      this.options = options
+      this.running = false
+    }
+
+    start() {
+      this.running = true
+    }
+
+    stop() {
+      this.running = false
+    }
+
+    enqueue(event) {
+      if (!this.running) return false
+      if (typeof this.options.onEvent === 'function' && event?.type === 'user_message') {
+        this.options.onEvent({
+          event,
+          runtimeEvent: {
+            type: 'output',
+            format: 'json',
+            effectChannelId: 'semantic_surface',
+            payload: {
+              interactionId: 'confirm_delete_1',
+              target: 'main',
+            },
+            id: 'runtime_evt_1',
+          },
+          snapshot: this.getSnapshot(),
+        })
+      }
+      return true
+    }
+
+    getSnapshot() {
+      return {
+        running: this.running,
+        executionCount: 0,
+        pendingEvents: 0,
+        state: {},
+        locals: {},
+      }
+    }
+  }
+
+  const capability = semanticSurfaceCapability()
+  const realizer = capability.effectRealizers[0]
+  const { controller, published } = createController({
+    createRunner: (options) => new SemanticEffectRunner(options),
+    effectRuntime: {
+      realize: async (payload) => realizer.semantic_surface({
+        ...payload,
+        event: {
+          value: {
+            schemaVersion: '1.0',
+            capability: 'semantic-surface',
+            effectName: 'semantic_surface',
+            interactionId: 'confirm_delete_1',
+            target: 'main',
+            intent: {
+              type: 'choice',
+              text: 'Delete reminders?',
+              options: [
+                { id: 'yes', label: 'Yes' },
+                { id: 'no', label: 'No' },
+              ],
+            },
+            timestamp: '2026-05-29T12:00:00Z',
+            runtimeEventId: 'runtime_evt_1',
+          },
+        },
+      }),
+    },
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  controller.enqueue({ type: 'user_message', value: 'delete reminders?' })
+
+  await new Promise((resolve) => setTimeout(resolve, 0))
+
+  const realized = published.find((entry) => entry.eventName === 'nextv_effect_realized' && entry.payload?.effectChannelId === 'semantic_surface')
+  assert.equal(Boolean(realized), true)
+  assert.equal(realized.payload.result.ok, true)
+  assert.equal(realized.payload.result.interactionId, 'confirm_delete_1')
+})
+
+test('controller dispatchIngress closes semantic-surface loop with normalized runtime event', async () => {
+  const enqueuedEvents = []
+
+  class SemanticIngressRunner {
+    constructor() {
+      this.running = false
+    }
+
+    start() {
+      this.running = true
+    }
+
+    stop() {
+      this.running = false
+    }
+
+    enqueue(event) {
+      if (!this.running) return false
+      enqueuedEvents.push(event)
+      return true
+    }
+
+    getSnapshot() {
+      return {
+        running: this.running,
+        executionCount: 0,
+        pendingEvents: 0,
+        state: {},
+        locals: {},
+      }
+    }
+  }
+
+  const capability = semanticSurfaceCapability()
+  const connector = capability.ingressConnectors[0]
+  const { controller, published } = createController({
+    createRunner: () => new SemanticIngressRunner(),
+    ingressRuntime: {
+      dispatch: async (payload) => connector.semantic_surface_event(payload),
+    },
+  })
+
+  await controller.start({ entrypointPath: 'main.nrv' })
+  const dispatched = await controller.dispatchIngress({
+    name: 'semantic_surface_event',
+    schemaVersion: '1.0',
+    eventType: 'semantic_surface_event',
+    interactionId: 'confirm_delete_1',
+    target: 'main',
+    action: 'selected',
+    value: { selected: 'yes' },
+    timestamp: '2026-05-29T12:00:02Z',
+    sourceSessionId: 'surface_main_1',
+  })
+
+  assert.equal(dispatched.ingressName, 'semantic_surface_event')
+  assert.equal(dispatched.dispatchedCount, 1)
+  assert.equal(enqueuedEvents.length, 1)
+  assert.equal(enqueuedEvents[0].type, 'semantic_surface_event')
+  assert.equal(enqueuedEvents[0].value.action, 'selected')
+  assert.deepEqual(enqueuedEvents[0].value.payload, { selected: 'yes' })
+  assert.equal(
+    published.some((entry) => entry.eventName === 'nextv_ingress_dispatched' && entry.payload?.ingressName === 'semantic_surface_event'),
     true,
   )
 })

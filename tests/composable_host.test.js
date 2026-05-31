@@ -255,7 +255,7 @@ test('composable host hot-swap reloads changed workspace config when enabled', {
 
   try {
     const result = await host.start()
-    assert.equal(result.runtimeCore.getStatus().entrypointPath, 'entry.nrv')
+    assert.equal(String(result.runtimeCore.getStatus().entrypointPath).endsWith('entry.nrv'), true)
 
     await writeFile(
       join(workspace.workspaceRoot, 'nextv.json'),
@@ -264,12 +264,12 @@ test('composable host hot-swap reloads changed workspace config when enabled', {
     )
 
     await waitForCondition(
-      () => result.runtimeCore.getStatus().entrypointPath === 'entry.v2.nrv',
+      () => String(result.runtimeCore.getStatus().entrypointPath).endsWith('entry.v2.nrv'),
       { timeoutMs: 8000, intervalMs: 100 },
     )
 
     assert.equal(logs.some((entry) => entry.includes('[hot-swap] file event=')), true)
-    assert.equal(logs.some((entry) => entry.includes('[hot-swap] applied entrypoint=entry.v2.nrv')), true)
+    assert.equal(logs.some((entry) => /\[hot-swap\] applied entrypoint=.*entry\.v2\.nrv/.test(entry)), true)
 
     await host.shutdown()
   } finally {
@@ -333,7 +333,7 @@ test('composable host hot-swap reloads when included workflow file changes', { t
     )
 
     await waitForCondition(
-      () => logs.some((entry) => entry.includes('[hot-swap] applied entrypoint=entry.nrv')),
+      () => logs.some((entry) => /\[hot-swap\] applied entrypoint=.*entry\.nrv/.test(entry)),
       { timeoutMs: 8000, intervalMs: 100 },
     )
 

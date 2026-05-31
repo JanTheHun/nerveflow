@@ -314,6 +314,12 @@ test('runtime core callInspectorExecute mode=try returns success envelope', asyn
     assert.equal(Array.isArray(response.resolvedCall.finalRequest?.messages), true)
     assert.equal(response.resolvedCall.finalRequest.messages.length > 0, true)
     assert.equal(response.resolvedCall.retryGuidanceInjected, false)
+    assert.equal(typeof response.artifact?.callId, 'string')
+    assert.equal(response.artifact?.source, 'inspector')
+    assert.equal(response.artifact?.replayOf, null)
+    assert.equal(response.artifact?.call?.targetKind, 'model')
+    assert.equal(response.artifact?.call?.target, 'test-model')
+    assert.equal(typeof response.artifact?.replayPayload?.prompt, 'string')
   } finally {
     if (previousModelResolution == null) {
       delete process.env.AGENT_MODEL_RESOLUTION
@@ -321,6 +327,135 @@ test('runtime core callInspectorExecute mode=try returns success envelope', asyn
       process.env.AGENT_MODEL_RESOLUTION = previousModelResolution
     }
   }
+})
+
+test('runtime core callInspectorExecute supports replay by callId with overrides', async () => {
+  const previousModelResolution = process.env.AGENT_MODEL_RESOLUTION
+  process.env.AGENT_MODEL_RESOLUTION = 'legacy'
+
+  const seenPrompts = []
+  const runtime = createRuntimeCore({
+    resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
+    callAgent: async (payload) => {
+      const userMessage = Array.isArray(payload?.messages)
+        ? payload.messages.find((message) => String(message?.role ?? '') === 'user')
+        : null
+      seenPrompts.push(String(userMessage?.content ?? ''))
+      return 'ok'
+    },
+  })
+
+  try {
+    const first = await runtime.callInspectorExecute({
+      workspaceDir: 'examples/mqtt-simple-host',
+      targetKind: 'model',
+      mode: 'try',
+      model: 'test-model',
+      prompt: 'first prompt',
+    })
+
+    const second = await runtime.callInspectorExecute({
+      callId: first.artifact.callId,
+      mode: 'try',
+      overrides: {
+        prompt: 'replayed prompt',
+      },
+    })
+
+    assert.deepEqual(seenPrompts, ['first prompt', 'replayed prompt'])
+    assert.equal(second.artifact?.source, 'replay')
+    assert.equal(second.artifact?.replayOf, first.artifact.callId)
+    assert.equal(second.call.target, 'test-model')
+  } finally {
+    if (previousModelResolution == null) {
+      delete process.env.AGENT_MODEL_RESOLUTION
+    } else {
+      process.env.AGENT_MODEL_RESOLUTION = previousModelResolution
+    }
+  }
+})
+
+test('runtime core callInspectorExecute replay rejects unknown callId', async () => {
+  const runtime = createRuntimeCore({
+    resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
+    callAgent: async () => 'ignored',
+  })
+
+  await assert.rejects(
+    () => runtime.callInspectorExecute({
+      callId: 'missing-call-id',
+    }),
+    /call inspector artifact not found/i,
+  )
+})
+
+test('runtime core callInspectorExecute supports repeat aggregation', async () => {
+  const previousModelResolution = process.env.AGENT_MODEL_RESOLUTION
+  process.env.AGENT_MODEL_RESOLUTION = 'legacy'
+
+  const outputs = ['alpha', 'beta', 'alpha']
+  let callIndex = 0
+  const runtime = createRuntimeCore({
+    resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
+    callAgent: async () => outputs[callIndex++] ?? 'alpha',
+  })
+
+  try {
+    const response = await runtime.callInspectorExecute({
+      workspaceDir: 'examples/mqtt-simple-host',
+      targetKind: 'model',
+      mode: 'call',
+      model: 'test-model',
+      prompt: 'repeat me',
+      repeat: 3,
+    })
+
+    assert.equal(Array.isArray(response.runs), true)
+    assert.equal(response.runs.length, 3)
+    assert.equal(response.aggregate.totalRuns, 3)
+    assert.equal(response.aggregate.successRuns, 3)
+    assert.equal(response.aggregate.errorRuns, 0)
+    assert.equal(response.aggregate.outputFrequency.alpha, 2)
+    assert.equal(response.aggregate.outputFrequency.beta, 1)
+    assert.equal(response.call.target, 'test-model')
+  } finally {
+    if (previousModelResolution == null) {
+      delete process.env.AGENT_MODEL_RESOLUTION
+    } else {
+      process.env.AGENT_MODEL_RESOLUTION = previousModelResolution
+    }
+  }
+})
+
+test('runtime core stores workflow artifacts from nextv_runtime_event including tool_error', async () => {
+  const runtime = createRuntimeCore({
+    resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
+    callAgent: async () => 'ignored',
+  })
+
+  runtime.eventBus.publish('nextv_runtime_event', {
+    event: { source: 'workflow' },
+    runtimeEvent: {
+      type: 'tool_error',
+      tool: 'search',
+      sourcePath: 'examples/mqtt-simple-host/workflow.nrv',
+      sourceLine: 12,
+      line: 12,
+      statement: 'tool("search")',
+      error: {
+        code: 'TOOL_TIMEOUT',
+        message: 'tool timed out',
+      },
+    },
+    snapshot: null,
+  })
+
+  const artifacts = runtime.listCallInspectorArtifacts({ limit: 10 })
+  const workflowArtifact = artifacts.find((entry) => String(entry?.source ?? '') === 'workflow')
+  assert.equal(Boolean(workflowArtifact), true)
+  assert.equal(workflowArtifact.runtimeEventType, 'tool_error')
+  assert.equal(workflowArtifact.call?.targetKind, 'tool')
+  assert.equal(workflowArtifact.call?.target, 'search')
 })
 
 test('runtime core callInspectorExecute mode=try returns failure envelope on contract violation', async () => {

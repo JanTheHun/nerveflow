@@ -336,6 +336,97 @@ test('preview server call inspector rejects mixed prompt and promptParts', async
   }
 })
 
+test('preview server records call inspector artifacts and serves history', async () => {
+  const studioPort = await findOpenPort()
+  let studioChild
+
+  try {
+    studioChild = spawn(process.execPath, [
+      'nerve-studio/preview-server.js',
+    ], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PORT: String(studioPort),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    await waitForOutput(studioChild, 'nerve-studio preview running at')
+
+    const executeResponse = await fetch(`http://127.0.0.1:${studioPort}/api/nextv/call-inspector/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspaceDir: 'examples/mqtt-simple-host',
+        targetKind: 'model',
+        mode: 'try',
+        model: 'test-model',
+        prompt: 'history prompt',
+      }),
+    })
+    const executePayload = await executeResponse.json().catch(() => ({}))
+
+    assert.equal(executeResponse.ok, true)
+    assert.equal(typeof executePayload.artifact?.callId, 'string')
+
+    const historyResponse = await fetch(`http://127.0.0.1:${studioPort}/api/nextv/call-inspector/history?limit=5`)
+    const historyPayload = await historyResponse.json().catch(() => ({}))
+
+    assert.equal(historyResponse.ok, true)
+    assert.equal(historyPayload.ok, true)
+    assert.equal(Array.isArray(historyPayload.artifacts), true)
+    assert.equal(
+      historyPayload.artifacts.some((entry) => String(entry?.callId ?? '') === String(executePayload.artifact.callId)),
+      true,
+    )
+  } finally {
+    await stopProcess(studioChild)
+  }
+})
+
+test('preview server call inspector supports repeat aggregation in local mode', async () => {
+  const studioPort = await findOpenPort()
+  let studioChild
+
+  try {
+    studioChild = spawn(process.execPath, [
+      'nerve-studio/preview-server.js',
+    ], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PORT: String(studioPort),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    await waitForOutput(studioChild, 'nerve-studio preview running at')
+
+    const response = await fetch(`http://127.0.0.1:${studioPort}/api/nextv/call-inspector/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspaceDir: 'examples/mqtt-simple-host',
+        targetKind: 'model',
+        mode: 'try',
+        model: 'test-model',
+        prompt: 'repeat history prompt',
+        repeat: 3,
+      }),
+    })
+    const payload = await response.json().catch(() => ({}))
+
+    assert.equal(response.ok, true)
+    assert.equal(Array.isArray(payload.runs), true)
+    assert.equal(payload.runs.length, 3)
+    assert.equal(payload.aggregate?.totalRuns, 3)
+    assert.equal(payload.aggregate?.successRuns, 3)
+  } finally {
+    await stopProcess(studioChild)
+  }
+})
+
 test('preview server attach call inspector forwards structured prompt and instruction parts', async () => {
   const runtimePort = await findOpenPort()
   const studioPort = await findOpenPort()
@@ -389,6 +480,7 @@ test('preview server attach call inspector forwards structured prompt and instru
           model: 'test-model',
           promptParts: ['alpha', 'beta'],
           instructionParts: ['be concise'],
+          repeat: 2,
         }),
       },
     )
@@ -401,6 +493,9 @@ test('preview server attach call inspector forwards structured prompt and instru
     assert.match(String(payload.resolvedCall?.prompt ?? ''), /alpha/)
     assert.match(String(payload.resolvedCall?.prompt ?? ''), /beta/)
     assert.match(String(payload.resolvedCall?.instructions ?? ''), /be concise/)
+    assert.equal(Array.isArray(payload.runs), true)
+    assert.equal(payload.runs.length, 2)
+    assert.equal(payload.aggregate?.totalRuns, 2)
   } finally {
     await stopProcess(studioChild)
     await stopProcess(runtimeChild)

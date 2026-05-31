@@ -78,6 +78,7 @@ export const storageKeys = {
   nextVCallInspectorTargetModel: 'local-agent.nextv.callInspectorTargetModel',
   nextVCallInspectorValidate: 'local-agent.nextv.callInspectorValidate',
   nextVCallInspectorRetry: 'local-agent.nextv.callInspectorRetry',
+  nextVCallInspectorRepeat: 'local-agent.nextv.callInspectorRepeat',
   nextVCallInspectorInstructions: 'local-agent.nextv.callInspectorInstructions',
   nextVCallInspectorPrompt: 'local-agent.nextv.callInspectorPrompt',
   nextVCallInspectorReturns: 'local-agent.nextv.callInspectorReturns',
@@ -402,6 +403,7 @@ export const nextVCallTargetAgentInput = document.getElementById('nextv-call-tar
 export const nextVCallTargetInput = document.getElementById('nextv-call-target')
 export const nextVCallValidateInput = document.getElementById('nextv-call-validate')
 export const nextVCallRetryInput = document.getElementById('nextv-call-retry')
+export const nextVCallRepeatInput = document.getElementById('nextv-call-repeat')
 export const nextVCallInstructionsInput = document.getElementById('nextv-call-instructions')
 export const nextVCallPromptInput = document.getElementById('nextv-call-prompt')
 export const nextVCallReturnsInput = document.getElementById('nextv-call-returns')
@@ -490,6 +492,7 @@ export const nextVCallResultParsed = document.getElementById('nextv-call-result-
 export const nextVCallResultValidation = document.getElementById('nextv-call-result-validation')
 export const nextVCallResultTry = document.getElementById('nextv-call-result-try')
 export const nextVCallResultMetadata = document.getElementById('nextv-call-result-metadata')
+export const nextVCallHistorySelect = document.getElementById('nextv-call-history')
 export const settingsMenu = document.getElementById('settings-menu')
 export const scriptEditorPanel = document.getElementById('script-editor-panel')
 export const nextVInputExternalPane = document.getElementById('nextv-input-external-pane')

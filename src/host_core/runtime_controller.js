@@ -925,7 +925,8 @@ export function createNextVRuntimeController({
 
     const workspaceDir = nextVWorkspaceDirResolved || resolveWorkspaceDirectory(nextVWorkspaceDir)
     const workspaceConfig = loadWorkspaceConfig(workspaceDir)
-    let requestedEntrypointPath = nextVEntrypointPath
+    const configuredEntrypointPath = String(workspaceConfig?.nextv?.config?.entrypointPath ?? '').trim()
+    let requestedEntrypointPath = configuredEntrypointPath || nextVEntrypointPath
     const workspacePrefix = workspaceDir.relativePath === '.' ? '' : `${workspaceDir.relativePath}/`
     if (workspacePrefix && requestedEntrypointPath.startsWith(workspacePrefix)) {
       requestedEntrypointPath = requestedEntrypointPath.slice(workspacePrefix.length)

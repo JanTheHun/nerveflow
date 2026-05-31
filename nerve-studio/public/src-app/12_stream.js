@@ -39,6 +39,7 @@ import {
   nextVCallTargetInput,
   nextVCallValidateInput,
   nextVCallRetryInput,
+  nextVCallRepeatInput,
   nextVCallInstructionsInput,
   nextVCallPromptInput,
   nextVCallReturnsInput,
@@ -67,6 +68,7 @@ import {
   nextVCallResultValidation,
   nextVCallResultTry,
   nextVCallResultMetadata,
+  nextVCallHistorySelect,
   nextVCallInspectorPanel,
   nextVGraphState,
   nextVHasLiveRuntimeEvents,
@@ -191,6 +193,7 @@ import {
 
 let bufferedRuntimeEventsForExecution = []
 let pendingAgentCallCount = 0
+let nextVCallInspectorHistory = []
 const MAX_SEEN_EXECUTION_EVENT_KEYS = 20000
 let seenExecutionEventKeys = new Set()
 let seenExecutionEventKeyOrder = []
@@ -314,6 +317,45 @@ function coerceInputEchoText(value) {
     }
   }
   return ''
+}
+
+function normalizeNextVCallInspectorRepeat(valueRaw) {
+  const parsed = Number(valueRaw)
+  if (!Number.isInteger(parsed)) return 1
+  return Math.max(1, Math.min(50, parsed))
+}
+
+function setNextVCallInspectorHistory(artifacts = []) {
+  nextVCallInspectorHistory = Array.isArray(artifacts)
+    ? artifacts.filter((entry) => entry && typeof entry === 'object')
+    : []
+
+  if (!nextVCallHistorySelect) return
+  const previous = String(nextVCallHistorySelect.value ?? '').trim()
+  nextVCallHistorySelect.innerHTML = ''
+
+  for (const artifact of nextVCallInspectorHistory) {
+    const callId = String(artifact?.callId ?? '').trim()
+    if (!callId) continue
+    const source = String(artifact?.source ?? 'unknown').trim()
+    const targetKind = String(artifact?.call?.targetKind ?? '').trim()
+    const target = String(artifact?.call?.target ?? '').trim()
+    const label = `${source} ${targetKind}:${target || '(unknown)'}`.trim()
+    const option = document.createElement('option')
+    option.value = callId
+    option.textContent = label
+    option.title = callId
+    nextVCallHistorySelect.appendChild(option)
+  }
+
+  if (nextVCallHistorySelect.options.length === 0) return
+  if (previous && [...nextVCallHistorySelect.options].some((entry) => entry.value === previous)) {
+    nextVCallHistorySelect.value = previous
+  }
+}
+
+function getSelectedNextVCallInspectorHistoryCallId() {
+  return String(nextVCallHistorySelect?.value ?? '').trim()
 }
 
 function mergeExecutionEventsWithLiveRuntimeEvents(executionEvents, runtimeEvents) {
@@ -1470,7 +1512,8 @@ export async function sendNextVIngress() {
   }
 }
 
-export async function executeNextVCallInspector() {
+export async function executeNextVCallInspector(options = {}) {
+  const replayCallId = String(options?.callId ?? '').trim()
   const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
   const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
   const modeRaw = String(nextVCallModeInput?.value ?? 'call').trim().toLowerCase()
@@ -1485,6 +1528,10 @@ export async function executeNextVCallInspector() {
   const validate = ['strict', 'coerce', 'none'].includes(validateRaw) ? validateRaw : 'coerce'
   const retryRaw = Number(nextVCallRetryInput?.value)
   const retryCount = Number.isInteger(retryRaw) ? Math.max(0, Math.min(8, retryRaw)) : 0
+  const repeatCount = normalizeNextVCallInspectorRepeat(nextVCallRepeatInput?.value)
+  if (nextVCallRepeatInput) {
+    nextVCallRepeatInput.value = String(repeatCount)
+  }
   const toolsPolicyResult = buildNextVCallInspectorToolsPolicy()
   const toolsPolicy = toolsPolicyResult.ok ? toolsPolicyResult.policy : null
 
@@ -1494,11 +1541,11 @@ export async function executeNextVCallInspector() {
     setStatus(message, 'responding')
   }
 
-  if (!target) {
+  if (!target && !replayCallId) {
     failInspectorValidation('call inspector target is required')
     return
   }
-  if (!prompt.trim()) {
+  if (!prompt.trim() && !replayCallId) {
     failInspectorValidation('call inspector prompt is required')
     return
   }
@@ -1519,6 +1566,7 @@ export async function executeNextVCallInspector() {
     prompt,
     validate,
     retry_on_contract_violation: retryCount,
+    repeat: repeatCount,
   }
   if (targetKind === 'agent') {
     requestBody.agent = target
@@ -1543,6 +1591,12 @@ export async function executeNextVCallInspector() {
   if (toolsPolicyResult.policy) {
     requestBody.tools = toolsPolicyResult.policy
   }
+  if (replayCallId) {
+    requestBody.callId = replayCallId
+    requestBody.overrides = {
+      ...requestBody,
+    }
+  }
 
   renderNextVCallInspectorResolvedCall({ status: 'resolving runtime invocation...' })
   renderNextVCallInspectorResult({ status: 'running call inspector request...' })
@@ -1561,6 +1615,11 @@ export async function executeNextVCallInspector() {
 
     renderNextVCallInspectorResolvedCall(data?.resolvedCall ?? { status: 'resolved call unavailable' })
     renderNextVCallInspectorResult(data)
+    if (data?.artifact?.callId) {
+      await refreshNextVCallInspectorHistory({ quiet: true, selectCallId: String(data.artifact.callId) })
+    } else {
+      await refreshNextVCallInspectorHistory({ quiet: true })
+    }
 
     const targetLabel = targetKind === 'agent'
       ? `agent=${requestBody.agent}`
@@ -1573,6 +1632,53 @@ export async function executeNextVCallInspector() {
     renderNextVCallInspectorResult({ error: String(err?.message ?? err) })
     setStatus('call inspector failed', 'responding')
   }
+}
+
+export async function refreshNextVCallInspectorHistory(options = {}) {
+  const quiet = options?.quiet === true
+  const selectCallId = String(options?.selectCallId ?? '').trim()
+  try {
+    const res = await fetch(buildNextVApiPath('/api/nextv/call-inspector/history?limit=100'))
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error ?? 'failed to load call inspector history')
+    }
+    const artifacts = Array.isArray(data?.artifacts) ? data.artifacts : []
+    setNextVCallInspectorHistory(artifacts)
+    if (selectCallId && nextVCallHistorySelect) {
+      const hasOption = [...nextVCallHistorySelect.options].some((entry) => entry.value === selectCallId)
+      if (hasOption) {
+        nextVCallHistorySelect.value = selectCallId
+      }
+    }
+    if (!quiet) {
+      setStatus(`call inspector history refreshed (${artifacts.length})`)
+    }
+  } catch (err) {
+    if (!quiet) {
+      appendNextVErrorLog(err)
+      setStatus('call inspector history refresh failed', 'responding')
+    }
+  }
+}
+
+export async function replaySelectedNextVCallInspectorCall() {
+  const selectedCallId = getSelectedNextVCallInspectorHistoryCallId()
+  if (!selectedCallId) {
+    setStatus('select a call inspector history entry first', 'responding')
+    return
+  }
+  await executeNextVCallInspector({ callId: selectedCallId })
+}
+
+export async function replayLastNextVCallInspectorCall() {
+  const fallbackCallId = String(nextVCallInspectorHistory[0]?.callId ?? '').trim()
+  const selectedCallId = getSelectedNextVCallInspectorHistoryCallId() || fallbackCallId
+  if (!selectedCallId) {
+    setStatus('no call inspector history is available to replay', 'responding')
+    return
+  }
+  await executeNextVCallInspector({ callId: selectedCallId })
 }
 
 function stringifyInspectorPane(value) {
@@ -1636,6 +1742,9 @@ function persistNextVCallInspectorInputs() {
   const retry = String(nextVCallRetryInput?.value ?? '').trim()
   if (retry !== '') localStorage.setItem(storageKeys.nextVCallInspectorRetry, retry)
 
+  const repeat = String(nextVCallRepeatInput?.value ?? '').trim()
+  if (repeat !== '') localStorage.setItem(storageKeys.nextVCallInspectorRepeat, repeat)
+
   localStorage.setItem(storageKeys.nextVCallInspectorInstructions, String(nextVCallInstructionsInput?.value ?? ''))
   localStorage.setItem(storageKeys.nextVCallInspectorPrompt, String(nextVCallPromptInput?.value ?? ''))
   localStorage.setItem(storageKeys.nextVCallInspectorReturns, String(nextVCallReturnsInput?.value ?? ''))
@@ -1679,6 +1788,9 @@ function restoreNextVCallInspectorInputs() {
 
   const retry = String(localStorage.getItem(storageKeys.nextVCallInspectorRetry) ?? '').trim()
   if (retry !== '' && nextVCallRetryInput) nextVCallRetryInput.value = retry
+
+  const repeat = String(localStorage.getItem(storageKeys.nextVCallInspectorRepeat) ?? '').trim()
+  if (repeat !== '' && nextVCallRepeatInput) nextVCallRepeatInput.value = repeat
 
   const instructions = localStorage.getItem(storageKeys.nextVCallInspectorInstructions)
   if (instructions !== null && nextVCallInstructionsInput) nextVCallInstructionsInput.value = instructions
@@ -2521,7 +2633,21 @@ export function renderNextVCallInspectorResult(data, options = {}) {
     })
   }
   if (nextVCallResultMetadata) {
-    nextVCallResultMetadata.textContent = stringifyInspectorPane(metadata)
+    nextVCallResultMetadata.textContent = stringifyInspectorPane({
+      metadata,
+      aggregate: response?.aggregate ?? null,
+      runs: Array.isArray(response?.runs)
+        ? response.runs.map((run) => ({
+            index: run?.index,
+            ok: run?.ok === true,
+            output: String(run?.result?.actual ?? ''),
+            hadContractViolation: run?.result?.hadContractViolation === true,
+            error: run?.error ?? null,
+            elapsedMs: Number(run?.elapsedMs ?? 0),
+            callId: String(run?.artifact?.callId ?? ''),
+          }))
+        : null,
+    })
   }
 
   const forceTab = String(options?.forceTab ?? '').trim()
@@ -2614,6 +2740,7 @@ export function initNextVCallInspector() {
     nextVCallTargetInput,
     nextVCallValidateInput,
     nextVCallRetryInput,
+    nextVCallRepeatInput,
     nextVCallInstructionsInput,
     nextVCallPromptInput,
     nextVCallReturnsInput,
@@ -2698,6 +2825,7 @@ export function initNextVCallInspector() {
   syncNextVCallInspectorTargetMode()
   syncNextVCallInspectorToolsModeUi()
   refreshNextVCallInspectorAgents({ quiet: true })
+  refreshNextVCallInspectorHistory({ quiet: true })
   renderNextVCallInspectorSnippet()
   renderNextVCallInspectorResolvedCall(null)
   renderNextVCallInspectorResult({ status: 'call inspector ready' }, { forceTab: getStoredNextVCallInspectorResultTab() })

@@ -1,4 +1,5 @@
 import { createServer } from 'node:http'
+import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import {
   appendFileSync,
@@ -215,6 +216,11 @@ const recentWarnings = []
 const PRELOAD_REPLAY_WINDOW_MS = 30_000
 const PRELOAD_REPLAY_LIMIT = 32
 const recentPreloadEvents = []
+const CALL_INSPECTOR_ARTIFACT_WINDOW_MS = 10 * 60_000
+const CALL_INSPECTOR_ARTIFACT_LIMIT = 200
+const CALL_INSPECTOR_ARTIFACT_SCHEMA_VERSION = 1
+const CALL_INSPECTOR_REPEAT_MAX = 50
+const recentCallInspectorArtifacts = []
 
 function pruneRecentTimerPulses(now = Date.now()) {
   while (recentTimerPulses.length > 0) {
@@ -282,7 +288,126 @@ function pruneRecentPreloadEvents(now = Date.now()) {
   }
 }
 
+function pruneRecentCallInspectorArtifacts(now = Date.now()) {
+  while (recentCallInspectorArtifacts.length > 0) {
+    const ageMs = now - Number(recentCallInspectorArtifacts[0]?.timestamp ?? 0)
+    if (ageMs <= CALL_INSPECTOR_ARTIFACT_WINDOW_MS) break
+    recentCallInspectorArtifacts.shift()
+  }
+  while (recentCallInspectorArtifacts.length > CALL_INSPECTOR_ARTIFACT_LIMIT) {
+    recentCallInspectorArtifacts.shift()
+  }
+}
+
+function buildCallInspectorArtifactFromResponse(responsePayload, {
+  runtimeTarget = 'local',
+  replayOf = null,
+  workspaceDir = '',
+} = {}) {
+  const payload = responsePayload && typeof responsePayload === 'object' ? responsePayload : {}
+  const call = payload.call && typeof payload.call === 'object' ? payload.call : {}
+  const resolvedCall = payload.resolvedCall && typeof payload.resolvedCall === 'object'
+    ? payload.resolvedCall
+    : {}
+  const result = payload.result && typeof payload.result === 'object' ? payload.result : {}
+  const nowIso = new Date().toISOString()
+  const targetKind = String(call.targetKind ?? resolvedCall.targetKind ?? 'agent').trim().toLowerCase() === 'model'
+    ? 'model'
+    : 'agent'
+  const target = String(call.target ?? resolvedCall.target ?? '').trim()
+  const mode = String(call.mode ?? 'call').trim().toLowerCase() === 'try' ? 'try' : 'call'
+  const validate = String(call.validate ?? resolvedCall.validate ?? 'coerce').trim().toLowerCase()
+  const retryOnViolation = Number.isInteger(Number(call.retry_on_contract_violation))
+    ? Math.max(0, Math.min(8, Number(call.retry_on_contract_violation)))
+    : Math.max(0, Math.min(8, Number(resolvedCall.retry_on_contract_violation) || 0))
+  const normalizedMessages = Array.isArray(resolvedCall.finalMessages)
+    ? resolvedCall.finalMessages
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') return null
+        const role = String(entry.role ?? '').trim()
+        const content = String(entry.content ?? '').trim()
+        if (!role || !content) return null
+        return { role, content }
+      })
+      .filter(Boolean)
+    : []
+  const tools = call.tools && typeof call.tools === 'object'
+    ? call.tools
+    : (resolvedCall.tools && typeof resolvedCall.tools === 'object' ? resolvedCall.tools : null)
+
+  return {
+    schemaVersion: CALL_INSPECTOR_ARTIFACT_SCHEMA_VERSION,
+    callId: randomUUID(),
+    replayOf: replayOf || null,
+    source: replayOf ? 'replay' : 'inspector',
+    createdAt: nowIso,
+    workspaceDir: String(workspaceDir ?? '').trim(),
+    runtimeTarget,
+    call: {
+      mode,
+      targetKind,
+      target,
+      validate: ['strict', 'coerce', 'none'].includes(validate) ? validate : 'coerce',
+      retry_on_contract_violation: retryOnViolation,
+      ...(tools ? { tools } : {}),
+    },
+    resolvedCall,
+    result: {
+      actual: String(result.actual ?? result.output ?? ''),
+      value: Object.prototype.hasOwnProperty.call(result, 'value') ? result.value : null,
+      hadContractViolation: result.hadContractViolation === true,
+      violation: result.violation ?? null,
+    },
+    elapsedMs: Number.isFinite(Number(payload.elapsedMs)) ? Math.max(0, Number(payload.elapsedMs)) : 0,
+    replayPayload: {
+      workspaceDir: String(workspaceDir ?? '').trim(),
+      targetKind,
+      mode,
+      ...(targetKind === 'model' ? { model: target } : { agent: target }),
+      prompt: String(resolvedCall.prompt ?? ''),
+      instructions: String(resolvedCall.instructions ?? ''),
+      ...(normalizedMessages.length > 0 ? { messages: normalizedMessages } : {}),
+      validate: ['strict', 'coerce', 'none'].includes(validate) ? validate : 'coerce',
+      retry_on_contract_violation: retryOnViolation,
+      ...(Object.prototype.hasOwnProperty.call(resolvedCall, 'returns') ? { returns: resolvedCall.returns } : {}),
+      ...(Array.isArray(resolvedCall.decide) && resolvedCall.decide.length > 0 ? { decide: resolvedCall.decide } : {}),
+      ...(tools ? { tools } : {}),
+    },
+  }
+}
+
+function storeCallInspectorArtifact(rawArtifact) {
+  if (!rawArtifact || typeof rawArtifact !== 'object') return null
+
+  const artifact = {
+    ...rawArtifact,
+    timestamp: Date.now(),
+  }
+  recentCallInspectorArtifacts.push(artifact)
+  pruneRecentCallInspectorArtifacts()
+  return artifact
+}
+
+function listCallInspectorArtifacts(limitRaw) {
+  pruneRecentCallInspectorArtifacts()
+  const limit = Number.isInteger(Number(limitRaw))
+    ? Math.max(1, Math.min(500, Number(limitRaw)))
+    : 50
+  return recentCallInspectorArtifacts
+    .slice(Math.max(0, recentCallInspectorArtifacts.length - limit))
+    .reverse()
+    .map((entry) => {
+      const { timestamp: _timestamp, ...rest } = entry
+      return rest
+    })
+}
+
 eventBus.subscribe((eventName, payload) => {
+  if (eventName === 'call_inspector_artifact') {
+    storeCallInspectorArtifact(payload)
+    return
+  }
+
   if (eventName === 'nextv_timer_pulse') {
     recentTimerPulses.push({
       timestamp: Date.now(),
@@ -304,6 +429,11 @@ eventBus.subscribe((eventName, payload) => {
   }
 
   if (eventName === 'nextv_runtime_event') {
+    const workflowArtifact = buildWorkflowCallInspectorArtifact(payload, isRemoteMode ? 'remote-control' : 'embedded')
+    if (workflowArtifact) {
+      storeCallInspectorArtifact(workflowArtifact)
+    }
+
     const eventSource = String(payload?.event?.source ?? '').trim()
     const runtimeEventType = String(payload?.runtimeEvent?.type ?? '').trim()
     if (eventSource !== 'timer' || runtimeEventType !== 'output') return
@@ -756,6 +886,229 @@ function normalizeCallInspectorToolsPolicy(rawTools) {
     maxRounds,
     timeoutMs,
     denyOnUnknownTool,
+  }
+}
+
+function normalizeReplayOverrides(rawOverrides) {
+  if (rawOverrides == null) return {}
+  if (!rawOverrides || typeof rawOverrides !== 'object' || Array.isArray(rawOverrides)) {
+    throw new Error('overrides must be an object when provided')
+  }
+  return rawOverrides
+}
+
+function normalizeCallInspectorRepeat(rawRepeat) {
+  if (rawRepeat == null || rawRepeat === '') return 1
+  const parsed = Number(rawRepeat)
+  if (!Number.isInteger(parsed)) {
+    throw new Error('repeat must be an integer when provided')
+  }
+  return Math.max(1, Math.min(CALL_INSPECTOR_REPEAT_MAX, parsed))
+}
+
+function getCallInspectorArtifact(callIdRaw) {
+  const callId = String(callIdRaw ?? '').trim()
+  if (!callId) return null
+  for (let index = recentCallInspectorArtifacts.length - 1; index >= 0; index -= 1) {
+    const entry = recentCallInspectorArtifacts[index]
+    if (String(entry?.callId ?? '').trim() === callId) {
+      const { timestamp: _timestamp, ...artifact } = entry
+      return artifact
+    }
+  }
+  return null
+}
+
+function resolveCallInspectorReplayPayload(rawPayload) {
+  const payload = rawPayload && typeof rawPayload === 'object' && !Array.isArray(rawPayload)
+    ? { ...rawPayload }
+    : {}
+  const replayCallId = String(payload.callId ?? '').trim()
+  if (!replayCallId) {
+    return {
+      payload,
+      replayOf: null,
+    }
+  }
+
+  const sourceArtifact = getCallInspectorArtifact(replayCallId)
+  if (!sourceArtifact) {
+    throw new Error(`call inspector artifact not found for callId "${replayCallId}"`)
+  }
+
+  const storedReplayPayload = sourceArtifact?.replayPayload
+  if (!storedReplayPayload || typeof storedReplayPayload !== 'object' || Array.isArray(storedReplayPayload)) {
+    throw new Error(`call inspector artifact "${replayCallId}" is missing replay payload`)
+  }
+
+  const overrides = normalizeReplayOverrides(payload.overrides)
+  const replayPayload = {
+    ...storedReplayPayload,
+    ...overrides,
+  }
+
+  const directOverrideKeys = [
+    'workspaceDir',
+    'targetKind',
+    'mode',
+    'repeat',
+    'agent',
+    'model',
+    'prompt',
+    'promptParts',
+    'instructions',
+    'instructionParts',
+    'messages',
+    'returns',
+    'decide',
+    'validate',
+    'retry_on_contract_violation',
+    'tools',
+  ]
+  for (const key of directOverrideKeys) {
+    if (Object.prototype.hasOwnProperty.call(payload, key)) {
+      replayPayload[key] = payload[key]
+    }
+  }
+
+  return {
+    payload: replayPayload,
+    replayOf: replayCallId,
+  }
+}
+
+function buildCallInspectorAggregate(runs = []) {
+  const outputFrequency = {}
+  let successRuns = 0
+  let contractViolationRuns = 0
+  let errorRuns = 0
+
+  for (const run of runs) {
+    if (!run || typeof run !== 'object') continue
+    if (run.ok !== true) {
+      errorRuns += 1
+      continue
+    }
+
+    successRuns += 1
+    if (run?.result?.hadContractViolation === true) {
+      contractViolationRuns += 1
+    }
+
+    const outputText = String(run?.result?.actual ?? '').trim()
+    const fallbackValueText = typeof run?.result?.value === 'string'
+      ? String(run.result.value).trim()
+      : ''
+    const frequencyKey = outputText || fallbackValueText
+    if (!frequencyKey) continue
+    outputFrequency[frequencyKey] = Number(outputFrequency[frequencyKey] ?? 0) + 1
+  }
+
+  return {
+    totalRuns: runs.length,
+    successRuns,
+    contractViolationRuns,
+    errorRuns,
+    outputFrequency,
+  }
+}
+
+function buildWorkflowCallInspectorArtifact(runtimePayload, runtimeTarget = 'embedded') {
+  if (!runtimePayload || typeof runtimePayload !== 'object') return null
+  const runtimeEvent = runtimePayload.runtimeEvent && typeof runtimePayload.runtimeEvent === 'object'
+    ? runtimePayload.runtimeEvent
+    : null
+  if (!runtimeEvent) return null
+
+  const runtimeEventType = String(runtimeEvent.type ?? '').trim()
+  const supportedTypes = new Set(['agent_result', 'agent_error', 'tool_result', 'tool_error'])
+  if (!supportedTypes.has(runtimeEventType)) return null
+
+  const rawAgent = String(runtimeEvent.agent ?? '').trim()
+  const rawTool = String(runtimeEvent.tool ?? '').trim()
+  const targetKind = runtimeEventType.startsWith('tool_')
+    ? 'tool'
+    : (rawAgent.startsWith('model:') ? 'model' : 'agent')
+  const target = targetKind === 'tool'
+    ? rawTool
+    : (targetKind === 'model' && rawAgent.startsWith('model:') ? rawAgent.slice('model:'.length) : rawAgent)
+
+  const metadata = runtimeEvent.metadata && typeof runtimeEvent.metadata === 'object'
+    ? runtimeEvent.metadata
+    : {}
+  const requestMetadata = metadata.request && typeof metadata.request === 'object'
+    ? metadata.request
+    : null
+  const workspaceDir = String(runtimeController?.getWorkspaceDir?.() ?? '').trim()
+
+  const actualText = runtimeEventType === 'tool_error'
+    ? String(runtimeEvent?.error?.message ?? metadata.message ?? '').trim()
+    : String(metadata.output ?? '').trim()
+  const hadContractViolation = runtimeEventType === 'agent_error'
+    && String(metadata.code ?? '').trim().toUpperCase() === 'AGENT_RETURN_CONTRACT_VIOLATION'
+  const violation = hadContractViolation
+    ? {
+        type: String(metadata.code ?? 'AGENT_RETURN_CONTRACT_VIOLATION'),
+        message: String(metadata.message ?? ''),
+        actual: String(metadata.output ?? ''),
+      }
+    : null
+
+  let resultValue = null
+  if (Object.prototype.hasOwnProperty.call(runtimeEvent, 'result')) {
+    resultValue = runtimeEvent.result
+  }
+
+  const resolvedCall = targetKind === 'tool'
+    ? {
+        type: 'tool_call',
+        targetKind: 'tool',
+        target,
+        sourcePath: String(runtimeEvent.sourcePath ?? '').trim(),
+        sourceLine: Number.isFinite(Number(runtimeEvent.sourceLine)) ? Number(runtimeEvent.sourceLine) : null,
+        line: Number.isFinite(Number(runtimeEvent.line)) ? Number(runtimeEvent.line) : null,
+        statement: String(runtimeEvent.statement ?? '').trim(),
+      }
+    : buildResolvedCallSummary({
+        targetKind,
+        target,
+        prompt: String(requestMetadata?.prompt ?? ''),
+        instructions: String(requestMetadata?.instructions ?? ''),
+        validate: String(requestMetadata?.validate ?? 'coerce'),
+        retryOnViolation: Number(requestMetadata?.retry_on_contract_violation ?? requestMetadata?.retryLimit ?? 0),
+        requestMetadata,
+      })
+
+  return {
+    schemaVersion: CALL_INSPECTOR_ARTIFACT_SCHEMA_VERSION,
+    callId: randomUUID(),
+    replayOf: null,
+    source: 'workflow',
+    createdAt: new Date().toISOString(),
+    workspaceDir,
+    runtimeTarget,
+    runtimeEventType,
+    sourcePath: String(runtimeEvent.sourcePath ?? '').trim(),
+    sourceLine: Number.isFinite(Number(runtimeEvent.sourceLine)) ? Number(runtimeEvent.sourceLine) : null,
+    line: Number.isFinite(Number(runtimeEvent.line)) ? Number(runtimeEvent.line) : null,
+    statement: String(runtimeEvent.statement ?? '').trim(),
+    call: {
+      mode: 'call',
+      targetKind,
+      target,
+      validate: String(requestMetadata?.validate ?? 'coerce').trim() || 'coerce',
+      retry_on_contract_violation: Number.isInteger(Number(requestMetadata?.retry_on_contract_violation))
+        ? Number(requestMetadata.retry_on_contract_violation)
+        : (Number.isInteger(Number(requestMetadata?.retryLimit)) ? Number(requestMetadata.retryLimit) : 0),
+    },
+    resolvedCall,
+    result: {
+      actual: actualText,
+      value: resultValue,
+      hadContractViolation,
+      violation,
+    },
+    elapsedMs: Number.isFinite(Number(metadata.elapsedMs)) ? Math.max(0, Number(metadata.elapsedMs)) : 0,
   }
 }
 
@@ -2079,23 +2432,6 @@ async function handleApi(req, res, url) {
       return sendJson(res, 400, { error: err.message })
     }
 
-    let promptInput
-    let instructionsInput
-    try {
-      promptInput = extractComposedInput(body, {
-        legacyKey: 'prompt',
-        partsKey: 'promptParts',
-        fieldName: 'prompt',
-      })
-      instructionsInput = extractComposedInput(body, {
-        legacyKey: 'instructions',
-        partsKey: 'instructionParts',
-        fieldName: 'instructions',
-      })
-    } catch (err) {
-      return sendJson(res, 400, { error: String(err?.message ?? err) })
-    }
-
     try {
       await ensureManagedRuntimeProcess(body?.workspaceDir)
       const runtimeBridge = getRuntimeControlBridge(runtimeTarget, url, { required: true })
@@ -2465,15 +2801,31 @@ async function handleApi(req, res, url) {
       return sendJson(res, 400, { error: err.message })
     }
 
+    let replayContext
+    try {
+      replayContext = resolveCallInspectorReplayPayload(body)
+    } catch (err) {
+      return sendJson(res, 400, { error: String(err?.message ?? err) })
+    }
+
+    const effectiveBody = replayContext.payload
+
+    let repeatCount = 1
+    try {
+      repeatCount = normalizeCallInspectorRepeat(effectiveBody?.repeat)
+    } catch (err) {
+      return sendJson(res, 400, { error: String(err?.message ?? err) })
+    }
+
     let promptInput
     let instructionsInput
     try {
-      promptInput = extractComposedInput(body, {
+      promptInput = extractComposedInput(effectiveBody, {
         legacyKey: 'prompt',
         partsKey: 'promptParts',
         fieldName: 'prompt',
       })
-      instructionsInput = extractComposedInput(body, {
+      instructionsInput = extractComposedInput(effectiveBody, {
         legacyKey: 'instructions',
         partsKey: 'instructionParts',
         fieldName: 'instructions',
@@ -2494,8 +2846,8 @@ async function handleApi(req, res, url) {
         if (!status.connected) {
           return sendRemoteConnectionUnavailable(res, 'remote runtime websocket is not connected', runtimeTarget)
         }
-        const remotePayload = body && typeof body === 'object' && !Array.isArray(body)
-          ? { ...body }
+        const remotePayload = effectiveBody && typeof effectiveBody === 'object' && !Array.isArray(effectiveBody)
+          ? { ...effectiveBody }
           : {}
         remotePayload.prompt = promptInput.value
         delete remotePayload.promptParts
@@ -2519,37 +2871,53 @@ async function handleApi(req, res, url) {
       const errorResponse = sendRemoteCommandResponse(res, response, 'failed to execute call inspector request', runtimeTarget)
       if (errorResponse) return errorResponse
 
+      const remoteData = response?.data && typeof response.data === 'object'
+        ? { ...response.data }
+        : {}
+      const replayOf = replayContext.replayOf
+      const effectiveArtifact = remoteData.artifact && typeof remoteData.artifact === 'object'
+        ? remoteData.artifact
+        : buildCallInspectorArtifactFromResponse(remoteData, {
+          runtimeTarget,
+          replayOf,
+          workspaceDir: String(remoteData?.artifact?.workspaceDir ?? effectiveBody?.workspaceDir ?? '').trim(),
+        })
+      const storedArtifact = storeCallInspectorArtifact(effectiveArtifact)
+      if (storedArtifact) {
+        remoteData.artifact = storedArtifact
+      }
+
       return sendJson(res, 200, {
         ok: true,
-        ...(response?.data ?? {}),
+        ...remoteData,
         ...buildRemoteModeMetadata(runtimeTarget, url),
       })
     }
 
-    const rawWorkspaceDir = String(body?.workspaceDir ?? '').trim()
-    const targetKindRaw = String(body?.targetKind ?? 'agent').trim().toLowerCase()
+    const rawWorkspaceDir = String(effectiveBody?.workspaceDir ?? '').trim()
+    const targetKindRaw = String(effectiveBody?.targetKind ?? 'agent').trim().toLowerCase()
     const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
-    const modeRaw = String(body?.mode ?? 'call').trim().toLowerCase()
+    const modeRaw = String(effectiveBody?.mode ?? 'call').trim().toLowerCase()
     const mode = modeRaw === 'try' ? 'try' : 'call'
-    const agentName = String(body?.agent ?? '').trim()
-    const modelName = String(body?.model ?? '').trim()
+    const agentName = String(effectiveBody?.agent ?? '').trim()
+    const modelName = String(effectiveBody?.model ?? '').trim()
     const prompt = promptInput.value
     const instructions = instructionsInput.value
-    const validateModeRaw = String(body?.validate ?? '').trim().toLowerCase()
+    const validateModeRaw = String(effectiveBody?.validate ?? '').trim().toLowerCase()
     const validateMode = ['strict', 'coerce', 'none'].includes(validateModeRaw) ? validateModeRaw : 'coerce'
-    const retryOnViolationRaw = Number(body?.retry_on_contract_violation)
+    const retryOnViolationRaw = Number(effectiveBody?.retry_on_contract_violation)
     const retryOnViolation = Number.isInteger(retryOnViolationRaw)
       ? Math.max(0, Math.min(8, retryOnViolationRaw))
       : 0
     let toolsPolicy = null
     try {
-      toolsPolicy = normalizeCallInspectorToolsPolicy(body?.tools)
+      toolsPolicy = normalizeCallInspectorToolsPolicy(effectiveBody?.tools)
     } catch (err) {
       return sendJson(res, 400, { error: String(err?.message ?? err) })
     }
 
-    const normalizedMessages = Array.isArray(body?.messages)
-      ? body.messages
+    const normalizedMessages = Array.isArray(effectiveBody?.messages)
+      ? effectiveBody.messages
         .map((entry) => {
           if (!entry || typeof entry !== 'object') return null
           const role = String(entry.role ?? '').trim()
@@ -2565,8 +2933,8 @@ async function handleApi(req, res, url) {
       : []
 
     let returnsContract = null
-    if (body && Object.prototype.hasOwnProperty.call(body, 'returns')) {
-      const rawReturns = body.returns
+    if (effectiveBody && Object.prototype.hasOwnProperty.call(effectiveBody, 'returns')) {
+      const rawReturns = effectiveBody.returns
       if (typeof rawReturns === 'string') {
         const trimmed = rawReturns.trim()
         if (trimmed) {
@@ -2582,8 +2950,8 @@ async function handleApi(req, res, url) {
     }
 
     let decideContract = null
-    if (body && Object.prototype.hasOwnProperty.call(body, 'decide')) {
-      const rawDecide = body.decide
+    if (effectiveBody && Object.prototype.hasOwnProperty.call(effectiveBody, 'decide')) {
+      const rawDecide = effectiveBody.decide
       if (Array.isArray(rawDecide)) {
         decideContract = rawDecide.map((value) => String(value ?? '').trim()).filter(Boolean)
       } else if (typeof rawDecide === 'string') {
@@ -2609,8 +2977,6 @@ async function handleApi(req, res, url) {
     if (returnsContract != null && decideContract != null) {
       return sendJson(res, 400, { error: 'returns and decide cannot both be set for the same call' })
     }
-
-    const startedAt = Date.now()
 
     try {
       const workspaceDir = resolveWorkspaceDirectory(rawWorkspaceDir)
@@ -2645,107 +3011,195 @@ async function handleApi(req, res, url) {
         toolRuntime: dynamicToolRuntime,
       })
 
-      let callResult = null
-      let tryEnvelope = null
-      let tryError = null
-      try {
-        callResult = await hostAdapter.callAgent({
-          agent: targetKind === 'agent' ? agentName : '',
-          model: targetKind === 'model' ? modelName : '',
-          prompt,
-          instructions,
-          messages: normalizedMessages,
-          returns: returnsContract,
-          decide: decideContract,
-          tools: toolsPolicy,
-          validate: validateMode,
-          retry_on_contract_violation: retryOnViolation,
-          on_contract_violation: mode === 'try'
-            ? null
-            : {
+      const runOnce = async () => {
+        const startedAt = Date.now()
+        let callResult = null
+        let tryEnvelope = null
+        let tryError = null
+        try {
+          callResult = await hostAdapter.callAgent({
+            agent: targetKind === 'agent' ? agentName : '',
+            model: targetKind === 'model' ? modelName : '',
+            prompt,
+            instructions,
+            messages: normalizedMessages,
+            returns: returnsContract,
+            decide: decideContract,
+            tools: toolsPolicy,
+            validate: validateMode,
+            retry_on_contract_violation: retryOnViolation,
+            on_contract_violation: mode === 'try'
+              ? null
+              : {
+                source: 'call-inspector',
+                mode: 'report',
+              },
+            state: {},
+            locals: {},
+            event: {
+              type: 'call_inspector.execute',
               source: 'call-inspector',
-              mode: 'report',
+              value: renderComposedTextPreview(promptInput.parts),
+              payload: {},
             },
-          state: {},
-          locals: {},
-          event: {
-            type: 'call_inspector.execute',
-            source: 'call-inspector',
-            value: renderComposedTextPreview(promptInput.parts),
-            payload: {},
-          },
-        })
-      } catch (err) {
-        if (mode !== 'try') throw err
-        tryError = err
-        tryEnvelope = toCallInspectorTryFailureEnvelope(err)
-      }
+          })
+        } catch (err) {
+          if (mode !== 'try') throw err
+          tryError = err
+          tryEnvelope = toCallInspectorTryFailureEnvelope(err)
+        }
 
-      const normalizedCallResult = normalizeCallInspectorCallResult(callResult)
-      if (mode === 'try' && tryEnvelope == null) {
-        tryEnvelope = {
-          ok: true,
-          value: normalizedCallResult?.value ?? null,
+        const normalizedCallResult = normalizeCallInspectorCallResult(callResult)
+        if (mode === 'try' && tryEnvelope == null) {
+          tryEnvelope = {
+            ok: true,
+            value: normalizedCallResult?.value ?? null,
+          }
+        }
+
+        const elapsedMs = Math.max(0, Date.now() - startedAt)
+        const isViolation = mode === 'call' && callResult && callResult.__nextv_contract_violation__ === true
+        const requestMetadata = normalizedCallResult?.metadata?.request ?? tryError?.requestMetadata ?? null
+        const outputTextRaw = String(normalizedCallResult?.outputText ?? '').trim()
+        const violationActualRaw = String(callResult?.violation?.actual ?? '').trim()
+        const tryOutputRaw = String(tryEnvelope?.error?.output ?? '').trim()
+        const outputText = outputTextRaw || violationActualRaw || tryOutputRaw
+        const hadTryContractViolation = mode === 'try'
+          && tryEnvelope?.ok === false
+          && String(tryEnvelope?.error?.type ?? '').trim().toLowerCase() === 'agent_return_contract_violation'
+
+        const responsePayload = {
+          call: {
+            mode,
+            targetKind,
+            target: targetKind === 'agent' ? agentName : modelName,
+            validate: validateMode,
+            retry_on_contract_violation: retryOnViolation,
+            hasReturns: returnsContract != null,
+            hasDecide: Array.isArray(decideContract) && decideContract.length > 0,
+            ...(toolsPolicy && typeof toolsPolicy === 'object' ? { tools: toolsPolicy } : {}),
+          },
+          resolvedCall: buildResolvedCallSummary({
+            targetKind,
+            target: targetKind === 'agent' ? agentName : modelName,
+            prompt,
+            instructions,
+            validate: validateMode,
+            retryOnViolation,
+            returnsContract,
+            decideContract,
+            toolsPolicy,
+            requestMetadata,
+          }),
+          result: {
+            actual: outputText,
+            output: outputText,
+            parsed: mode === 'try'
+              ? tryEnvelope
+              : (isViolation ? null : (normalizedCallResult?.value ?? null)),
+            value: mode === 'try'
+              ? tryEnvelope
+              : (isViolation ? null : (normalizedCallResult?.value ?? null)),
+            metadata: normalizedCallResult?.metadata ?? null,
+            violation: mode === 'try'
+              ? (hadTryContractViolation
+                ? {
+                  type: String(tryEnvelope?.error?.type ?? ''),
+                  message: String(tryEnvelope?.error?.message ?? ''),
+                  actual: String(tryEnvelope?.error?.output ?? ''),
+                }
+                : null)
+              : (isViolation ? (callResult?.violation ?? null) : null),
+            hadContractViolation: mode === 'try' ? hadTryContractViolation : isViolation,
+          },
+          elapsedMs,
+        }
+
+        const artifact = storeCallInspectorArtifact(
+          buildCallInspectorArtifactFromResponse(responsePayload, {
+            runtimeTarget,
+            replayOf: replayContext.replayOf,
+            workspaceDir: workspaceDir.relativePath,
+          })
+        )
+
+        return {
+          ...responsePayload,
+          ...(artifact ? { artifact } : {}),
         }
       }
 
-      const elapsedMs = Math.max(0, Date.now() - startedAt)
-      const isViolation = mode === 'call' && callResult && callResult.__nextv_contract_violation__ === true
-      const requestMetadata = normalizedCallResult?.metadata?.request ?? tryError?.requestMetadata ?? null
-      const outputTextRaw = String(normalizedCallResult?.outputText ?? '').trim()
-      const violationActualRaw = String(callResult?.violation?.actual ?? '').trim()
-      const tryOutputRaw = String(tryEnvelope?.error?.output ?? '').trim()
-      const outputText = outputTextRaw || violationActualRaw || tryOutputRaw
-      const hadTryContractViolation = mode === 'try'
-        && tryEnvelope?.ok === false
-        && String(tryEnvelope?.error?.type ?? '').trim().toLowerCase() === 'agent_return_contract_violation'
+      if (repeatCount === 1) {
+        const singleRun = await runOnce()
+        return sendJson(res, 200, {
+          ok: true,
+          ...singleRun,
+          ...buildRemoteModeMetadata(runtimeTarget, url),
+        })
+      }
+
+      const runs = []
+      for (let index = 0; index < repeatCount; index += 1) {
+        try {
+          const run = await runOnce()
+          runs.push({
+            index: index + 1,
+            ok: true,
+            ...run,
+          })
+        } catch (err) {
+          runs.push({
+            index: index + 1,
+            ok: false,
+            elapsedMs: 0,
+            error: {
+              code: String(err?.code ?? '').trim() || 'runtime_error',
+              message: String(err?.message ?? err),
+            },
+          })
+        }
+      }
+
+      const firstRun = runs[0] ?? null
+      if (!firstRun) {
+        return sendJson(res, 400, { error: 'repeat execution produced no runs' })
+      }
+
+      const aggregate = buildCallInspectorAggregate(runs)
+      if (firstRun.ok !== true) {
+        return sendJson(res, 200, {
+          ok: true,
+          call: {
+            mode,
+            targetKind,
+            target: targetKind === 'agent' ? agentName : modelName,
+            validate: validateMode,
+            retry_on_contract_violation: retryOnViolation,
+            ...(toolsPolicy && typeof toolsPolicy === 'object' ? { tools: toolsPolicy } : {}),
+          },
+          resolvedCall: null,
+          result: {
+            actual: '',
+            output: '',
+            parsed: null,
+            value: null,
+            metadata: null,
+            violation: null,
+            hadContractViolation: false,
+          },
+          elapsedMs: 0,
+          artifact: null,
+          runs,
+          aggregate,
+          ...buildRemoteModeMetadata(runtimeTarget, url),
+        })
+      }
 
       return sendJson(res, 200, {
         ok: true,
-        call: {
-          mode,
-          targetKind,
-          target: targetKind === 'agent' ? agentName : modelName,
-          validate: validateMode,
-          retry_on_contract_violation: retryOnViolation,
-          hasReturns: returnsContract != null,
-          hasDecide: Array.isArray(decideContract) && decideContract.length > 0,
-          ...(toolsPolicy && typeof toolsPolicy === 'object' ? { tools: toolsPolicy } : {}),
-        },
-        resolvedCall: buildResolvedCallSummary({
-          targetKind,
-          target: targetKind === 'agent' ? agentName : modelName,
-          prompt,
-          instructions,
-          validate: validateMode,
-          retryOnViolation,
-          returnsContract,
-          decideContract,
-          toolsPolicy,
-          requestMetadata,
-        }),
-        result: {
-          actual: outputText,
-          output: outputText,
-          parsed: mode === 'try'
-            ? tryEnvelope
-            : (isViolation ? null : (normalizedCallResult?.value ?? null)),
-          value: mode === 'try'
-            ? tryEnvelope
-            : (isViolation ? null : (normalizedCallResult?.value ?? null)),
-          metadata: normalizedCallResult?.metadata ?? null,
-          violation: mode === 'try'
-            ? (hadTryContractViolation
-              ? {
-                type: String(tryEnvelope?.error?.type ?? ''),
-                message: String(tryEnvelope?.error?.message ?? ''),
-                actual: String(tryEnvelope?.error?.output ?? ''),
-              }
-              : null)
-            : (isViolation ? (callResult?.violation ?? null) : null),
-          hadContractViolation: mode === 'try' ? hadTryContractViolation : isViolation,
-        },
-        elapsedMs,
+        ...firstRun,
+        runs,
+        aggregate,
         ...buildRemoteModeMetadata(runtimeTarget, url),
       })
     } catch (err) {
@@ -2761,6 +3215,15 @@ async function handleApi(req, res, url) {
         ...buildRemoteModeMetadata(runtimeTarget, url),
       })
     }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/nextv/call-inspector/history') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    return sendJson(res, 200, {
+      ok: true,
+      artifacts: listCallInspectorArtifacts(url.searchParams.get('limit')),
+      ...buildRemoteModeMetadata(runtimeTarget, url),
+    })
   }
 
   if (req.method === 'GET' && url.pathname === '/api/nextv/snapshot') {

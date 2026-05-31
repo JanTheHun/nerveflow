@@ -117,6 +117,9 @@ import {
   submitNextVCandidate,
   promoteNextVCandidate,
   executeNextVCallInspector,
+  refreshNextVCallInspectorHistory,
+  replaySelectedNextVCallInspectorCall,
+  replayLastNextVCallInspectorCall,
   insertNextVCallInspectorSnippet,
   initNextVCallInspector,
 } from './12_stream.js'
@@ -370,6 +373,9 @@ Object.assign(window, {
   startNextVRuntime,
   stopNextVRuntime,
   executeNextVCallInspector,
+  refreshNextVCallInspectorHistory,
+  replaySelectedNextVCallInspectorCall,
+  replayLastNextVCallInspectorCall,
   insertNextVCallInspectorSnippet,
   // 13_layout.js
   addScriptInputRow,

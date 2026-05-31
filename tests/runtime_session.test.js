@@ -670,10 +670,13 @@ test('callAgent appends return contract guidance to instruction layer', async ()
   })
 
   assert.equal(calls.length, 1)
-  assert.equal(calls[0][0].role, 'system')
-  assert.match(calls[0][0].content, /profile rules/)
-  assert.match(calls[0][0].content, /call rules/)
-  assert.match(calls[0][0].content, /Return only valid JSON matching this structure/)
+  const systemContents = calls[0]
+    .filter((entry) => entry?.role === 'system')
+    .map((entry) => String(entry?.content ?? ''))
+    .join('\n\n')
+  assert.match(systemContents, /profile rules/)
+  assert.match(systemContents, /call rules/)
+  assert.match(systemContents, /Return only valid JSON matching this structure/)
 })
 
 test('callAgent validates returns contract in strict mode', async () => {
@@ -928,15 +931,17 @@ test('callAgent includes request payload metadata when captureAgentRequestPayloa
   assert.equal(result.metadata.request.model, 'llama3')
   assert.equal(result.metadata.request.resolvedModel, 'llama3')
   assert.equal(result.metadata.request.resolvedModelAlias, 'llama3')
-  assert.equal(result.metadata.request.messageCount, 2)
+  assert.equal(result.metadata.request.messageCount, 3)
   assert.equal(result.metadata.request.instructions, 'profile instructions\n\ncall instructions')
   assert.equal(result.metadata.request.prompt, 'play Nirvana')
   assert.deepEqual(result.metadata.request.toolNames, [])
   assert.equal(Array.isArray(result.metadata.request.messages), true)
   assert.equal(result.metadata.request.messages[0].role, 'system')
   assert.match(result.metadata.request.messages[0].content, /profile instructions/)
-  assert.equal(result.metadata.request.messages[1].role, 'user')
-  assert.equal(result.metadata.request.messages[1].content, 'play Nirvana')
+  assert.equal(result.metadata.request.messages[1].role, 'system')
+  assert.match(result.metadata.request.messages[1].content, /call instructions/)
+  assert.equal(result.metadata.request.messages[2].role, 'user')
+  assert.equal(result.metadata.request.messages[2].content, 'play Nirvana')
 })
 
 // --- Phase 3: Resolution pipeline (agents.profiles → models.map → transports.map) ---

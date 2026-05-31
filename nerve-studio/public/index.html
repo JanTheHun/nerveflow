@@ -398,7 +398,14 @@
                   <span>retry</span>
                   <input id="nextv-call-retry" type="number" min="0" max="8" step="1" value="0" title="retry count" />
                 </label>
+                <label class="nextv-call-inline-field" for="nextv-call-repeat">
+                  <span>repeat</span>
+                  <input id="nextv-call-repeat" type="number" min="1" max="50" step="1" value="1" title="repeat count" />
+                </label>
                 <button type="button" onclick="executeNextVCallInspector()">run call</button>
+                <button type="button" onclick="refreshNextVCallInspectorHistory()">refresh history</button>
+                <button type="button" onclick="replayLastNextVCallInspectorCall()">replay last</button>
+                <button type="button" onclick="replaySelectedNextVCallInspectorCall()">replay selected</button>
               </div>
               <textarea id="nextv-call-instructions" rows="2" placeholder="system instructions (optional)" autocomplete="off" spellcheck="false"></textarea>
               <textarea id="nextv-call-prompt" rows="3" placeholder="prompt" autocomplete="off" spellcheck="false"></textarea>
@@ -434,6 +441,10 @@
               <pre id="nextv-call-generated-code" class="panel-scroll nextv-call-generated-code-output"></pre>
             </div>
             <div class="nextv-call-inspector-right">
+              <div class="nextv-call-target-config">
+                <div class="nextv-call-target-config-label">history</div>
+                <select id="nextv-call-history" title="call inspector history" size="6" style="width:100%"></select>
+              </div>
               <div class="nextv-call-target-config">
                 <div id="nextv-call-resolved-label" class="nextv-call-target-config-label">resolved call</div>
                 <pre id="nextv-call-resolved" class="panel-scroll nextv-call-target-config-output nextv-call-resolved-output"></pre>

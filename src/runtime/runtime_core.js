@@ -160,6 +160,11 @@ export function createRuntimeCore({
   }
 
   const eventBus = createEventBus()
+  const CALL_INSPECTOR_ARTIFACT_SCHEMA_VERSION = 1
+  const CALL_INSPECTOR_ARTIFACT_LIMIT = 200
+  const CALL_INSPECTOR_REPEAT_MAX = 50
+  const callInspectorArtifacts = []
+  const callInspectorArtifactsById = new Map()
   let lifecycleState = 'idle'
   let lastError = ''
 
@@ -529,36 +534,349 @@ export function createRuntimeCore({
     }
   }
 
+  function normalizeReplayOverrides(rawOverrides) {
+    if (rawOverrides == null) return {}
+    if (!rawOverrides || typeof rawOverrides !== 'object' || Array.isArray(rawOverrides)) {
+      throw new Error('overrides must be an object when provided')
+    }
+    return rawOverrides
+  }
+
+  function normalizeCallInspectorRepeat(rawRepeat) {
+    if (rawRepeat == null || rawRepeat === '') return 1
+    const parsed = Number(rawRepeat)
+    if (!Number.isInteger(parsed)) {
+      throw new Error('repeat must be an integer when provided')
+    }
+    return Math.max(1, Math.min(CALL_INSPECTOR_REPEAT_MAX, parsed))
+  }
+
+  function getCallInspectorArtifact(callIdRaw) {
+    const callId = String(callIdRaw ?? '').trim()
+    if (!callId) return null
+    return callInspectorArtifactsById.get(callId) ?? null
+  }
+
+  function listCallInspectorArtifacts({ limit = 50 } = {}) {
+    const normalizedLimit = Number.isInteger(Number(limit))
+      ? Math.max(1, Math.min(500, Number(limit)))
+      : 50
+    const start = Math.max(0, callInspectorArtifacts.length - normalizedLimit)
+    return callInspectorArtifacts
+      .slice(start)
+      .reverse()
+      .map((entry) => ({ ...entry }))
+  }
+
+  function storeCallInspectorArtifact(artifact) {
+    if (!artifact || typeof artifact !== 'object') return
+    const callId = String(artifact.callId ?? '').trim()
+    if (!callId) return
+
+    callInspectorArtifacts.push(artifact)
+    callInspectorArtifactsById.set(callId, artifact)
+
+    while (callInspectorArtifacts.length > CALL_INSPECTOR_ARTIFACT_LIMIT) {
+      const removed = callInspectorArtifacts.shift()
+      const removedId = String(removed?.callId ?? '').trim()
+      if (removedId) {
+        callInspectorArtifactsById.delete(removedId)
+      }
+    }
+  }
+
+  function buildCallInspectorReplayPayload({
+    workspaceDir,
+    targetKind,
+    mode,
+    agentName,
+    modelName,
+    prompt,
+    instructions,
+    normalizedMessages,
+    validateMode,
+    retryOnViolation,
+    returnsContract,
+    decideContract,
+    toolsPolicy,
+  }) {
+    return {
+      workspaceDir,
+      targetKind,
+      mode,
+      ...(targetKind === 'agent' ? { agent: agentName } : { model: modelName }),
+      prompt,
+      instructions,
+      ...(normalizedMessages.length > 0 ? { messages: normalizedMessages } : {}),
+      validate: validateMode,
+      retry_on_contract_violation: retryOnViolation,
+      ...(returnsContract != null ? { returns: returnsContract } : {}),
+      ...(Array.isArray(decideContract) && decideContract.length > 0 ? { decide: decideContract } : {}),
+      ...(toolsPolicy && typeof toolsPolicy === 'object' ? { tools: toolsPolicy } : {}),
+    }
+  }
+
+  function buildCallInspectorAggregate(runs = []) {
+    const outputFrequency = {}
+    let successRuns = 0
+    let contractViolationRuns = 0
+    let errorRuns = 0
+
+    for (const run of runs) {
+      if (!run || typeof run !== 'object') continue
+      if (run.ok !== true) {
+        errorRuns += 1
+        continue
+      }
+
+      successRuns += 1
+      if (run?.result?.hadContractViolation === true) {
+        contractViolationRuns += 1
+      }
+
+      const outputText = String(run?.result?.actual ?? '').trim()
+      const fallbackValueText = typeof run?.result?.value === 'string'
+        ? String(run.result.value).trim()
+        : ''
+      const frequencyKey = outputText || fallbackValueText
+      if (!frequencyKey) continue
+      outputFrequency[frequencyKey] = Number(outputFrequency[frequencyKey] ?? 0) + 1
+    }
+
+    return {
+      totalRuns: runs.length,
+      successRuns,
+      contractViolationRuns,
+      errorRuns,
+      outputFrequency,
+    }
+  }
+
+  function buildWorkflowCallInspectorArtifact(workflowPayload) {
+    if (!workflowPayload || typeof workflowPayload !== 'object') return null
+    const runtimeEvent = workflowPayload.runtimeEvent && typeof workflowPayload.runtimeEvent === 'object'
+      ? workflowPayload.runtimeEvent
+      : null
+    if (!runtimeEvent) return null
+
+    const runtimeEventType = String(runtimeEvent.type ?? '').trim()
+    const supportedTypes = new Set(['agent_result', 'agent_error', 'tool_result', 'tool_error'])
+    if (!supportedTypes.has(runtimeEventType)) return null
+
+    const workspaceDir = String(getStatus()?.workspaceDir ?? '').trim()
+    const rawAgent = String(runtimeEvent.agent ?? '').trim()
+    const rawTool = String(runtimeEvent.tool ?? '').trim()
+    const targetKind = runtimeEventType.startsWith('tool_')
+      ? 'tool'
+      : (rawAgent.startsWith('model:') ? 'model' : 'agent')
+    const target = targetKind === 'tool'
+      ? rawTool
+      : (targetKind === 'model' && rawAgent.startsWith('model:') ? rawAgent.slice('model:'.length) : rawAgent)
+    const metadata = runtimeEvent.metadata && typeof runtimeEvent.metadata === 'object'
+      ? runtimeEvent.metadata
+      : {}
+    const requestMetadata = metadata.request && typeof metadata.request === 'object'
+      ? metadata.request
+      : null
+
+    const resolvedCall = targetKind === 'tool'
+      ? {
+          type: 'tool_call',
+          targetKind: 'tool',
+          target,
+          sourcePath: String(runtimeEvent.sourcePath ?? '').trim(),
+          sourceLine: Number.isFinite(Number(runtimeEvent.sourceLine)) ? Number(runtimeEvent.sourceLine) : null,
+          line: Number.isFinite(Number(runtimeEvent.line)) ? Number(runtimeEvent.line) : null,
+          statement: String(runtimeEvent.statement ?? '').trim(),
+        }
+      : buildResolvedCallSummary({
+          targetKind,
+          target,
+          prompt: String(requestMetadata?.prompt ?? ''),
+          instructions: String(requestMetadata?.instructions ?? ''),
+          validate: String(requestMetadata?.validate ?? 'coerce'),
+          retryOnViolation: Number(requestMetadata?.retry_on_contract_violation ?? requestMetadata?.retryLimit ?? 0),
+          requestMetadata,
+        })
+
+    let resultValue = null
+    if (Object.prototype.hasOwnProperty.call(runtimeEvent, 'result')) {
+      resultValue = runtimeEvent.result
+    }
+    const runtimeError = runtimeEvent.error && typeof runtimeEvent.error === 'object'
+      ? runtimeEvent.error
+      : null
+    const hadContractViolation = runtimeEventType === 'agent_error'
+      && String(metadata.code ?? '').trim().toUpperCase() === 'AGENT_RETURN_CONTRACT_VIOLATION'
+    const actualText = runtimeEventType === 'tool_error'
+      ? String(runtimeError?.message ?? metadata.message ?? '').trim()
+      : String(metadata.output ?? '').trim()
+    const violation = hadContractViolation
+      ? {
+          type: String(metadata.code ?? 'AGENT_RETURN_CONTRACT_VIOLATION'),
+          message: String(metadata.message ?? ''),
+          actual: String(metadata.output ?? ''),
+        }
+      : null
+
+    const replayPayload = (targetKind === 'agent' || targetKind === 'model') && requestMetadata
+      ? buildCallInspectorReplayPayload({
+          workspaceDir,
+          targetKind,
+          mode: 'call',
+          agentName: targetKind === 'agent' ? target : '',
+          modelName: targetKind === 'model' ? target : '',
+          prompt: String(requestMetadata.prompt ?? ''),
+          instructions: String(requestMetadata.instructions ?? ''),
+          normalizedMessages: Array.isArray(requestMetadata.messages)
+            ? requestMetadata.messages
+              .map((entry) => {
+                if (!entry || typeof entry !== 'object') return null
+                const role = String(entry.role ?? '').trim()
+                const content = String(entry.content ?? '').trim()
+                if (!role || !content) return null
+                return { role, content }
+              })
+              .filter(Boolean)
+            : [],
+          validateMode: String(requestMetadata.validate ?? 'coerce').trim().toLowerCase(),
+          retryOnViolation: Number.isInteger(Number(requestMetadata.retry_on_contract_violation))
+            ? Number(requestMetadata.retry_on_contract_violation)
+            : (Number.isInteger(Number(requestMetadata.retryLimit)) ? Number(requestMetadata.retryLimit) : 0),
+          returnsContract: Object.prototype.hasOwnProperty.call(requestMetadata, 'returns')
+            ? requestMetadata.returns
+            : null,
+          decideContract: Array.isArray(requestMetadata.decide) ? requestMetadata.decide : null,
+          toolsPolicy: requestMetadata.tools && typeof requestMetadata.tools === 'object'
+            ? requestMetadata.tools
+            : null,
+        })
+      : null
+
+    return {
+      schemaVersion: CALL_INSPECTOR_ARTIFACT_SCHEMA_VERSION,
+      callId: randomUUID(),
+      replayOf: null,
+      source: 'workflow',
+      createdAt: new Date().toISOString(),
+      workspaceDir,
+      runtimeEventType,
+      sourcePath: String(runtimeEvent.sourcePath ?? '').trim(),
+      sourceLine: Number.isFinite(Number(runtimeEvent.sourceLine)) ? Number(runtimeEvent.sourceLine) : null,
+      line: Number.isFinite(Number(runtimeEvent.line)) ? Number(runtimeEvent.line) : null,
+      statement: String(runtimeEvent.statement ?? '').trim(),
+      call: {
+        mode: 'call',
+        targetKind,
+        target,
+        validate: String(requestMetadata?.validate ?? 'coerce').trim() || 'coerce',
+        retry_on_contract_violation: Number.isInteger(Number(requestMetadata?.retry_on_contract_violation))
+          ? Number(requestMetadata.retry_on_contract_violation)
+          : (Number.isInteger(Number(requestMetadata?.retryLimit)) ? Number(requestMetadata.retryLimit) : 0),
+      },
+      resolvedCall,
+      result: {
+        actual: actualText,
+        value: resultValue,
+        hadContractViolation,
+        violation,
+      },
+      elapsedMs: Number.isFinite(Number(metadata.elapsedMs)) ? Math.max(0, Number(metadata.elapsedMs)) : 0,
+      ...(replayPayload ? { replayPayload } : {}),
+    }
+  }
+
+  function resolveReplayPayload(rawPayload) {
+    const payload = rawPayload && typeof rawPayload === 'object' && !Array.isArray(rawPayload)
+      ? { ...rawPayload }
+      : {}
+    const replayCallId = String(payload.callId ?? '').trim()
+    if (!replayCallId) {
+      return {
+        payload,
+        replayOf: null,
+      }
+    }
+
+    const sourceArtifact = getCallInspectorArtifact(replayCallId)
+    if (!sourceArtifact) {
+      throw new Error(`call inspector artifact not found for callId "${replayCallId}"`)
+    }
+
+    const storedReplayPayload = sourceArtifact?.replayPayload
+    if (!storedReplayPayload || typeof storedReplayPayload !== 'object' || Array.isArray(storedReplayPayload)) {
+      throw new Error(`call inspector artifact "${replayCallId}" is missing replay payload`)
+    }
+
+    const overrides = normalizeReplayOverrides(payload.overrides)
+    const replayPayload = {
+      ...storedReplayPayload,
+      ...overrides,
+    }
+
+    const directOverrideKeys = [
+      'workspaceDir',
+      'targetKind',
+      'mode',
+      'repeat',
+      'agent',
+      'model',
+      'prompt',
+      'promptParts',
+      'instructions',
+      'instructionParts',
+      'messages',
+      'returns',
+      'decide',
+      'validate',
+      'retry_on_contract_violation',
+      'tools',
+    ]
+    for (const key of directOverrideKeys) {
+      if (Object.prototype.hasOwnProperty.call(payload, key)) {
+        replayPayload[key] = payload[key]
+      }
+    }
+
+    return {
+      payload: replayPayload,
+      replayOf: replayCallId,
+    }
+  }
+
   async function callInspectorExecute(payload = {}) {
-    const targetKindRaw = String(payload?.targetKind ?? 'agent').trim().toLowerCase()
+    const replayContext = resolveReplayPayload(payload)
+    const resolvedPayload = replayContext.payload
+    const repeatCount = normalizeCallInspectorRepeat(resolvedPayload?.repeat)
+    const targetKindRaw = String(resolvedPayload?.targetKind ?? 'agent').trim().toLowerCase()
     const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
-    const modeRaw = String(payload?.mode ?? 'call').trim().toLowerCase()
+    const modeRaw = String(resolvedPayload?.mode ?? 'call').trim().toLowerCase()
     const mode = modeRaw === 'try' ? 'try' : 'call'
-    const agentName = String(payload?.agent ?? '').trim()
-    const modelName = String(payload?.model ?? '').trim()
-    const promptInput = extractComposedInput(payload, {
+    const agentName = String(resolvedPayload?.agent ?? '').trim()
+    const modelName = String(resolvedPayload?.model ?? '').trim()
+    const promptInput = extractComposedInput(resolvedPayload, {
       legacyKey: 'prompt',
       partsKey: 'promptParts',
       fieldName: 'prompt',
     })
-    const instructionsInput = extractComposedInput(payload, {
+    const instructionsInput = extractComposedInput(resolvedPayload, {
       legacyKey: 'instructions',
       partsKey: 'instructionParts',
       fieldName: 'instructions',
     })
     const prompt = promptInput.value
     const instructions = instructionsInput.value
-    const validateModeRaw = String(payload?.validate ?? '').trim().toLowerCase()
+    const validateModeRaw = String(resolvedPayload?.validate ?? '').trim().toLowerCase()
     const validateMode = ['strict', 'coerce', 'none'].includes(validateModeRaw) ? validateModeRaw : 'coerce'
-    const retryOnViolationRaw = Number(payload?.retry_on_contract_violation)
+    const retryOnViolationRaw = Number(resolvedPayload?.retry_on_contract_violation)
     const retryOnViolation = Number.isInteger(retryOnViolationRaw)
       ? Math.max(0, Math.min(8, retryOnViolationRaw))
       : 0
-    const toolsPolicy = normalizeCallInspectorToolsPolicy(payload?.tools)
+    const toolsPolicy = normalizeCallInspectorToolsPolicy(resolvedPayload?.tools)
 
     let returnsContract = null
-    if (payload && Object.prototype.hasOwnProperty.call(payload, 'returns')) {
-      const rawReturns = payload.returns
+    if (resolvedPayload && Object.prototype.hasOwnProperty.call(resolvedPayload, 'returns')) {
+      const rawReturns = resolvedPayload.returns
       if (typeof rawReturns === 'string') {
         const trimmed = rawReturns.trim()
         if (trimmed) {
@@ -574,8 +892,8 @@ export function createRuntimeCore({
     }
 
     let decideContract = null
-    if (payload && Object.prototype.hasOwnProperty.call(payload, 'decide')) {
-      const rawDecide = payload.decide
+    if (resolvedPayload && Object.prototype.hasOwnProperty.call(resolvedPayload, 'decide')) {
+      const rawDecide = resolvedPayload.decide
       if (Array.isArray(rawDecide)) {
         decideContract = rawDecide.map((value) => String(value ?? '').trim()).filter(Boolean)
       } else if (typeof rawDecide === 'string') {
@@ -589,8 +907,8 @@ export function createRuntimeCore({
       }
     }
 
-    const normalizedMessages = Array.isArray(payload?.messages)
-      ? payload.messages
+    const normalizedMessages = Array.isArray(resolvedPayload?.messages)
+      ? resolvedPayload.messages
         .map((entry) => {
           if (!entry || typeof entry !== 'object') return null
           const role = String(entry.role ?? '').trim()
@@ -619,7 +937,7 @@ export function createRuntimeCore({
     }
 
     const runtimeStatus = getStatus()
-    const rawWorkspaceDir = String(payload?.workspaceDir ?? runtimeStatus?.workspaceDir ?? '').trim()
+    const rawWorkspaceDir = String(resolvedPayload?.workspaceDir ?? runtimeStatus?.workspaceDir ?? '').trim()
     const workspaceDir = resolvers.resolveWorkspaceDirectory(rawWorkspaceDir)
     const workspaceConfig = resolvers.loadWorkspaceConfig(workspaceDir)
 
@@ -646,70 +964,62 @@ export function createRuntimeCore({
       toolRuntime,
     })
 
-    const startedAt = Date.now()
-    let callResult = null
-    let tryEnvelope = null
-    let tryError = null
-    try {
-      callResult = await hostAdapter.callAgent({
-        agent: targetKind === 'agent' ? agentName : '',
-        model: targetKind === 'model' ? modelName : '',
-        prompt,
-        instructions,
-        messages: normalizedMessages,
-        returns: returnsContract,
-        decide: decideContract,
-        tools: toolsPolicy,
-        validate: validateMode,
-        retry_on_contract_violation: retryOnViolation,
-        on_contract_violation: mode === 'try'
-          ? null
-          : {
+    const runOnce = async () => {
+      const startedAt = Date.now()
+      let callResult = null
+      let tryEnvelope = null
+      let tryError = null
+      try {
+        callResult = await hostAdapter.callAgent({
+          agent: targetKind === 'agent' ? agentName : '',
+          model: targetKind === 'model' ? modelName : '',
+          prompt,
+          instructions,
+          messages: normalizedMessages,
+          returns: returnsContract,
+          decide: decideContract,
+          tools: toolsPolicy,
+          validate: validateMode,
+          retry_on_contract_violation: retryOnViolation,
+          on_contract_violation: mode === 'try'
+            ? null
+            : {
+              source: 'call-inspector',
+              mode: 'report',
+            },
+          state: {},
+          locals: {},
+          event: {
+            type: 'call_inspector.execute',
             source: 'call-inspector',
-            mode: 'report',
+            value: renderComposedTextPreview(promptInput.parts),
+            payload: {},
           },
-        state: {},
-        locals: {},
-        event: {
-          type: 'call_inspector.execute',
-          source: 'call-inspector',
-          value: renderComposedTextPreview(promptInput.parts),
-          payload: {},
-        },
-      })
-    } catch (err) {
-      if (mode !== 'try') throw err
-      tryError = err
-      tryEnvelope = toCallInspectorTryFailureEnvelope(err)
-    }
-
-    const normalizedCallResult = normalizeCallInspectorCallResult(callResult)
-    if (mode === 'try' && tryEnvelope == null) {
-      tryEnvelope = {
-        ok: true,
-        value: normalizedCallResult?.value ?? null,
+        })
+      } catch (err) {
+        if (mode !== 'try') throw err
+        tryError = err
+        tryEnvelope = toCallInspectorTryFailureEnvelope(err)
       }
-    }
 
-    const isViolation = mode === 'call' && callResult && callResult.__nextv_contract_violation__ === true
-    const requestMetadata = normalizedCallResult?.metadata?.request ?? tryError?.requestMetadata ?? null
-    const outputTextRaw = String(normalizedCallResult?.outputText ?? '').trim()
-    const violationActualRaw = String(callResult?.violation?.actual ?? '').trim()
-    const tryOutputRaw = String(tryEnvelope?.error?.output ?? '').trim()
-    const outputText = outputTextRaw || violationActualRaw || tryOutputRaw
-    const hadTryContractViolation = mode === 'try'
-      && tryEnvelope?.ok === false
-      && String(tryEnvelope?.error?.type ?? '').trim().toLowerCase() === 'agent_return_contract_violation'
-    return {
-      call: {
-        mode,
-        targetKind,
-        target: targetKind === 'agent' ? agentName : modelName,
-        validate: validateMode,
-        retry_on_contract_violation: retryOnViolation,
-        ...(toolsPolicy && typeof toolsPolicy === 'object' ? { tools: toolsPolicy } : {}),
-      },
-      resolvedCall: buildResolvedCallSummary({
+      const normalizedCallResult = normalizeCallInspectorCallResult(callResult)
+      if (mode === 'try' && tryEnvelope == null) {
+        tryEnvelope = {
+          ok: true,
+          value: normalizedCallResult?.value ?? null,
+        }
+      }
+
+      const isViolation = mode === 'call' && callResult && callResult.__nextv_contract_violation__ === true
+      const requestMetadata = normalizedCallResult?.metadata?.request ?? tryError?.requestMetadata ?? null
+      const outputTextRaw = String(normalizedCallResult?.outputText ?? '').trim()
+      const violationActualRaw = String(callResult?.violation?.actual ?? '').trim()
+      const tryOutputRaw = String(tryEnvelope?.error?.output ?? '').trim()
+      const outputText = outputTextRaw || violationActualRaw || tryOutputRaw
+      const hadTryContractViolation = mode === 'try'
+        && tryEnvelope?.ok === false
+        && String(tryEnvelope?.error?.type ?? '').trim().toLowerCase() === 'agent_return_contract_violation'
+      const resolvedCall = buildResolvedCallSummary({
         targetKind,
         target: targetKind === 'agent' ? agentName : modelName,
         prompt: renderComposedTextPreview(promptInput.parts),
@@ -720,8 +1030,8 @@ export function createRuntimeCore({
         decideContract,
         toolsPolicy,
         requestMetadata,
-      }),
-      result: {
+      })
+      const result = {
         actual: outputText,
         output: outputText,
         parsed: mode === 'try'
@@ -741,10 +1051,139 @@ export function createRuntimeCore({
             : null)
           : (isViolation ? (callResult?.violation ?? null) : null),
         hadContractViolation: mode === 'try' ? hadTryContractViolation : isViolation,
-      },
-      elapsedMs: Math.max(0, Date.now() - startedAt),
+      }
+      const artifact = {
+        schemaVersion: CALL_INSPECTOR_ARTIFACT_SCHEMA_VERSION,
+        callId: randomUUID(),
+        replayOf: replayContext.replayOf,
+        source: replayContext.replayOf ? 'replay' : 'inspector',
+        createdAt: new Date().toISOString(),
+        workspaceDir: workspaceDir.relativePath,
+        call: {
+          mode,
+          targetKind,
+          target: targetKind === 'agent' ? agentName : modelName,
+          validate: validateMode,
+          retry_on_contract_violation: retryOnViolation,
+          ...(toolsPolicy && typeof toolsPolicy === 'object' ? { tools: toolsPolicy } : {}),
+        },
+        resolvedCall,
+        result: {
+          actual: result.actual,
+          value: result.value,
+          hadContractViolation: result.hadContractViolation,
+          violation: result.violation,
+        },
+        elapsedMs: Math.max(0, Date.now() - startedAt),
+        replayPayload: buildCallInspectorReplayPayload({
+          workspaceDir: workspaceDir.relativePath,
+          targetKind,
+          mode,
+          agentName,
+          modelName,
+          prompt,
+          instructions,
+          normalizedMessages,
+          validateMode,
+          retryOnViolation,
+          returnsContract,
+          decideContract,
+          toolsPolicy,
+        }),
+      }
+      storeCallInspectorArtifact(artifact)
+      eventBus.publish('call_inspector_artifact', artifact)
+
+      return {
+        call: {
+          mode,
+          targetKind,
+          target: targetKind === 'agent' ? agentName : modelName,
+          validate: validateMode,
+          retry_on_contract_violation: retryOnViolation,
+          ...(toolsPolicy && typeof toolsPolicy === 'object' ? { tools: toolsPolicy } : {}),
+        },
+        resolvedCall,
+        result,
+        elapsedMs: artifact.elapsedMs,
+        artifact,
+      }
+    }
+
+    if (repeatCount === 1) {
+      return await runOnce()
+    }
+
+    const runs = []
+    for (let index = 0; index < repeatCount; index += 1) {
+      try {
+        const run = await runOnce()
+        runs.push({
+          index: index + 1,
+          ok: true,
+          ...run,
+        })
+      } catch (err) {
+        runs.push({
+          index: index + 1,
+          ok: false,
+          elapsedMs: 0,
+          error: {
+            code: String(err?.code ?? '').trim() || 'runtime_error',
+            message: String(err?.message ?? err),
+          },
+        })
+      }
+    }
+
+    const firstRun = runs[0] ?? null
+    if (!firstRun) {
+      throw new Error('repeat execution produced no runs')
+    }
+
+    const aggregate = buildCallInspectorAggregate(runs)
+
+    if (firstRun.ok !== true) {
+      return {
+        call: {
+          mode,
+          targetKind,
+          target: targetKind === 'agent' ? agentName : modelName,
+          validate: validateMode,
+          retry_on_contract_violation: retryOnViolation,
+          ...(toolsPolicy && typeof toolsPolicy === 'object' ? { tools: toolsPolicy } : {}),
+        },
+        resolvedCall: null,
+        result: {
+          actual: '',
+          output: '',
+          parsed: null,
+          value: null,
+          metadata: null,
+          violation: null,
+          hadContractViolation: false,
+        },
+        elapsedMs: 0,
+        artifact: null,
+        runs,
+        aggregate,
+      }
+    }
+
+    return {
+      ...firstRun,
+      runs,
+      aggregate,
     }
   }
+
+  eventBus.subscribe((eventName, payload) => {
+    if (eventName !== 'nextv_runtime_event') return
+    const artifact = buildWorkflowCallInspectorArtifact(payload)
+    if (!artifact) return
+    storeCallInspectorArtifact(artifact)
+    eventBus.publish('call_inspector_artifact', artifact)
+  })
 
   function getSnapshot() {
     return runtimeController.getSnapshot()
@@ -793,6 +1232,8 @@ export function createRuntimeCore({
     getDefinitionFiles,
     getGraph,
     callInspectorExecute,
+    getCallInspectorArtifact,
+    listCallInspectorArtifacts,
     getSnapshot,
     attachSurface,
     shutdown,

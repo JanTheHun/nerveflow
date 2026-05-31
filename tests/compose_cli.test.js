@@ -1562,7 +1562,7 @@ test('nerve-compose add semantic-surface scaffolds host modules, config, and sur
     assert.equal(capabilityServer.includes('getSemanticSurfaceSnapshot'), true)
 
     const surfaceApp = await readFile(path.join(workspaceRoot, 'semantic-surface', 'public', 'app.js'), 'utf8')
-    assert.equal(surfaceApp.includes("fetch('./api/interactions'"), true)
+    assert.equal(surfaceApp.includes('/api/semantic-surface/ws'), true)
 
     const surfacePackage = await readFile(path.join(workspaceRoot, 'semantic-surface', 'package.json'), 'utf8')
     assert.equal(JSON.parse(surfacePackage).type, 'module')

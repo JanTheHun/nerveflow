@@ -116,6 +116,19 @@ export function createComposableHost({
     hotSwapWatchers = []
   }
 
+  function getHotSwapDebounceDelay() {
+    return Math.max(50, Number(hotSwapDebounceMs) || 150)
+  }
+
+  function shouldRetryHotSwapReload(err) {
+    const message = String(err?.message ?? err)
+    return /ENOENT|Entrypoint file not found/i.test(message)
+  }
+
+  async function delayHotSwapReload(ms) {
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, ms))
+  }
+
   function resolveActiveHotSwapFiles() {
     if (!runtimeCore || !hotSwapWorkspaceAbsolutePath) return []
 
@@ -152,7 +165,7 @@ export function createComposableHost({
     hotSwapTimer = setTimeout(() => {
       hotSwapTimer = null
       void applyHotSwap()
-    }, Math.max(50, Number(hotSwapDebounceMs) || 150))
+    }, getHotSwapDebounceDelay())
   }
 
   async function applyHotSwap() {
@@ -171,7 +184,20 @@ export function createComposableHost({
         .map((filePath) => relative(resolvedRepoRoot, filePath).replace(/\\/g, '/') || filePath)
         .join(', ')
       logHotSwap(`applying strict reload${changed ? ` for ${changed}` : ''}`)
-      const result = runtimeCore.reloadConfig()
+      let result = null
+      const maxAttempts = 4
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+          result = runtimeCore.reloadConfig()
+          break
+        } catch (err) {
+          if (!shouldRetryHotSwapReload(err) || attempt >= maxAttempts || !runtimeCore?.isActive()) {
+            throw err
+          }
+          logHotSwap(`reload retry ${attempt}/${maxAttempts - 1} after transient error: ${String(err?.message ?? err)}`)
+          await delayHotSwapReload(getHotSwapDebounceDelay())
+        }
+      }
       configureHotSwapWatchers()
       logHotSwap(`applied entrypoint=${result.entrypointPath} definition=${result.activeDefinitionId}`)
     } catch (err) {
@@ -184,7 +210,7 @@ export function createComposableHost({
         hotSwapTimer = setTimeout(() => {
           hotSwapTimer = null
           void applyHotSwap()
-        }, Math.max(50, Number(hotSwapDebounceMs) || 150))
+        }, getHotSwapDebounceDelay())
       }
     }
   }
@@ -195,16 +221,29 @@ export function createComposableHost({
 
     const filesToWatch = resolveActiveHotSwapFiles()
     for (const filePath of filesToWatch) {
-      const directoryPath = dirname(filePath)
-      const fileName = basename(filePath)
       try {
-        const watcher = watch(directoryPath, (eventType, rawFileName) => {
-          const changedName = String(rawFileName ?? '').trim()
-          if (changedName && changedName !== fileName) return
+        const watcher = watch(filePath, (eventType) => {
           scheduleHotSwap(filePath, eventType)
         })
+        if (typeof watcher?.on === 'function') {
+          watcher.on('error', () => {})
+        }
         hotSwapWatchers.push(watcher)
-      } catch {}
+      } catch {
+        const directoryPath = dirname(filePath)
+        const fileName = basename(filePath)
+        try {
+          const watcher = watch(directoryPath, (eventType, rawFileName) => {
+            const changedName = String(rawFileName ?? '').trim()
+            if (changedName && changedName !== fileName) return
+            scheduleHotSwap(filePath, eventType)
+          })
+          if (typeof watcher?.on === 'function') {
+            watcher.on('error', () => {})
+          }
+          hotSwapWatchers.push(watcher)
+        } catch {}
+      }
     }
 
     logHotSwap(`watching ${filesToWatch.length} file(s)`)

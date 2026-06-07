@@ -129,6 +129,34 @@ export function createComposableHost({
     await new Promise((resolveDelay) => setTimeout(resolveDelay, ms))
   }
 
+  function normalizeHotSwapSourceToPath(sourceValue) {
+    const raw = String(sourceValue ?? '').trim()
+    if (!raw || raw.startsWith('(')) return ''
+    const sourcePath = raw.split('#')[0].trim()
+    if (!sourcePath || sourcePath.startsWith('(')) return ''
+    return isAbsolute(sourcePath) ? sourcePath : resolve(resolvedRepoRoot, sourcePath)
+  }
+
+  function resolveActiveHotSwapConfigFiles() {
+    const workspaceConfig = typeof runtimeCore?.getWorkspaceConfig === 'function'
+      ? runtimeCore.getWorkspaceConfig()
+      : null
+    if (!workspaceConfig || typeof workspaceConfig !== 'object') return []
+
+    const files = []
+    for (const sourceValue of [
+      workspaceConfig?.models?.source,
+      workspaceConfig?.agents?.source,
+      workspaceConfig?.transports?.source,
+    ]) {
+      const filePath = normalizeHotSwapSourceToPath(sourceValue)
+      if (filePath) {
+        files.push(filePath)
+      }
+    }
+    return files
+  }
+
   function resolveActiveHotSwapFiles() {
     if (!runtimeCore || !hotSwapWorkspaceAbsolutePath) return []
 
@@ -151,6 +179,8 @@ export function createComposableHost({
     if (entrypointPath) {
       files.push(resolve(resolvedRepoRoot, entrypointPath))
     }
+
+    files.push(...resolveActiveHotSwapConfigFiles())
 
     return [...new Set(files)]
   }

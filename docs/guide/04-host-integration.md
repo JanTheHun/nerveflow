@@ -387,6 +387,8 @@ The same payload also supports structured composed text fields:
 
 `prompt` and `promptParts` are mutually exclusive in the same payload. `instructions` and `instructionParts` are also mutually exclusive.
 
+For DSL-level behavior when both `messages` and `prompt` are present in an `agent()` or `model()` call, see `docs/guide/03-language-reference.md` (Agent/Model integration calls).
+
 Composed input example:
 
 ```json

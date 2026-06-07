@@ -166,6 +166,8 @@ state.conversation = state.conversation + [
 output text reply
 ```
 
+This explicit history pattern keeps message construction visible in workflow code. If you provide both `messages` and `prompt` in one call, runtime appends `prompt` as the final user message after `messages`.
+
 **Remember:** swap `llama3.2:latest` in the workflow to match your chosen model label from above.
 
 Expected behavior:

@@ -114,6 +114,9 @@ const MEMORY_SPA_TEMPLATE_IMPORT_PATH = '../../src/host_modules/public/index.js'
 const DOCS_PROFILE_MINIMAL = 'minimal'
 const DOCS_PROFILE_AI = 'ai'
 const VALID_DOCS_PROFILES = new Set([DOCS_PROFILE_MINIMAL, DOCS_PROFILE_AI])
+const DEFAULT_VSCODE_RUNTIME_ENDPOINT = 'ws://127.0.0.1:4190/api/runtime/ws'
+const VSCODE_RUNTIME_SURFACE_EXTENSION_ID = 'nerveflow-local.nerveflow-vscode-runtime-surface'
+const VSCODE_RUNTIME_SURFACE_PROMPT = 'Do you want to use Nerveflow Surface in VS Code?'
 const AI_INSTRUCTIONS_BEGIN_MARKER = '<!-- BEGIN NERVEFLOW AI INSTRUCTIONS -->'
 const AI_INSTRUCTIONS_END_MARKER = '<!-- END NERVEFLOW AI INSTRUCTIONS -->'
 const ECOSYSTEM_FEEDBACK_BEGIN_MARKER = '## NERVEFLOW ECOSYSTEM FEEDBACK SUGGESTIONS'
@@ -649,7 +652,7 @@ function parseCliOptions(argv) {
   const [subcommandRaw, ...rest] = argv
   const subcommand = String(subcommandRaw ?? '').trim().toLowerCase()
   if (!subcommand) {
-    throw new Error('Usage: nerve-compose <modules|doctor|validate|add|init> [workspaceDir] [--json] [--builtin-only] [--strict]; add docs <minimal|ai> [workspaceDir]; add mcp [workspaceDir] [--inline]; add memory-pgvector [workspaceDir] [--blank]; add memory-spa [workspaceDir]; add semantic-surface [workspaceDir]; add host <composable> [workspaceDir]')
+    throw new Error('Usage: nerve-compose <modules|doctor|validate|add|init> [workspaceDir] [--json] [--builtin-only] [--strict]; add docs <minimal|ai> [workspaceDir]; add mcp [workspaceDir] [--inline]; add memory-pgvector [workspaceDir] [--blank]; add memory-spa [workspaceDir]; add semantic-surface [workspaceDir]; add vscode-surface [workspaceDir] [--with-vscode-surface]; add host <composable> [workspaceDir]')
   }
 
   const options = {
@@ -661,6 +664,7 @@ function parseCliOptions(argv) {
     withAgentInstructions: false,
     noPrompts: false,
     instructionsOnly: false,
+    withVscodeSurface: false,
     blank: false,
     modelTransport: '',
     workspaceDir: null,
@@ -695,6 +699,11 @@ function parseCliOptions(argv) {
 
     if (token === '--with-agent-instructions') {
       options.withAgentInstructions = true
+      continue
+    }
+
+    if (token === '--with-vscode-surface') {
+      options.withVscodeSurface = true
       continue
     }
 
@@ -844,10 +853,17 @@ function parseCliOptions(argv) {
   }
 
   if (
-    (options.withAgentInstructions || options.noPrompts || options.instructionsOnly)
+    (options.withAgentInstructions || options.instructionsOnly)
     && !(options.subcommand === 'add' && options.capability === 'docs' && options.docsProfile === DOCS_PROFILE_AI)
   ) {
-    throw new Error('--with-agent-instructions, --no-prompts, and --instructions-only are only valid for add docs ai')
+    throw new Error('--with-agent-instructions and --instructions-only are only valid for add docs ai')
+  }
+
+  if (
+    options.withVscodeSurface
+    && !(options.subcommand === 'init' || (options.subcommand === 'add' && options.capability === 'vscode-surface'))
+  ) {
+    throw new Error('--with-vscode-surface is only valid for init or add vscode-surface')
   }
 
   return options
@@ -942,6 +958,7 @@ async function runInitCommand(options) {
   const nerveConfigPath = path.join(workspaceDir, 'nerve.json')
   const nextvConfigPath = path.join(workspaceDir, 'nextv.json')
   const fileResults = []
+  const includeVscodeSurface = await shouldScaffoldVscodeRuntimeSurface(options)
 
   let entrypointPath = 'workflow.nrv'
   const hasNerveConfig = existsSync(nerveConfigPath)
@@ -986,6 +1003,10 @@ async function runInitCommand(options) {
       writeFileSync(baselineStatePath, buildInitBaselineStateSource(), 'utf8')
       fileResults.push({ action: 'created', path: baselineStatePath })
     }
+  }
+
+  if (includeVscodeSurface) {
+    fileResults.push(...scaffoldVscodeRuntimeSurface(workspaceDir))
   }
 
   const relativeFileResults = fileResults.map((result) => ({
@@ -2135,6 +2156,11 @@ function isCiEnvironment() {
 }
 
 function canUseInteractivePrompt() {
+  const forcedPrompts = String(process.env.NERVEFLOW_CLI_FORCE_PROMPTS ?? '').trim().toLowerCase()
+  if (forcedPrompts === '1' || forcedPrompts === 'true' || forcedPrompts === 'yes') {
+    return true
+  }
+
   return Boolean(process.stdin?.isTTY && process.stdout?.isTTY && !isCiEnvironment())
 }
 
@@ -2356,6 +2382,13 @@ async function shouldIncludeEcosystemFeedbackSuggestions(options) {
   return promptYesNo(ECOSYSTEM_FEEDBACK_PROMPT)
 }
 
+async function shouldScaffoldVscodeRuntimeSurface(options) {
+  if (options.withVscodeSurface) return true
+  if (options.noPrompts) return false
+  if (!canUseInteractivePrompt()) return false
+  return promptYesNo(VSCODE_RUNTIME_SURFACE_PROMPT)
+}
+
 function addDocsByProfile(workspaceDir, profile, options = {}) {
   const includeEcosystemFeedback = options.includeEcosystemFeedback === true
   const docsRoot = path.join(workspaceDir, 'docs')
@@ -2406,6 +2439,82 @@ function addDocsByProfile(workspaceDir, profile, options = {}) {
     path: docsRoot,
     message: `unsupported docs profile: ${profile}`,
   }]
+}
+
+function upsertVscodeExtensionsJson(workspaceDir) {
+  const filePath = path.join(workspaceDir, '.vscode', 'extensions.json')
+  const existing = readJsonObjectFile(filePath)
+
+  if (!existing.exists) {
+    ensureParentDir(filePath)
+    writeFileSync(filePath, `${JSON.stringify({ recommendations: [VSCODE_RUNTIME_SURFACE_EXTENSION_ID] }, null, 2)}\n`, 'utf8')
+    return { action: 'created', path: filePath }
+  }
+
+  if (existing.error) {
+    return {
+      action: 'skipped_manual_merge',
+      path: filePath,
+      message: '.vscode/extensions.json must be an object; Nerveflow Surface recommendation not added',
+    }
+  }
+
+  const recommendations = existing.parsed.recommendations
+  if (recommendations != null && !Array.isArray(recommendations)) {
+    return {
+      action: 'skipped_manual_merge',
+      path: filePath,
+      message: '.vscode/extensions.json recommendations must be an array; Nerveflow Surface recommendation not added',
+    }
+  }
+
+  const nextRecommendations = Array.isArray(recommendations) ? [...recommendations] : []
+  if (!nextRecommendations.includes(VSCODE_RUNTIME_SURFACE_EXTENSION_ID)) {
+    nextRecommendations.push(VSCODE_RUNTIME_SURFACE_EXTENSION_ID)
+  }
+
+  const nextValue = { ...existing.parsed, recommendations: nextRecommendations }
+  if (JSON.stringify(nextValue) === JSON.stringify(existing.parsed)) {
+    return { action: 'unchanged', path: filePath }
+  }
+
+  writeFileSync(filePath, `${JSON.stringify(nextValue, null, 2)}\n`, 'utf8')
+  return { action: 'updated', path: filePath }
+}
+
+function upsertVscodeSettingsJson(workspaceDir) {
+  const filePath = path.join(workspaceDir, '.vscode', 'settings.json')
+  const existing = readJsonObjectFile(filePath)
+
+  if (!existing.exists) {
+    ensureParentDir(filePath)
+    writeFileSync(filePath, `${JSON.stringify({ 'nerveflow.runtimeEndpoint': DEFAULT_VSCODE_RUNTIME_ENDPOINT }, null, 2)}\n`, 'utf8')
+    return { action: 'created', path: filePath }
+  }
+
+  if (existing.error) {
+    return {
+      action: 'skipped_manual_merge',
+      path: filePath,
+      message: '.vscode/settings.json must be an object; Nerveflow Surface setting not added',
+    }
+  }
+
+  const nextValue = { ...existing.parsed }
+  if (nextValue['nerveflow.runtimeEndpoint'] === DEFAULT_VSCODE_RUNTIME_ENDPOINT) {
+    return { action: 'unchanged', path: filePath }
+  }
+
+  nextValue['nerveflow.runtimeEndpoint'] = DEFAULT_VSCODE_RUNTIME_ENDPOINT
+  writeFileSync(filePath, `${JSON.stringify(nextValue, null, 2)}\n`, 'utf8')
+  return { action: 'updated', path: filePath }
+}
+
+function scaffoldVscodeRuntimeSurface(workspaceDir) {
+  return [
+    upsertVscodeExtensionsJson(workspaceDir),
+    upsertVscodeSettingsJson(workspaceDir),
+  ]
 }
 
 function buildAddPayload({ capability, workspaceDir, fileResults }) {
@@ -2550,6 +2659,9 @@ async function runAddCommand(options) {
       upsertNextVSemanticSurfaceCapabilityConfig(workspaceDir),
       scaffoldSemanticSurface(workspaceDir),
     ]
+  } else if (options.capability === 'vscode-surface') {
+    const includeVscodeSurface = await shouldScaffoldVscodeRuntimeSurface(options)
+    fileResults = includeVscodeSurface ? scaffoldVscodeRuntimeSurface(workspaceDir) : []
   } else if (options.capability === 'mcp') {
     const serverName = 'local-mcp'
     const serverRelativePath = './capabilities/mcp/servers/local-mcp.mjs'

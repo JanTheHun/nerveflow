@@ -198,6 +198,24 @@ summary = model(
 
 Invalid composed-input shapes raise `INVALID_AGENT_ARGUMENT`.
 
+When both `messages` and `prompt` are provided in the same `agent()` or `model()` call, runtime normalizes them into a single outbound chat sequence:
+
+1. system instructions (if any)
+2. provided `messages` entries in order
+3. `prompt` appended as the final `{ role: "user", content: ... }` turn
+
+This lets you pass prior conversation history with `messages` and still add a current user turn via `prompt`.
+
+Example:
+
+```
+reply = agent(
+  "chat",
+  messages=state.conversation,
+  prompt="what should I do next?"
+)
+```
+
 `returns` accepts a JSON-like object or array contract template for structured agent output. When present, NerveFlow treats the call as JSON output mode and validates the parsed output against the contract.
 
 `decide` is scalar bounded-decision shorthand. It accepts an array of string options and returns a single string value constrained to that set.
@@ -565,6 +583,12 @@ Host-owned responsibilities include:
 - nested script execution (`callScript`)
 - operator path resolution (`resolveOperatorPath`)
 - input/event transport and persistence strategy
+
+Studio call inspector timeout note:
+
+- `tools timeout ms` limits governed tool execution inside the runtime
+- `command timeout ms` limits how long Studio waits for a remote call-inspector command response
+- `command timeout ms` is a host/UI setting and does not change language or runtime semantics
 
 Agent metadata note:
 

@@ -2,13 +2,72 @@
 import { randomUUID } from 'node:crypto'
 import WebSocket from 'ws'
 
+function parseHistoryQueryArgs(rest) {
+  const hasFlagTokens = rest.some((token) => String(token ?? '').trim().startsWith('--'))
+  if (!hasFlagTokens) {
+    const limitRaw = String(rest[0] ?? '').trim()
+    const targetKind = String(rest[1] ?? '').trim()
+    const source = String(rest[2] ?? '').trim()
+    const createdAfter = String(rest[3] ?? '').trim()
+    const createdBefore = String(rest[4] ?? '').trim()
+    return { limitRaw, targetKind, source, createdAfter, createdBefore }
+  }
+
+  const parsed = {
+    limitRaw: '',
+    targetKind: '',
+    source: '',
+    createdAfter: '',
+    createdBefore: '',
+  }
+  const seenFlags = new Set()
+
+  for (let index = 0; index < rest.length; index += 1) {
+    const token = String(rest[index] ?? '').trim()
+    if (!token) continue
+    if (!token.startsWith('--')) {
+      throw new Error('history-query does not allow positional args when flags are used')
+    }
+
+    const eqIndex = token.indexOf('=')
+    const rawFlag = eqIndex >= 0 ? token.slice(2, eqIndex) : token.slice(2)
+    const flag = String(rawFlag ?? '').trim()
+    const validFlags = new Set(['limit', 'targetKind', 'source', 'createdAfter', 'createdBefore'])
+    if (!validFlags.has(flag)) {
+      throw new Error(`history-query received unknown flag --${flag}`)
+    }
+    if (seenFlags.has(flag)) {
+      throw new Error(`history-query received duplicate flag --${flag}`)
+    }
+
+    let value = eqIndex >= 0 ? token.slice(eqIndex + 1).trim() : ''
+    if (!value) {
+      const nextToken = String(rest[index + 1] ?? '').trim()
+      if (!nextToken || nextToken.startsWith('--')) {
+        throw new Error(`history-query flag --${flag} requires a value`)
+      }
+      value = nextToken
+      index += 1
+    }
+
+    seenFlags.add(flag)
+    if (flag === 'limit') parsed.limitRaw = value
+    else if (flag === 'targetKind') parsed.targetKind = value
+    else if (flag === 'source') parsed.source = value
+    else if (flag === 'createdAfter') parsed.createdAfter = value
+    else if (flag === 'createdBefore') parsed.createdBefore = value
+  }
+
+  return parsed
+}
+
 function parseCliOptions(argv) {
   const [url, command, ...rest] = argv
   const wsUrl = String(url ?? '').trim()
   const cmd = String(command ?? '').trim().toLowerCase()
 
   if (!wsUrl || !cmd) {
-    throw new Error('Usage: nerve-attach <wsUrl> <snapshot|stop|enqueue|ingress|start|listen> [args]')
+    throw new Error('Usage: nerve-attach <wsUrl> <snapshot|stop|enqueue|ingress|start|listen|history-query|history-get|history-rerun> [args]')
   }
 
   const options = {
@@ -42,6 +101,65 @@ function parseCliOptions(argv) {
     options.commandType = 'stop'
   } else if (cmd === 'listen') {
     options.commandType = 'subscribe'
+  } else if (cmd === 'history-query' || cmd === 'history_query') {
+    const {
+      limitRaw,
+      targetKind,
+      source,
+      createdAfter,
+      createdBefore,
+    } = parseHistoryQueryArgs(rest)
+    options.commandType = 'history_query'
+    if (limitRaw) {
+      const parsedLimit = Number(limitRaw)
+      if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) {
+        throw new Error('history-query [limit] requires a positive integer when provided')
+      }
+      options.commandPayload.limit = parsedLimit
+    }
+    if (targetKind) {
+      options.commandPayload.targetKind = targetKind
+    }
+    if (source) {
+      options.commandPayload.source = source
+    }
+    if (createdAfter) {
+      const parsedAfter = Date.parse(createdAfter)
+      if (!Number.isFinite(parsedAfter)) {
+        throw new Error('history-query [createdAfter] must be an ISO-8601 datetime when provided')
+      }
+      options.commandPayload.createdAfter = createdAfter
+    }
+    if (createdBefore) {
+      const parsedBefore = Date.parse(createdBefore)
+      if (!Number.isFinite(parsedBefore)) {
+        throw new Error('history-query [createdBefore] must be an ISO-8601 datetime when provided')
+      }
+      options.commandPayload.createdBefore = createdBefore
+    }
+  } else if (cmd === 'history-get' || cmd === 'history_get') {
+    const callId = String(rest[0] ?? '').trim()
+    if (!callId) throw new Error('history-get requires <callId>')
+    options.commandType = 'history_get'
+    options.commandPayload = { callId }
+  } else if (cmd === 'history-rerun' || cmd === 'history_rerun') {
+    const callId = String(rest[0] ?? '').trim()
+    const overridesJson = String(rest[1] ?? '').trim()
+    if (!callId) throw new Error('history-rerun requires <callId> [overridesJson]')
+    options.commandType = 'history_rerun'
+    options.commandPayload = { callId }
+    if (overridesJson) {
+      let overrides
+      try {
+        overrides = JSON.parse(overridesJson)
+      } catch {
+        throw new Error('history-rerun overridesJson must be valid JSON when provided')
+      }
+      if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) {
+        throw new Error('history-rerun overridesJson must be a JSON object when provided')
+      }
+      options.commandPayload.overrides = overrides
+    }
   } else {
     throw new Error(`Unknown command: ${cmd}`)
   }

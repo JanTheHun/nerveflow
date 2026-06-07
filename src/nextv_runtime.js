@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { dirname, resolve } from 'node:path'
 import { NEXTV_AGENT_OUTPUT_FORMATS, validateAgentReturnContract, normalizeAgentFormattedOutput, assertValidDecideOptions, validateDecideOutput } from './nextv_agent_output.js'
 import { compileAST } from './nextv_compiler.js'
@@ -2480,8 +2481,11 @@ function buildFunctions(options, runtimeContext) {
         runtimeUnavailable('AGENT_CALL_UNAVAILABLE', `agent("${agentName}") is not available in this runtime.`)
       }
 
+      const callId = randomUUID()
+
       await runtimeContext.emitEvent({
         type: 'agent_call',
+        callId,
         agent: agentName,
         line,
         statement,
@@ -2541,6 +2545,7 @@ function buildFunctions(options, runtimeContext) {
         }
         await runtimeContext.emitEvent({
           type: 'agent_error',
+          callId,
           agent: agentName,
           line,
           statement,
@@ -2578,6 +2583,7 @@ function buildFunctions(options, runtimeContext) {
 
       await runtimeContext.emitEvent({
         type: 'agent_result',
+        callId,
         agent: agentName,
         line,
         statement,
@@ -2741,8 +2747,11 @@ function buildFunctions(options, runtimeContext) {
         runtimeUnavailable('AGENT_CALL_UNAVAILABLE', `model("${modelName}") is not available in this runtime.`)
       }
 
+      const callId = randomUUID()
+
       await runtimeContext.emitEvent({
         type: 'agent_call',
+        callId,
         agent: `model:${modelName}`,
         line,
         statement,
@@ -2802,6 +2811,7 @@ function buildFunctions(options, runtimeContext) {
         }
         await runtimeContext.emitEvent({
           type: 'agent_error',
+          callId,
           agent: `model:${modelName}`,
           line,
           statement,
@@ -2839,6 +2849,7 @@ function buildFunctions(options, runtimeContext) {
 
       await runtimeContext.emitEvent({
         type: 'agent_result',
+        callId,
         agent: `model:${modelName}`,
         line,
         statement,

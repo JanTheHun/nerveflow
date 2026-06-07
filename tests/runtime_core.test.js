@@ -352,6 +352,10 @@ test('runtime core callInspectorExecute supports replay by callId with overrides
       mode: 'try',
       model: 'test-model',
       prompt: 'first prompt',
+      messages: [
+        { role: 'user', content: 'first prompt' },
+        { role: 'assistant', content: 'first answer' },
+      ],
     })
 
     const second = await runtime.callInspectorExecute({
@@ -362,10 +366,19 @@ test('runtime core callInspectorExecute supports replay by callId with overrides
       },
     })
 
-    assert.deepEqual(seenPrompts, ['first prompt', 'replayed prompt'])
+    assert.deepEqual(seenPrompts, ['first prompt', 'first prompt'])
     assert.equal(second.artifact?.source, 'replay')
     assert.equal(second.artifact?.replayOf, first.artifact.callId)
     assert.equal(second.call.target, 'test-model')
+    assert.equal(second.resolvedCall?.prompt, 'replayed prompt')
+    assert.equal(Array.isArray(second.resolvedCall?.finalMessages), true)
+    assert.equal(second.resolvedCall.finalMessages.length > 0, true)
+    assert.equal(
+      second.resolvedCall.finalMessages.some((entry) => String(entry?.content ?? '') === 'first prompt'),
+      true,
+    )
+    assert.equal(Array.isArray(second.artifact?.replayPayload?.messages), true)
+    assert.equal(second.artifact.replayPayload.messages.length > 0, true)
   } finally {
     if (previousModelResolution == null) {
       delete process.env.AGENT_MODEL_RESOLUTION
@@ -458,6 +471,49 @@ test('runtime core stores workflow artifacts from nextv_runtime_event including 
   assert.equal(workflowArtifact.call?.target, 'search')
 })
 
+test('runtime core workflow artifact preserves runtime callId and replay payload for model results', async () => {
+  const runtime = createRuntimeCore({
+    resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
+    callAgent: async () => 'ignored',
+  })
+
+  runtime.eventBus.publish('nextv_runtime_event', {
+    event: { source: 'workflow' },
+    runtimeEvent: {
+      type: 'agent_result',
+      callId: 'evt-call-123',
+      agent: 'model:test-model',
+      sourcePath: 'examples/mqtt-simple-host/workflow.nrv',
+      sourceLine: 22,
+      line: 22,
+      statement: 'reply = model("test-model", messages=state.conversation)',
+      metadata: {
+        output: 'hello',
+        request: {
+          prompt: 'hello prompt',
+          instructions: 'be concise',
+          messages: [
+            { role: 'user', content: 'hello prompt' },
+          ],
+          validate: 'coerce',
+          retry_on_contract_violation: 0,
+        },
+      },
+    },
+    snapshot: null,
+  })
+
+  const artifacts = runtime.listCallInspectorArtifacts({ limit: 10 })
+  const workflowArtifact = artifacts.find((entry) => String(entry?.callId ?? '') === 'evt-call-123')
+  assert.equal(Boolean(workflowArtifact), true)
+  assert.equal(workflowArtifact.callId, 'evt-call-123')
+  assert.equal(workflowArtifact.call?.targetKind, 'model')
+  assert.equal(workflowArtifact.call?.target, 'test-model')
+  assert.equal(workflowArtifact.replayPayload?.targetKind, 'model')
+  assert.equal(workflowArtifact.replayPayload?.model, 'test-model')
+  assert.equal(workflowArtifact.replayPayload?.prompt, 'hello prompt')
+})
+
 test('runtime core callInspectorExecute mode=try returns failure envelope on contract violation', async () => {
   const previousModelResolution = process.env.AGENT_MODEL_RESOLUTION
   process.env.AGENT_MODEL_RESOLUTION = 'legacy'
@@ -541,6 +597,88 @@ test('runtime core callInspectorExecute forwards governed tools policy', async (
     assert.deepEqual(response.call.tools.allow, ['search', 'fetch'])
     assert.equal(response.resolvedCall.tools.mode, 'governed')
     assert.deepEqual(response.resolvedCall.tools.allow, ['search', 'fetch'])
+  } finally {
+    if (previousModelResolution == null) {
+      delete process.env.AGENT_MODEL_RESOLUTION
+    } else {
+      process.env.AGENT_MODEL_RESOLUTION = previousModelResolution
+    }
+  }
+})
+
+test('runtime core callInspectorExecute includes governed tool trace in result and artifact', async () => {
+  const previousModelResolution = process.env.AGENT_MODEL_RESOLUTION
+  process.env.AGENT_MODEL_RESOLUTION = 'legacy'
+  let callCount = 0
+
+  const runtime = createRuntimeCore({
+    resolvers: createRuntimeResolvers({ repoRoot: REPO_ROOT }),
+    callAgent: async () => {
+      callCount += 1
+      if (callCount === 1) {
+        return {
+          value: null,
+          outputText: '',
+          metadata: {
+            toolCalls: [{ id: 'call-time-1', name: 'get_time', argumentsRaw: '{}' }],
+          },
+        }
+      }
+
+      return {
+        value: 'Tuesday',
+        outputText: 'Today is Tuesday.',
+        metadata: {
+          tools: {
+            mode: 'governed',
+            rounds: 2,
+            toolCalls: 1,
+            deniedToolCalls: 0,
+            toolsUsed: ['get_time'],
+          },
+          toolCalls: [],
+        },
+      }
+    },
+    toolRuntime: {
+      async call({ name }) {
+        if (name !== 'get_time') throw new Error('unexpected tool')
+        return { day: 'Tuesday' }
+      },
+    },
+  })
+
+  try {
+    const response = await runtime.callInspectorExecute({
+      workspaceDir: 'examples/mqtt-simple-host',
+      targetKind: 'model',
+      mode: 'call',
+      model: 'test-model',
+      prompt: 'what day is today?',
+      tools: {
+        mode: 'governed',
+        allow: ['get_time'],
+      },
+    })
+
+    assert.equal(Array.isArray(response.result.toolCalls), true)
+    assert.equal(Array.isArray(response.result.toolResults), true)
+    assert.equal(Array.isArray(response.result.toolErrors), true)
+    assert.equal(Array.isArray(response.result.toolEvents), true)
+    assert.equal(response.result.toolCalls.length > 0, true)
+    assert.equal(response.result.toolResults.length > 0, true)
+    assert.equal(response.result.toolCalls[0].tool, 'get_time')
+    assert.equal(response.result.toolResults[0].tool, 'get_time')
+    assert.equal(response.result.toolErrors.length, 0)
+
+    const historyItem = runtime.getCallInspectorArtifact(response.artifact.callId)
+    assert.equal(Boolean(historyItem), true)
+    assert.equal(Boolean(historyItem.result.metadata), true)
+    assert.equal(historyItem.result.metadata.tools?.mode, 'governed')
+    assert.equal(Array.isArray(historyItem.result.toolCalls), true)
+    assert.equal(Array.isArray(historyItem.result.toolResults), true)
+    assert.equal(historyItem.result.toolCalls.length > 0, true)
+    assert.equal(historyItem.result.toolResults.length > 0, true)
   } finally {
     if (previousModelResolution == null) {
       delete process.env.AGENT_MODEL_RESOLUTION

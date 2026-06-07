@@ -85,6 +85,49 @@ export function createRuntimeCommandRouter({
           throw new Error('call inspector execution is not available in this runtime host')
         }
         data = await runtimeCore.callInspectorExecute(payload)
+      } else if (command.type === 'history_query') {
+        if (typeof runtimeCore.queryCallInspectorHistory === 'function') {
+          data = runtimeCore.queryCallInspectorHistory(payload)
+        } else if (typeof runtimeCore.listCallInspectorArtifacts === 'function') {
+          data = {
+            artifacts: runtimeCore.listCallInspectorArtifacts({ limit: payload?.limit }),
+          }
+        } else {
+          throw new Error('call history query is not available in this runtime host')
+        }
+      } else if (command.type === 'history_get') {
+        const callId = String(payload?.callId ?? '').trim()
+        if (!callId) {
+          throw new Error('callId is required')
+        }
+
+        if (typeof runtimeCore.getCallInspectorHistoryItem === 'function') {
+          data = runtimeCore.getCallInspectorHistoryItem({ callId })
+        } else if (typeof runtimeCore.getCallInspectorArtifact === 'function') {
+          const artifact = runtimeCore.getCallInspectorArtifact(callId)
+          if (!artifact) {
+            throw new Error(`call inspector artifact not found for callId "${callId}"`)
+          }
+          data = { artifact }
+        } else {
+          throw new Error('call history lookup is not available in this runtime host')
+        }
+      } else if (command.type === 'history_rerun') {
+        if (typeof runtimeCore.rerunCallInspectorHistory === 'function') {
+          data = await runtimeCore.rerunCallInspectorHistory(payload)
+        } else if (typeof runtimeCore.callInspectorExecute === 'function') {
+          const callId = String(payload?.callId ?? '').trim()
+          if (!callId) {
+            throw new Error('callId is required')
+          }
+          const overrides = payload?.overrides
+          data = await runtimeCore.callInspectorExecute({
+            replayCallId: callId,
+            ...(overrides && typeof overrides === 'object' && !Array.isArray(overrides) ? overrides : {}),
+          })
+        } else {
+          throw new Error('call history rerun is not available in this runtime host')
+        }
       } else if (command.type === 'submit_candidate') {
         if (typeof runtimeCore.submitCandidate !== 'function') {
           throw new Error('candidate validation is not available in this runtime host')

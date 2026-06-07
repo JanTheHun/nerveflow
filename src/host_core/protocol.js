@@ -17,6 +17,9 @@
  * - enqueue_event: Feed input event to runtime
  * - dispatch_ingress: Dispatch ingress connector output into runtime queue
  * - call_inspector_execute: Execute a structured direct model/agent call
+ * - history_query: Query call history artifacts from the host capability store
+ * - history_get: Fetch one call history artifact by callId
+ * - history_rerun: Re-run a stored call history artifact by callId
  * - submit_candidate: Validate a candidate workflow/config without mutating active runtime
  * - promote_candidate: Apply a validated promotable candidate to the active runtime
  * - snapshot: Get current runtime state
@@ -58,6 +61,9 @@ const HOST_COMMAND_TYPES = Object.freeze([
   'enqueue_event',
   'dispatch_ingress',
   'call_inspector_execute',
+  'history_query',
+  'history_get',
+  'history_rerun',
   'submit_candidate',
   'promote_candidate',
   'snapshot',

@@ -6,13 +6,25 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 function runProcess(args, options = {}) {
   const cwd = options.cwd || process.cwd()
+  const scriptArgs = options.interactive
+  ? ['--input-type=module', '-e', ` 
+      const scriptPath = ${JSON.stringify(path.resolve(cwd, args[0]))}
+      Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true })
+      Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true })
+      process.argv = [process.argv[0], scriptPath, ...${JSON.stringify(args.slice(1))}]
+      await import(${JSON.stringify(pathToFileURL(path.resolve(cwd, args[0])).href)})
+    `]
+    : args
   return new Promise((resolveRun) => {
-    const child = spawn(process.execPath, args, {
+    const child = spawn(process.execPath, scriptArgs, {
       cwd,
-      env: { ...process.env },
+      env: options.interactive
+        ? { ...process.env, NERVEFLOW_CLI_FORCE_PROMPTS: 'true' }
+        : { ...process.env },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 
@@ -165,6 +177,40 @@ test('nerve-compose init does not overwrite existing workflow when nerve.json ex
 
     const workflowRaw = await readFile(path.join(workspaceRoot, 'workflow.nrv'), 'utf8')
     assert.equal(workflowRaw, existingWorkflow)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('nerve-compose init can opt into VS Code Surface scaffolding with a flag', async () => {
+  const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-vscode-surface-'))
+  const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')
+
+  try {
+    const result = await runProcess(['bin/nerve-compose.js', 'init', workspaceRelativePath, '--with-vscode-surface', '--json'])
+    assert.equal(result.code, 0)
+
+    const extensionsJson = JSON.parse(await readFile(path.join(workspaceRoot, '.vscode', 'extensions.json'), 'utf8'))
+    assert.equal(Array.isArray(extensionsJson.recommendations), true)
+    assert.equal(extensionsJson.recommendations.includes('nerveflow-local.nerveflow-vscode-runtime-surface'), true)
+
+    const settingsJson = JSON.parse(await readFile(path.join(workspaceRoot, '.vscode', 'settings.json'), 'utf8'))
+    assert.equal(settingsJson['nerveflow.runtimeEndpoint'], 'ws://127.0.0.1:4190/api/runtime/ws')
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('nerve-compose init with --no-prompts skips VS Code Surface scaffolding', async () => {
+  const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-vscode-surface-'))
+  const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')
+
+  try {
+    const result = await runProcess(['bin/nerve-compose.js', 'init', workspaceRelativePath, '--no-prompts', '--json'])
+    assert.equal(result.code, 0)
+
+    assert.equal(existsSync(path.join(workspaceRoot, '.vscode', 'extensions.json')), false)
+    assert.equal(existsSync(path.join(workspaceRoot, '.vscode', 'settings.json')), false)
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true })
   }
@@ -1158,9 +1204,32 @@ test('nerve-compose add docs ai-only flags are rejected for non-ai profile', asy
   const result = await runProcess(['bin/nerve-compose.js', 'add', 'docs', 'minimal', '--with-agent-instructions', '--json'])
   assert.equal(result.code, 2)
   assert.equal(
-    result.stderr.includes('--with-agent-instructions, --no-prompts, and --instructions-only are only valid for add docs ai'),
+    result.stderr.includes('--with-agent-instructions and --instructions-only are only valid for add docs ai'),
     true,
   )
+})
+
+test('nerve-compose add vscode-surface is idempotent on rerun', async () => {
+  const workspaceRoot = await mkdtemp(path.join(process.cwd(), '.tmp-compose-vscode-surface-'))
+  const workspaceRelativePath = path.relative(process.cwd(), workspaceRoot).replace(/\\/g, '/')
+
+  try {
+    const first = await runProcess(['bin/nerve-compose.js', 'add', 'vscode-surface', workspaceRelativePath, '--with-vscode-surface', '--json'])
+    assert.equal(first.code, 0)
+
+    const second = await runProcess(['bin/nerve-compose.js', 'add', 'vscode-surface', workspaceRelativePath, '--with-vscode-surface', '--json'])
+    assert.equal(second.code, 0)
+
+    const payload = JSON.parse(second.stdout)
+    const actions = payload.files.map((entry) => entry.action)
+    assert.equal(actions.every((action) => action === 'created' || action === 'updated' || action === 'unchanged' || action === 'skipped'), true)
+
+    const extensionsJson = JSON.parse(await readFile(path.join(workspaceRoot, '.vscode', 'extensions.json'), 'utf8'))
+    const extensionMatches = extensionsJson.recommendations.filter((entry) => entry === 'nerveflow-local.nerveflow-vscode-runtime-surface')
+    assert.equal(extensionMatches.length, 1)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
 })
 
 test('nerve-compose add memory-pgvector is idempotent on rerun', async () => {

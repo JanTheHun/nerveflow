@@ -66,6 +66,9 @@ For project workflows, these calls are the common boundaries:
 Detailed call semantics are defined in:
 - language-semantics-map.md
 
+Prompt and messages normalization behavior (including combined usage in the same call) is defined in:
+- ../guide/03-language-reference.md
+
 ## Quick rule of thumb
 
 If a model result can change what happens next, define that boundary structurally in workflow code and contracts.

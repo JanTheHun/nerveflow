@@ -233,6 +233,18 @@ result = agent(
 )
 ```
 
+Messages with prompt example:
+
+```nrv
+reply = agent(
+  "chat",
+  messages=state.conversation,
+  prompt="what should I do next?"
+)
+```
+
+When both are provided, `prompt` is appended as the final user message after the `messages` array.
+
 Enum field in returns:
 
 ```nrv

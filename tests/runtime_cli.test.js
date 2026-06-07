@@ -305,6 +305,97 @@ test('nerve-attach exits with usage error when arguments are missing', async () 
   assert.equal(result.stderr.includes('nerve-attach argument error'), true)
 })
 
+test('nerve-attach validates history command arguments', async () => {
+  const missingGet = await runProcess(['bin/nerve-attach.js', 'ws://127.0.0.1:4190/api/runtime/ws', 'history-get'])
+  assert.equal(missingGet.code, 1)
+  assert.equal(missingGet.stderr.includes('history-get requires <callId>'), true)
+
+  const missingRerun = await runProcess(['bin/nerve-attach.js', 'ws://127.0.0.1:4190/api/runtime/ws', 'history-rerun'])
+  assert.equal(missingRerun.code, 1)
+  assert.equal(missingRerun.stderr.includes('history-rerun requires <callId>'), true)
+
+  const badLimit = await runProcess(['bin/nerve-attach.js', 'ws://127.0.0.1:4190/api/runtime/ws', 'history-query', 'abc'])
+  assert.equal(badLimit.code, 1)
+  assert.equal(badLimit.stderr.includes('history-query [limit] requires a positive integer'), true)
+
+  const badCreatedAfter = await runProcess([
+    'bin/nerve-attach.js',
+    'ws://127.0.0.1:4190/api/runtime/ws',
+    'history-query',
+    '10',
+    'model',
+    'workflow',
+    'not-a-date',
+  ])
+  assert.equal(badCreatedAfter.code, 1)
+  assert.equal(badCreatedAfter.stderr.includes('history-query [createdAfter] must be an ISO-8601 datetime'), true)
+
+  const badCreatedBefore = await runProcess([
+    'bin/nerve-attach.js',
+    'ws://127.0.0.1:4190/api/runtime/ws',
+    'history-query',
+    '10',
+    'model',
+    'workflow',
+    '2026-01-01T00:00:00.000Z',
+    'not-a-date',
+  ])
+  assert.equal(badCreatedBefore.code, 1)
+  assert.equal(badCreatedBefore.stderr.includes('history-query [createdBefore] must be an ISO-8601 datetime'), true)
+
+  const unknownFlag = await runProcess([
+    'bin/nerve-attach.js',
+    'ws://127.0.0.1:4190/api/runtime/ws',
+    'history-query',
+    '--unknown',
+    'x',
+  ])
+  assert.equal(unknownFlag.code, 1)
+  assert.equal(unknownFlag.stderr.includes('history-query received unknown flag --unknown'), true)
+
+  const missingFlagValue = await runProcess([
+    'bin/nerve-attach.js',
+    'ws://127.0.0.1:4190/api/runtime/ws',
+    'history-query',
+    '--limit',
+  ])
+  assert.equal(missingFlagValue.code, 1)
+  assert.equal(missingFlagValue.stderr.includes('history-query flag --limit requires a value'), true)
+
+  const duplicateFlag = await runProcess([
+    'bin/nerve-attach.js',
+    'ws://127.0.0.1:4190/api/runtime/ws',
+    'history-query',
+    '--limit',
+    '10',
+    '--limit',
+    '20',
+  ])
+  assert.equal(duplicateFlag.code, 1)
+  assert.equal(duplicateFlag.stderr.includes('history-query received duplicate flag --limit'), true)
+
+  const mixedMode = await runProcess([
+    'bin/nerve-attach.js',
+    'ws://127.0.0.1:4190/api/runtime/ws',
+    'history-query',
+    '10',
+    '--source',
+    'workflow',
+  ])
+  assert.equal(mixedMode.code, 1)
+  assert.equal(mixedMode.stderr.includes('history-query does not allow positional args when flags are used'), true)
+
+  const badOverrides = await runProcess([
+    'bin/nerve-attach.js',
+    'ws://127.0.0.1:4190/api/runtime/ws',
+    'history-rerun',
+    'call-1',
+    'not-json',
+  ])
+  assert.equal(badOverrides.code, 1)
+  assert.equal(badOverrides.stderr.includes('history-rerun overridesJson must be valid JSON'), true)
+})
+
 test('nerve-runtime starts and serves health endpoint', async () => {
   const port = await findOpenPort()
   const child = spawn(process.execPath, [
@@ -451,6 +542,91 @@ test('nerve-attach can snapshot enqueue and stop a live runtime', async () => {
     const stopPayload = parseAttachResponseOrThrow(stopResult.stdout, 'stop')
     assert.equal(stopPayload.ok, true)
     assert.equal(stopPayload.data.snapshot.running, false)
+  } finally {
+    await new Promise((resolveExit) => {
+      const timer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL')
+        } catch {
+          // ignore
+        }
+        resolveExit()
+      }, 5000)
+
+      child.once('exit', () => {
+        clearTimeout(timer)
+        resolveExit()
+      })
+
+      try {
+        child.kill('SIGTERM')
+      } catch {
+        clearTimeout(timer)
+        resolveExit()
+      }
+    })
+  }
+})
+
+test('nerve-attach can issue history_query against a live runtime', async () => {
+  const port = await findOpenPort()
+  const child = spawn(process.execPath, [
+    'bin/nerve-runtime.js',
+    'start',
+    'examples/mqtt-simple-host',
+    '--port',
+    String(port),
+  ], {
+    cwd: process.cwd(),
+    env: { ...process.env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  try {
+    await waitForOutput(child, 'nerve-runtime listening at')
+
+    const wsUrl = `ws://127.0.0.1:${port}/api/runtime/ws`
+    const queryResult = await runProcess(['bin/nerve-attach.js', wsUrl, 'history-query', '10'])
+    assert.equal(queryResult.code, 0)
+    const queryPayload = parseAttachResponseOrThrow(queryResult.stdout, 'history-query')
+    assert.equal(queryPayload.ok, true)
+    assert.equal(Array.isArray(queryPayload.data?.artifacts), true)
+    assert.equal(typeof queryPayload.data?.total, 'number')
+
+    const datedQueryResult = await runProcess([
+      'bin/nerve-attach.js',
+      wsUrl,
+      'history-query',
+      '10',
+      'model',
+      'inspector',
+      '2000-01-01T00:00:00.000Z',
+      '2100-01-01T00:00:00.000Z',
+    ])
+    assert.equal(datedQueryResult.code, 0)
+    const datedQueryPayload = parseAttachResponseOrThrow(datedQueryResult.stdout, 'history-query-dated')
+    assert.equal(datedQueryPayload.ok, true)
+    assert.equal(Array.isArray(datedQueryPayload.data?.artifacts), true)
+
+    const flaggedQueryResult = await runProcess([
+      'bin/nerve-attach.js',
+      wsUrl,
+      'history-query',
+      '--limit',
+      '10',
+      '--targetKind',
+      'model',
+      '--source',
+      'inspector',
+      '--createdAfter',
+      '2000-01-01T00:00:00.000Z',
+      '--createdBefore',
+      '2100-01-01T00:00:00.000Z',
+    ])
+    assert.equal(flaggedQueryResult.code, 0)
+    const flaggedQueryPayload = parseAttachResponseOrThrow(flaggedQueryResult.stdout, 'history-query-flagged')
+    assert.equal(flaggedQueryPayload.ok, true)
+    assert.equal(Array.isArray(flaggedQueryPayload.data?.artifacts), true)
   } finally {
     await new Promise((resolveExit) => {
       const timer = setTimeout(() => {

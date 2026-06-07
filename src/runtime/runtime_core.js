@@ -284,6 +284,10 @@ export function createRuntimeCore({
     return runtimeController.getDefinitionFiles()
   }
 
+  function getWorkspaceConfig() {
+    return runtimeController.getWorkspaceConfig?.() ?? null
+  }
+
   function getGraph(payload = {}) {
     if (!runtimeController.isActive()) {
       throw new Error('nextV runtime not active')
@@ -373,8 +377,8 @@ export function createRuntimeCore({
       .filter(Boolean)
   }
 
-  function buildFinalRequestSummary(request = {}, wirePayload = {}, resolvedModel = '') {
-    const finalMessages = sanitizeRequestMessages(request.messages ?? wirePayload.messages)
+  function buildFinalRequestSummary(request = {}, wirePayload = {}, resolvedModel = '', fallbackMessages = []) {
+    const finalMessages = sanitizeRequestMessages(request.messages ?? wirePayload.messages ?? fallbackMessages)
     const toolNames = Array.isArray(request.toolNames)
       ? request.toolNames.map((value) => String(value ?? '').trim()).filter(Boolean)
       : []
@@ -412,6 +416,7 @@ export function createRuntimeCore({
     target = '',
     prompt = '',
     instructions = '',
+    inputMessages = [],
     validate = 'coerce',
     retryOnViolation = 0,
     returnsContract = null,
@@ -437,7 +442,7 @@ export function createRuntimeCore({
     const messageCount = Number.isFinite(messageCountRaw)
       ? Math.max(0, Math.round(messageCountRaw))
       : undefined
-    const finalMessages = sanitizeRequestMessages(request.messages ?? wirePayload.messages)
+    const finalMessages = sanitizeRequestMessages(request.messages ?? wirePayload.messages ?? inputMessages)
     const attemptRaw = Number(request.attempt)
     const attempt = Number.isFinite(attemptRaw) ? Math.max(1, Math.round(attemptRaw)) : 1
     const retryLimitRaw = Number(request.retryLimit)
@@ -460,7 +465,7 @@ export function createRuntimeCore({
       retryLimit,
       retryGuidanceInjected: detectRetryGuidanceInjected(finalMessages),
       finalMessages,
-      finalRequest: buildFinalRequestSummary(request, wirePayload, resolvedModel),
+      finalRequest: buildFinalRequestSummary(request, wirePayload, resolvedModel, inputMessages),
       validate: String(request.validate ?? validate ?? 'coerce').trim() || 'coerce',
       retry_on_contract_violation: Number.isInteger(Number(request.retry_on_contract_violation))
         ? Math.max(0, Math.min(8, Number(request.retry_on_contract_violation)))
@@ -481,6 +486,63 @@ export function createRuntimeCore({
       value: callResult,
       outputText: typeof callResult === 'string' ? callResult : '',
       metadata: null,
+    }
+  }
+
+  function normalizeCallInspectorToolEvent(rawEvent) {
+    if (!rawEvent || typeof rawEvent !== 'object' || Array.isArray(rawEvent)) return null
+    const typeRaw = String(rawEvent.type ?? '').trim().toLowerCase()
+    if (!typeRaw) return null
+    const type = ['tool_call', 'tool_result', 'tool_error'].includes(typeRaw)
+      ? typeRaw
+      : null
+    if (!type) return null
+    const tool = String(rawEvent.tool ?? rawEvent.name ?? '').trim()
+    const roundRaw = Number(rawEvent.round)
+    const normalized = {
+      type,
+      tool,
+      correlationId: String(rawEvent.correlationId ?? rawEvent.tool_call_id ?? rawEvent.id ?? '').trim(),
+      round: Number.isFinite(roundRaw) ? Math.max(0, Math.round(roundRaw)) : null,
+      status: String(rawEvent.status ?? '').trim(),
+      executionRole: String(rawEvent.executionRole ?? '').trim(),
+    }
+    if (type === 'tool_call') {
+      normalized.args = rawEvent.args ?? null
+      normalized.schemaSource = String(rawEvent.schemaSource ?? '').trim()
+    }
+    if (type === 'tool_result') {
+      normalized.result = Object.prototype.hasOwnProperty.call(rawEvent, 'result')
+        ? rawEvent.result
+        : null
+    }
+    if (type === 'tool_error') {
+      normalized.error = rawEvent.error ?? null
+    }
+    return normalized
+  }
+
+  function collectCallInspectorToolTrace(metadata, governedToolEvents = []) {
+    const metadataObj = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+      ? metadata
+      : {}
+    const metadataEvents = Array.isArray(metadataObj.toolEvents) ? metadataObj.toolEvents : []
+    const mergedEvents = []
+
+    for (const event of governedToolEvents) {
+      const normalized = normalizeCallInspectorToolEvent(event)
+      if (normalized) mergedEvents.push(normalized)
+    }
+    for (const event of metadataEvents) {
+      const normalized = normalizeCallInspectorToolEvent(event)
+      if (normalized) mergedEvents.push(normalized)
+    }
+
+    return {
+      toolEvents: mergedEvents,
+      toolCalls: mergedEvents.filter((event) => event.type === 'tool_call'),
+      toolResults: mergedEvents.filter((event) => event.type === 'tool_result'),
+      toolErrors: mergedEvents.filter((event) => event.type === 'tool_error'),
     }
   }
 
@@ -752,10 +814,11 @@ export function createRuntimeCore({
             : null,
         })
       : null
+    const eventCallId = String(runtimeEvent.callId ?? '').trim()
 
     return {
       schemaVersion: CALL_INSPECTOR_ARTIFACT_SCHEMA_VERSION,
-      callId: randomUUID(),
+      callId: eventCallId || randomUUID(),
       replayOf: null,
       source: 'workflow',
       createdAt: new Date().toISOString(),
@@ -966,6 +1029,7 @@ export function createRuntimeCore({
 
     const runOnce = async () => {
       const startedAt = Date.now()
+      const governedToolEvents = []
       let callResult = null
       let tryEnvelope = null
       let tryError = null
@@ -995,6 +1059,11 @@ export function createRuntimeCore({
             value: renderComposedTextPreview(promptInput.parts),
             payload: {},
           },
+          onGovernedToolEvent: async (toolEvent) => {
+            if (toolEvent && typeof toolEvent === 'object') {
+              governedToolEvents.push(toolEvent)
+            }
+          },
         })
       } catch (err) {
         if (mode !== 'try') throw err
@@ -1019,11 +1088,13 @@ export function createRuntimeCore({
       const hadTryContractViolation = mode === 'try'
         && tryEnvelope?.ok === false
         && String(tryEnvelope?.error?.type ?? '').trim().toLowerCase() === 'agent_return_contract_violation'
+      const toolTrace = collectCallInspectorToolTrace(normalizedCallResult?.metadata, governedToolEvents)
       const resolvedCall = buildResolvedCallSummary({
         targetKind,
         target: targetKind === 'agent' ? agentName : modelName,
         prompt: renderComposedTextPreview(promptInput.parts),
         instructions: renderComposedTextPreview(instructionsInput.parts),
+        inputMessages: normalizedMessages,
         validate: validateMode,
         retryOnViolation,
         returnsContract,
@@ -1041,6 +1112,10 @@ export function createRuntimeCore({
           ? tryEnvelope
           : (isViolation ? null : (normalizedCallResult?.value ?? null)),
         metadata: normalizedCallResult?.metadata ?? null,
+        toolCalls: toolTrace.toolCalls,
+        toolResults: toolTrace.toolResults,
+        toolErrors: toolTrace.toolErrors,
+        toolEvents: toolTrace.toolEvents,
         violation: mode === 'try'
           ? (hadTryContractViolation
             ? {
@@ -1071,8 +1146,13 @@ export function createRuntimeCore({
         result: {
           actual: result.actual,
           value: result.value,
+          metadata: result.metadata,
           hadContractViolation: result.hadContractViolation,
           violation: result.violation,
+          toolCalls: result.toolCalls,
+          toolResults: result.toolResults,
+          toolErrors: result.toolErrors,
+          toolEvents: result.toolEvents,
         },
         elapsedMs: Math.max(0, Date.now() - startedAt),
         replayPayload: buildCallInspectorReplayPayload({
@@ -1160,6 +1240,10 @@ export function createRuntimeCore({
           parsed: null,
           value: null,
           metadata: null,
+          toolCalls: [],
+          toolResults: [],
+          toolErrors: [],
+          toolEvents: [],
           violation: null,
           hadContractViolation: false,
         },
@@ -1230,6 +1314,7 @@ export function createRuntimeCore({
     promoteCandidate,
     getDefinitionStatus,
     getDefinitionFiles,
+    getWorkspaceConfig,
     getGraph,
     callInspectorExecute,
     getCallInspectorArtifact,

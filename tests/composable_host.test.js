@@ -346,6 +346,227 @@ test('composable host hot-swap reloads when included workflow file changes', { t
   }
 })
 
+test('composable host hot-swap reloads when models config changes', { timeout: 15000 }, async () => {
+  const workspace = await createTempWorkspace({
+    nextvConfig: {
+      entrypointPath: 'entry.nrv',
+      externals: ['user_message'],
+    },
+    entrySource: 'on external "user_message"\n  output text "ok"\nend\n',
+    extraFiles: [
+      {
+        path: 'models.json',
+        content: `${JSON.stringify({
+          local: {
+            model: 'llama3.2',
+            transport: 'ollama',
+          },
+        }, null, 2)}\n`,
+      },
+    ],
+  })
+
+  const port = await findOpenPort()
+  const logs = []
+  const originalLog = console.log
+  console.log = (...args) => {
+    logs.push(args.map((value) => String(value)).join(' '))
+  }
+
+  const host = createComposableHost({
+    workspaceDir: workspace.workspaceRelativePath,
+    port,
+    hotSwap: true,
+  })
+
+  host.attachSurface(wsSurface({ path: '/api/runtime/ws' }))
+
+  try {
+    const result = await host.start()
+    await writeFile(
+      join(workspace.workspaceRoot, 'models.json'),
+      `${JSON.stringify({
+        local: {
+          model: 'llama3.2',
+          transport: 'ollama',
+        },
+        local_fast: {
+          model: 'llama3.2:1b',
+          transport: 'ollama',
+        },
+      }, null, 2)}\n`,
+      'utf8',
+    )
+
+    await waitForCondition(
+      () => logs.some((entry) => entry.includes('models.json') && entry.includes('[hot-swap] file event=')),
+      { timeoutMs: 8000, intervalMs: 100 },
+    )
+    await waitForCondition(
+      () => logs.some((entry) => entry.includes('[hot-swap] applied entrypoint=')),
+      { timeoutMs: 8000, intervalMs: 100 },
+    )
+
+    assert.equal(result.runtimeCore.isActive(), true)
+
+    await host.shutdown()
+  } finally {
+    console.log = originalLog
+    await rm(workspace.workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('composable host hot-swap reloads when agents config changes', { timeout: 15000 }, async () => {
+  const workspace = await createTempWorkspace({
+    nextvConfig: {
+      entrypointPath: 'entry.nrv',
+      externals: ['user_message'],
+    },
+    entrySource: 'on external "user_message"\n  output text "ok"\nend\n',
+    extraFiles: [
+      {
+        path: 'models.json',
+        content: `${JSON.stringify({
+          local: {
+            model: 'llama3.2',
+            transport: 'ollama',
+          },
+        }, null, 2)}\n`,
+      },
+      {
+        path: 'agents.json',
+        content: `${JSON.stringify({
+          helper: {
+            model: 'local',
+            instructions: 'help',
+          },
+        }, null, 2)}\n`,
+      },
+    ],
+  })
+
+  const port = await findOpenPort()
+  const logs = []
+  const originalLog = console.log
+  console.log = (...args) => {
+    logs.push(args.map((value) => String(value)).join(' '))
+  }
+
+  const host = createComposableHost({
+    workspaceDir: workspace.workspaceRelativePath,
+    port,
+    hotSwap: true,
+  })
+
+  host.attachSurface(wsSurface({ path: '/api/runtime/ws' }))
+
+  try {
+    const result = await host.start()
+    await writeFile(
+      join(workspace.workspaceRoot, 'agents.json'),
+      `${JSON.stringify({
+        helper: {
+          model: 'local',
+          instructions: 'help',
+          tools: ['search'],
+        },
+      }, null, 2)}\n`,
+      'utf8',
+    )
+
+    await waitForCondition(
+      () => logs.some((entry) => entry.includes('agents.json') && entry.includes('[hot-swap] file event=')),
+      { timeoutMs: 8000, intervalMs: 100 },
+    )
+    await waitForCondition(
+      () => logs.some((entry) => entry.includes('[hot-swap] applied entrypoint=')),
+      { timeoutMs: 8000, intervalMs: 100 },
+    )
+
+    assert.equal(result.runtimeCore.isActive(), true)
+
+    await host.shutdown()
+  } finally {
+    console.log = originalLog
+    await rm(workspace.workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('composable host hot-swap reloads when transports config changes', { timeout: 15000 }, async () => {
+  const workspace = await createTempWorkspace({
+    nextvConfig: {
+      entrypointPath: 'entry.nrv',
+      externals: ['user_message'],
+    },
+    entrySource: 'on external "user_message"\n  output text "ok"\nend\n',
+    extraFiles: [
+      {
+        path: 'transports.json',
+        content: `${JSON.stringify({
+          local_ollama: {
+            provider: 'ollama',
+            base_url: 'http://localhost:11434',
+          },
+        }, null, 2)}\n`,
+      },
+      {
+        path: 'models.json',
+        content: `${JSON.stringify({
+          local: {
+            model: 'llama3.2',
+            transport: 'local_ollama',
+          },
+        }, null, 2)}\n`,
+      },
+    ],
+  })
+
+  const port = await findOpenPort()
+  const logs = []
+  const originalLog = console.log
+  console.log = (...args) => {
+    logs.push(args.map((value) => String(value)).join(' '))
+  }
+
+  const host = createComposableHost({
+    workspaceDir: workspace.workspaceRelativePath,
+    port,
+    hotSwap: true,
+  })
+
+  host.attachSurface(wsSurface({ path: '/api/runtime/ws' }))
+
+  try {
+    const result = await host.start()
+    await writeFile(
+      join(workspace.workspaceRoot, 'transports.json'),
+      `${JSON.stringify({
+        local_ollama: {
+          provider: 'ollama',
+          base_url: 'http://127.0.0.1:11434',
+        },
+      }, null, 2)}\n`,
+      'utf8',
+    )
+
+    await waitForCondition(
+      () => logs.some((entry) => entry.includes('transports.json') && entry.includes('[hot-swap] file event=')),
+      { timeoutMs: 8000, intervalMs: 100 },
+    )
+    await waitForCondition(
+      () => logs.some((entry) => entry.includes('[hot-swap] applied entrypoint=')),
+      { timeoutMs: 8000, intervalMs: 100 },
+    )
+
+    assert.equal(result.runtimeCore.isActive(), true)
+
+    await host.shutdown()
+  } finally {
+    console.log = originalLog
+    await rm(workspace.workspaceRoot, { recursive: true, force: true })
+  }
+})
+
 test('composable host auto-attaches speech capability from workspace config', { timeout: 10000 }, async () => {
   const workspace = await createTempWorkspace({
     nextvConfig: {

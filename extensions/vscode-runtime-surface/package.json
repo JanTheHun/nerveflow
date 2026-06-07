@@ -1,0 +1,70 @@
+{
+  "name": "nerveflow-vscode-runtime-surface",
+  "displayName": "Nerveflow Runtime Surface",
+  "description": "Architecture Validation 1 surface for protocol-only runtime control and inspection.",
+  "version": "0.0.1",
+  "private": true,
+  "publisher": "nerveflow-local",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "main": "./src/extension.js",
+  "categories": [
+    "Other"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "nerveflow",
+          "title": "Nerveflow",
+          "icon": "resources/nerveflow.svg"
+        }
+      ]
+    },
+    "views": {
+      "nerveflow": [
+        {
+          "id": "nerveflowRuntimeView",
+          "name": "Runtime Surface",
+          "type": "webview",
+          "icon": "resources/nerveflow.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "nerveflow.connectRuntime",
+        "title": "Nerveflow: Connect Runtime"
+      },
+      {
+        "command": "nerveflow.disconnectRuntime",
+        "title": "Nerveflow: Disconnect Runtime"
+      },
+      {
+        "command": "nerveflow.sendUserMessage",
+        "title": "Nerveflow: Send User Message"
+      },
+      {
+        "command": "nerveflow.refreshSnapshot",
+        "title": "Nerveflow: Refresh Snapshot"
+      }
+    ],
+    "configuration": {
+      "title": "Nerveflow Runtime Surface",
+      "properties": {
+        "nerveflow.runtimeEndpoint": {
+          "type": "string",
+          "default": "ws://127.0.0.1:4190/api/runtime/ws",
+          "description": "WebSocket endpoint for the Nerveflow runtime surface protocol."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "check:boundaries": "node ./scripts/check-import-boundaries.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}

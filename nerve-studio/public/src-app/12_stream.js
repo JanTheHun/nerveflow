@@ -42,11 +42,17 @@ import {
   nextVCallRepeatInput,
   nextVCallInstructionsInput,
   nextVCallPromptInput,
+  nextVCallContractNoneInput,
+  nextVCallContractDecideInput,
+  nextVCallContractReturnsInput,
+  nextVCallDecideWrap,
+  nextVCallReturnsWrap,
   nextVCallReturnsInput,
   nextVCallDecideInput,
   nextVCallToolsModeInput,
   nextVCallToolsMaxRoundsInput,
   nextVCallToolsTimeoutMsInput,
+  nextVCallCommandTimeoutMsInput,
   nextVCallToolsDenyUnknownInput,
   nextVCallToolsExtraInput,
   nextVCallToolsList,
@@ -55,6 +61,7 @@ import {
   nextVCallToolsSection,
   nextVCallResolvedLabel,
   nextVCallResolvedOutput,
+  nextVCallReplayMessagesOutput,
   nextVCallGeneratedCode,
   nextVCallResultTabRaw,
   nextVCallResultTabActual,
@@ -69,6 +76,9 @@ import {
   nextVCallResultTry,
   nextVCallResultMetadata,
   nextVCallHistorySelect,
+  nextVCallContextMode,
+  nextVCallContextModeText,
+  nextVCallContextChip,
   nextVCallInspectorPanel,
   nextVGraphState,
   nextVHasLiveRuntimeEvents,
@@ -194,6 +204,9 @@ import {
 let bufferedRuntimeEventsForExecution = []
 let pendingAgentCallCount = 0
 let nextVCallInspectorHistory = []
+let nextVCallInspectorReplayMessages = []
+let nextVCallInspectorReplayProvenance = { callId: '', source: '' }
+const NEXTV_CALL_INSPECTOR_PERSISTENCE_ENABLED = false
 const MAX_SEEN_EXECUTION_EVENT_KEYS = 20000
 let seenExecutionEventKeys = new Set()
 let seenExecutionEventKeyOrder = []
@@ -325,9 +338,60 @@ function normalizeNextVCallInspectorRepeat(valueRaw) {
   return Math.max(1, Math.min(50, parsed))
 }
 
+function normalizeNextVCallInspectorContractMode(modeRaw) {
+  const mode = String(modeRaw ?? '').trim().toLowerCase()
+  if (mode === 'decide') return 'decide'
+  if (mode === 'returns') return 'returns'
+  return 'none'
+}
+
+function getNextVCallInspectorContractMode() {
+  if (nextVCallContractReturnsInput?.checked) return 'returns'
+  if (nextVCallContractDecideInput?.checked) return 'decide'
+  return 'none'
+}
+
+function setNextVCallInspectorContractMode(modeRaw) {
+  const mode = normalizeNextVCallInspectorContractMode(modeRaw)
+  if (nextVCallContractNoneInput) nextVCallContractNoneInput.checked = mode === 'none'
+  if (nextVCallContractDecideInput) nextVCallContractDecideInput.checked = mode === 'decide'
+  if (nextVCallContractReturnsInput) nextVCallContractReturnsInput.checked = mode === 'returns'
+}
+
+function normalizeReturnsContractText(valueRaw) {
+  const text = String(valueRaw ?? '').trim()
+  if (!text) return ''
+  if (text.toLowerCase() === 'null') return ''
+  return text
+}
+
+function syncNextVCallInspectorContractModeUi(options = {}) {
+  const mode = getNextVCallInspectorContractMode()
+  if (nextVCallDecideWrap) {
+    nextVCallDecideWrap.hidden = mode !== 'decide'
+  }
+  if (nextVCallReturnsWrap) {
+    nextVCallReturnsWrap.hidden = mode !== 'returns'
+  }
+
+  if (options?.clearInactive === true) {
+    if (mode !== 'decide' && nextVCallDecideInput) {
+      nextVCallDecideInput.value = ''
+    }
+    if (mode !== 'returns' && nextVCallReturnsInput) {
+      nextVCallReturnsInput.value = ''
+    }
+  }
+}
+
 function setNextVCallInspectorHistory(artifacts = []) {
   nextVCallInspectorHistory = Array.isArray(artifacts)
-    ? artifacts.filter((entry) => entry && typeof entry === 'object')
+    ? artifacts.filter((entry) => {
+        if (!entry || typeof entry !== 'object') return false
+        const source = String(entry?.source ?? '').trim()
+        if (source !== 'workflow') return true
+        return Boolean(entry?.replayPayload && typeof entry.replayPayload === 'object')
+      })
     : []
 
   if (!nextVCallHistorySelect) return
@@ -1522,7 +1586,8 @@ export async function executeNextVCallInspector(options = {}) {
   const target = getNextVCallInspectorTargetValue(targetKind)
   const instructions = String(nextVCallInstructionsInput?.value ?? '')
   const prompt = String(nextVCallPromptInput?.value ?? '')
-  const returnsText = String(nextVCallReturnsInput?.value ?? '').trim()
+  const contractMode = getNextVCallInspectorContractMode()
+  const returnsText = normalizeReturnsContractText(nextVCallReturnsInput?.value ?? '')
   const decideText = String(nextVCallDecideInput?.value ?? '').trim()
   const validateRaw = String(nextVCallValidateInput?.value ?? 'coerce').trim().toLowerCase()
   const validate = ['strict', 'coerce', 'none'].includes(validateRaw) ? validateRaw : 'coerce'
@@ -1545,16 +1610,21 @@ export async function executeNextVCallInspector(options = {}) {
     failInspectorValidation('call inspector target is required')
     return
   }
-  if (!prompt.trim() && !replayCallId) {
-    failInspectorValidation('call inspector prompt is required')
-    return
-  }
-  if (returnsText && decideText) {
-    failInspectorValidation('use either returns or decide, not both')
+  const hasReplayMessages = Array.isArray(nextVCallInspectorReplayMessages) && nextVCallInspectorReplayMessages.length > 0
+  if (!prompt.trim() && !replayCallId && !hasReplayMessages) {
+    failInspectorValidation('call inspector prompt or messages is required')
     return
   }
   if (!toolsPolicyResult.ok) {
     failInspectorValidation(toolsPolicyResult.error)
+    return
+  }
+  if (contractMode === 'returns' && !returnsText) {
+    failInspectorValidation('returns contract is required in returns mode')
+    return
+  }
+  if (contractMode === 'decide' && !decideText) {
+    failInspectorValidation('decide options are required in decide mode')
     return
   }
 
@@ -1574,7 +1644,7 @@ export async function executeNextVCallInspector(options = {}) {
     requestBody.model = target
   }
 
-  if (returnsText) {
+  if (contractMode === 'returns' && returnsText) {
     try {
       requestBody.returns = JSON.parse(returnsText)
     } catch {
@@ -1582,7 +1652,7 @@ export async function executeNextVCallInspector(options = {}) {
       return
     }
   }
-  if (decideText) {
+  if (contractMode === 'decide' && decideText) {
     requestBody.decide = decideText
       .split(',')
       .map((value) => value.trim())
@@ -1590,6 +1660,9 @@ export async function executeNextVCallInspector(options = {}) {
   }
   if (toolsPolicyResult.policy) {
     requestBody.tools = toolsPolicyResult.policy
+  }
+  if (Array.isArray(nextVCallInspectorReplayMessages) && nextVCallInspectorReplayMessages.length > 0) {
+    requestBody.messages = nextVCallInspectorReplayMessages
   }
   if (replayCallId) {
     requestBody.callId = replayCallId
@@ -1603,7 +1676,12 @@ export async function executeNextVCallInspector(options = {}) {
   setStatus('executing call inspector...', 'responding')
 
   try {
-    const res = await fetch(buildNextVApiPath('/api/nextv/call-inspector/execute'), {
+    const executeUrl = new URL(buildNextVApiPath('/api/nextv/call-inspector/execute'), window.location.origin)
+    const commandTimeoutMsRaw = Number(nextVCallCommandTimeoutMsInput?.value)
+    if (Number.isInteger(commandTimeoutMsRaw) && commandTimeoutMsRaw >= 0) {
+      executeUrl.searchParams.set('commandTimeoutMs', String(commandTimeoutMsRaw))
+    }
+    const res = await fetch(executeUrl.toString(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
@@ -1662,6 +1740,56 @@ export async function refreshNextVCallInspectorHistory(options = {}) {
   }
 }
 
+export async function hydrateSelectedNextVCallInspectorHistoryContext(options = {}) {
+  const quiet = options?.quiet === true
+  const selectedCallId = String(options?.callId ?? getSelectedNextVCallInspectorHistoryCallId()).trim()
+  if (!selectedCallId) {
+    return false
+  }
+
+  try {
+    const fromHistory = nextVCallInspectorHistory.find((entry) => String(entry?.callId ?? '').trim() === selectedCallId) ?? null
+    const needsFetch = !fromHistory || !fromHistory.replayPayload || typeof fromHistory.replayPayload !== 'object'
+    const artifact = needsFetch
+      ? await fetchNextVCallInspectorArtifact(selectedCallId)
+      : fromHistory
+    const hydration = applyNextVCallInspectorArtifactPrefill(artifact, {
+      callId: selectedCallId,
+      source: 'history',
+    })
+    if (!hydration.ok) {
+      if (!quiet) {
+        setStatus(`call inspector context unavailable for call ${selectedCallId}`, 'responding')
+      }
+      return false
+    }
+
+    renderNextVCallInspectorResolvedCall(artifact?.resolvedCall ?? null)
+    renderNextVCallInspectorResult({
+      call: artifact?.call ?? null,
+      resolvedCall: artifact?.resolvedCall ?? null,
+      result: artifact?.result ?? null,
+    })
+
+    persistNextVCallInspectorInputs()
+    renderNextVCallInspectorSnippet()
+
+    if (!quiet) {
+      const hydratedLabel = hydration.targetValue
+        ? `${hydration.targetKind}.${hydration.targetValue}`
+        : `${hydration.targetKind}`
+      setStatus(`call inspector context loaded from history ${selectedCallId} (${hydratedLabel})`)
+    }
+    return true
+  } catch (err) {
+    if (!quiet) {
+      appendNextVErrorLog(err)
+      setStatus(`call inspector context unavailable for call ${selectedCallId}`, 'responding')
+    }
+    return false
+  }
+}
+
 export async function replaySelectedNextVCallInspectorCall() {
   const selectedCallId = getSelectedNextVCallInspectorHistoryCallId()
   if (!selectedCallId) {
@@ -1691,6 +1819,58 @@ function stringifyInspectorPane(value) {
   }
 }
 
+function renderNextVCallInspectorReplayMessages() {
+  const hydratedCount = Array.isArray(nextVCallInspectorReplayMessages)
+    ? nextVCallInspectorReplayMessages.length
+    : 0
+  const usingReplay = hydratedCount > 0
+
+  if (nextVCallContextMode) {
+    const contextLabel = usingReplay
+      ? `execution context: hydrated replay messages (${hydratedCount})`
+      : 'execution context: prompt/instructions fields'
+    if (nextVCallContextModeText) {
+      nextVCallContextModeText.textContent = contextLabel
+    } else {
+      nextVCallContextMode.textContent = contextLabel
+    }
+    nextVCallContextMode.classList.toggle('is-replay', usingReplay)
+  }
+
+  if (nextVCallContextChip) {
+    const callId = String(nextVCallInspectorReplayProvenance?.callId ?? '').trim()
+    const source = String(nextVCallInspectorReplayProvenance?.source ?? '').trim()
+    if (usingReplay && callId) {
+      const sourceLabel = source || 'context'
+      nextVCallContextChip.textContent = `${sourceLabel} call ${callId}`
+      nextVCallContextChip.hidden = false
+    } else {
+      nextVCallContextChip.textContent = ''
+      nextVCallContextChip.hidden = true
+    }
+  }
+
+  if (!nextVCallReplayMessagesOutput) return
+  if (!Array.isArray(nextVCallInspectorReplayMessages) || nextVCallInspectorReplayMessages.length === 0) {
+    nextVCallReplayMessagesOutput.textContent = '(no hydrated context messages)'
+    return
+  }
+
+  const lines = []
+  for (let index = 0; index < nextVCallInspectorReplayMessages.length; index += 1) {
+    const entry = nextVCallInspectorReplayMessages[index]
+    const role = String(entry?.role ?? 'unknown').trim() || 'unknown'
+    const content = String(entry?.content ?? '').trim()
+    lines.push(`${index + 1}. ${role}`)
+    lines.push(content || '(empty)')
+    if (index < nextVCallInspectorReplayMessages.length - 1) {
+      lines.push('')
+    }
+  }
+
+  nextVCallReplayMessagesOutput.textContent = lines.join('\n')
+}
+
 const nextVCallInspectorToolsState = {
   checked: new Set(),
   lastTargetKey: '',
@@ -1710,6 +1890,7 @@ function parseNextVCallInspectorToolsCsv(text) {
 }
 
 function getStoredNextVCallInspectorCheckedTools() {
+  if (!NEXTV_CALL_INSPECTOR_PERSISTENCE_ENABLED) return []
   const raw = String(localStorage.getItem(storageKeys.nextVCallInspectorToolsChecked) ?? '').trim()
   if (!raw) return []
   try {
@@ -1723,6 +1904,7 @@ function getStoredNextVCallInspectorCheckedTools() {
 }
 
 function persistNextVCallInspectorInputs() {
+  if (!NEXTV_CALL_INSPECTOR_PERSISTENCE_ENABLED) return
   const targetKind = String(nextVCallTargetKindInput?.value ?? '').trim()
   if (targetKind) localStorage.setItem(storageKeys.nextVCallInspectorTargetKind, targetKind)
 
@@ -1747,7 +1929,8 @@ function persistNextVCallInspectorInputs() {
 
   localStorage.setItem(storageKeys.nextVCallInspectorInstructions, String(nextVCallInstructionsInput?.value ?? ''))
   localStorage.setItem(storageKeys.nextVCallInspectorPrompt, String(nextVCallPromptInput?.value ?? ''))
-  localStorage.setItem(storageKeys.nextVCallInspectorReturns, String(nextVCallReturnsInput?.value ?? ''))
+  localStorage.setItem(storageKeys.nextVCallInspectorContractMode, getNextVCallInspectorContractMode())
+  localStorage.setItem(storageKeys.nextVCallInspectorReturns, normalizeReturnsContractText(nextVCallReturnsInput?.value ?? ''))
   localStorage.setItem(storageKeys.nextVCallInspectorDecide, String(nextVCallDecideInput?.value ?? ''))
 
   const toolsMode = normalizeNextVCallInspectorToolsMode(nextVCallToolsModeInput?.value ?? 'disabled')
@@ -1763,6 +1946,11 @@ function persistNextVCallInspectorInputs() {
     localStorage.setItem(storageKeys.nextVCallInspectorToolsTimeoutMs, toolsTimeoutMs)
   }
 
+  const commandTimeoutMs = String(nextVCallCommandTimeoutMsInput?.value ?? '').trim()
+  if (commandTimeoutMs !== '') {
+    localStorage.setItem(storageKeys.nextVCallInspectorCommandTimeoutMs, commandTimeoutMs)
+  }
+
   localStorage.setItem(
     storageKeys.nextVCallInspectorToolsDenyUnknown,
     nextVCallToolsDenyUnknownInput?.checked === false ? '0' : '1'
@@ -1775,6 +1963,7 @@ function persistNextVCallInspectorInputs() {
 }
 
 function restoreNextVCallInspectorInputs() {
+  if (!NEXTV_CALL_INSPECTOR_PERSISTENCE_ENABLED) return
   const targetKind = String(localStorage.getItem(storageKeys.nextVCallInspectorTargetKind) ?? '').trim()
   if (targetKind && nextVCallTargetKindInput) nextVCallTargetKindInput.value = targetKind
 
@@ -1798,11 +1987,20 @@ function restoreNextVCallInspectorInputs() {
   const prompt = localStorage.getItem(storageKeys.nextVCallInspectorPrompt)
   if (prompt !== null && nextVCallPromptInput) nextVCallPromptInput.value = prompt
 
+  const contractModeStored = normalizeNextVCallInspectorContractMode(
+    localStorage.getItem(storageKeys.nextVCallInspectorContractMode) ?? 'none'
+  )
+  setNextVCallInspectorContractMode(contractModeStored)
+
   const returns = localStorage.getItem(storageKeys.nextVCallInspectorReturns)
-  if (returns !== null && nextVCallReturnsInput) nextVCallReturnsInput.value = returns
+  if (returns !== null && nextVCallReturnsInput) {
+    nextVCallReturnsInput.value = normalizeReturnsContractText(returns)
+  }
 
   const decide = localStorage.getItem(storageKeys.nextVCallInspectorDecide)
   if (decide !== null && nextVCallDecideInput) nextVCallDecideInput.value = decide
+
+  syncNextVCallInspectorContractModeUi({ clearInactive: false })
 
   const toolsMode = normalizeNextVCallInspectorToolsMode(localStorage.getItem(storageKeys.nextVCallInspectorToolsMode) ?? 'disabled')
   if (nextVCallToolsModeInput) {
@@ -1817,6 +2015,11 @@ function restoreNextVCallInspectorInputs() {
   const toolsTimeoutMs = String(localStorage.getItem(storageKeys.nextVCallInspectorToolsTimeoutMs) ?? '').trim()
   if (toolsTimeoutMs !== '' && nextVCallToolsTimeoutMsInput) {
     nextVCallToolsTimeoutMsInput.value = toolsTimeoutMs
+  }
+
+  const commandTimeoutMs = String(localStorage.getItem(storageKeys.nextVCallInspectorCommandTimeoutMs) ?? '').trim()
+  if (commandTimeoutMs !== '' && nextVCallCommandTimeoutMsInput) {
+    nextVCallCommandTimeoutMsInput.value = commandTimeoutMs
   }
 
   const denyUnknownStored = String(localStorage.getItem(storageKeys.nextVCallInspectorToolsDenyUnknown) ?? '').trim()
@@ -1965,6 +2168,13 @@ function getNextVCallInspectorAvailableTools() {
 function getNextVCallInspectorTargetDefaults() {
   const targetKindRaw = String(nextVCallTargetKindInput?.value ?? 'agent').trim().toLowerCase()
   const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  const targetValue = targetKind === 'model'
+    ? String(nextVCallTargetInput?.value ?? '').trim()
+    : String(nextVCallTargetAgentInput?.value ?? '').trim()
+
+  if (!targetValue) {
+    return []
+  }
 
   if (targetKind === 'agent') {
     const agentName = String(nextVCallTargetAgentInput?.value ?? '').trim()
@@ -2296,16 +2506,19 @@ function syncNextVCallInspectorTargetMode() {
 function setNextVCallInspectorAgentOptions(agentNames, options = {}) {
   if (!nextVCallTargetAgentInput) return
   const emptyLabel = String(options?.emptyLabel ?? '(no configured agents)')
+  const unselectedLabel = String(options?.unselectedLabel ?? '(not selected)')
 
   const names = Array.isArray(agentNames) ? agentNames.filter(Boolean).map((value) => String(value).trim()).filter(Boolean) : []
   const currentValue = String(nextVCallTargetAgentInput.value ?? '').trim()
   nextVCallTargetAgentInput.innerHTML = ''
 
+  const emptyOption = document.createElement('option')
+  emptyOption.value = ''
+  emptyOption.textContent = names.length === 0 ? emptyLabel : unselectedLabel
+  nextVCallTargetAgentInput.appendChild(emptyOption)
+
   if (names.length === 0) {
-    const emptyOption = document.createElement('option')
-    emptyOption.value = ''
-    emptyOption.textContent = emptyLabel
-    nextVCallTargetAgentInput.appendChild(emptyOption)
+    nextVCallTargetAgentInput.value = ''
     return
   }
 
@@ -2319,23 +2532,26 @@ function setNextVCallInspectorAgentOptions(agentNames, options = {}) {
   if (currentValue && names.includes(currentValue)) {
     nextVCallTargetAgentInput.value = currentValue
   } else {
-    nextVCallTargetAgentInput.value = names[0]
+    nextVCallTargetAgentInput.value = ''
   }
 }
 
 function setNextVCallInspectorModelOptions(modelNames, options = {}) {
   if (!nextVCallTargetInput) return
   const emptyLabel = String(options?.emptyLabel ?? '(no configured models)')
+  const unselectedLabel = String(options?.unselectedLabel ?? '(not selected)')
 
   const names = Array.isArray(modelNames) ? modelNames.filter(Boolean).map((value) => String(value).trim()).filter(Boolean) : []
   const currentValue = String(nextVCallTargetInput.value ?? '').trim()
   nextVCallTargetInput.innerHTML = ''
 
+  const emptyOption = document.createElement('option')
+  emptyOption.value = ''
+  emptyOption.textContent = names.length === 0 ? emptyLabel : unselectedLabel
+  nextVCallTargetInput.appendChild(emptyOption)
+
   if (names.length === 0) {
-    const emptyOption = document.createElement('option')
-    emptyOption.value = ''
-    emptyOption.textContent = emptyLabel
-    nextVCallTargetInput.appendChild(emptyOption)
+    nextVCallTargetInput.value = ''
     return
   }
 
@@ -2349,7 +2565,7 @@ function setNextVCallInspectorModelOptions(modelNames, options = {}) {
   if (currentValue && names.includes(currentValue)) {
     nextVCallTargetInput.value = currentValue
   } else {
-    nextVCallTargetInput.value = names[0]
+    nextVCallTargetInput.value = ''
   }
 }
 
@@ -2393,17 +2609,6 @@ export async function refreshNextVCallInspectorAgents(options = {}) {
     setNextVCallInspectorAgentOptions(configuredAgents, { emptyLabel: noAgentsLabel })
     setNextVCallInspectorModelOptions(configuredModels, { emptyLabel: noModelsLabel })
 
-    const storedAgent = String(localStorage.getItem(storageKeys.nextVCallInspectorTargetAgent) ?? '').trim()
-    if (storedAgent && nextVCallTargetAgentInput) {
-      const agentOptions = [...nextVCallTargetAgentInput.options].map((o) => o.value)
-      if (agentOptions.includes(storedAgent)) nextVCallTargetAgentInput.value = storedAgent
-    }
-    const storedModel = String(localStorage.getItem(storageKeys.nextVCallInspectorTargetModel) ?? '').trim()
-    if (storedModel && nextVCallTargetInput) {
-      const modelOptions = [...nextVCallTargetInput.options].map((o) => o.value)
-      if (modelOptions.includes(storedModel)) nextVCallTargetInput.value = storedModel
-    }
-
     applyNextVCallInspectorTargetDefaults()
     syncNextVCallInspectorTargetMode()
     renderNextVCallInspectorSnippet()
@@ -2442,21 +2647,22 @@ function ensureNextVCallInspectorOption(selectEl, value) {
   return true
 }
 
-function applyNextVCallInspectorPrefill(prefill = {}) {
+function applyNextVCallInspectorPrefill(prefill = {}, options = {}) {
   if (!prefill || typeof prefill !== 'object') return
+  const replaceEmpty = options?.replaceEmpty === true
 
-  const instructions = String(prefill.instructions ?? '').trim()
-  if (instructions && nextVCallInstructionsInput) {
+  const instructions = String(prefill.instructions ?? '')
+  if (nextVCallInstructionsInput && (replaceEmpty || instructions.trim())) {
     nextVCallInstructionsInput.value = instructions
   }
 
-  const prompt = String(prefill.prompt ?? '').trim()
-  if (prompt && nextVCallPromptInput) {
+  const prompt = String(prefill.prompt ?? '')
+  if (nextVCallPromptInput && (replaceEmpty || prompt.trim())) {
     nextVCallPromptInput.value = prompt
   }
 
-  const returnsText = String(prefill.returnsText ?? '').trim()
-  if (returnsText && nextVCallReturnsInput) {
+  const returnsText = normalizeReturnsContractText(prefill.returnsText ?? '')
+  if (nextVCallReturnsInput && (replaceEmpty || returnsText.trim())) {
     nextVCallReturnsInput.value = returnsText
   }
 
@@ -2466,7 +2672,7 @@ function applyNextVCallInspectorPrefill(prefill = {}) {
   } else {
     decideText = String(prefill.decideText ?? '').trim()
   }
-  if (decideText && nextVCallDecideInput) {
+  if (nextVCallDecideInput && (replaceEmpty || decideText)) {
     nextVCallDecideInput.value = decideText
   }
 
@@ -2478,12 +2684,144 @@ function applyNextVCallInspectorPrefill(prefill = {}) {
   const retryNumeric = Number(prefill.retry)
   if (Number.isInteger(retryNumeric) && nextVCallRetryInput) {
     nextVCallRetryInput.value = String(Math.max(0, Math.min(8, retryNumeric)))
+  } else if (replaceEmpty && nextVCallRetryInput) {
+    nextVCallRetryInput.value = '0'
   }
+}
+
+function applyNextVCallInspectorToolsPrefill(toolsPolicy) {
+  if (!toolsPolicy || typeof toolsPolicy !== 'object' || Array.isArray(toolsPolicy)) {
+    if (nextVCallToolsModeInput) nextVCallToolsModeInput.value = 'disabled'
+    if (nextVCallToolsMaxRoundsInput) nextVCallToolsMaxRoundsInput.value = '8'
+    if (nextVCallToolsTimeoutMsInput) nextVCallToolsTimeoutMsInput.value = '0'
+    if (nextVCallToolsDenyUnknownInput) nextVCallToolsDenyUnknownInput.checked = true
+    if (nextVCallToolsExtraInput) nextVCallToolsExtraInput.value = ''
+    nextVCallInspectorToolsState.checked = new Set()
+    syncNextVCallInspectorToolsModeUi()
+    renderNextVCallInspectorToolsChecklist()
+    return
+  }
+
+  const mode = normalizeNextVCallInspectorToolsMode(toolsPolicy.mode)
+  if (nextVCallToolsModeInput) {
+    nextVCallToolsModeInput.value = mode
+  }
+
+  if (mode === 'governed') {
+    const maxRoundsRaw = Number(toolsPolicy.maxRounds)
+    const timeoutMsRaw = Number(toolsPolicy.timeoutMs)
+
+    if (Number.isInteger(maxRoundsRaw) && nextVCallToolsMaxRoundsInput) {
+      nextVCallToolsMaxRoundsInput.value = String(Math.max(0, Math.min(32, maxRoundsRaw)))
+    }
+    if (Number.isInteger(timeoutMsRaw) && nextVCallToolsTimeoutMsInput) {
+      nextVCallToolsTimeoutMsInput.value = String(Math.max(0, timeoutMsRaw))
+    }
+    if (nextVCallToolsDenyUnknownInput) {
+      nextVCallToolsDenyUnknownInput.checked = toolsPolicy.denyOnUnknownTool !== false
+    }
+
+    const allow = Array.isArray(toolsPolicy.allow)
+      ? [...new Set(toolsPolicy.allow.map((value) => String(value ?? '').trim()).filter(Boolean))]
+      : []
+    nextVCallInspectorToolsState.checked = new Set(allow)
+  } else {
+    nextVCallInspectorToolsState.checked = new Set()
+    if (nextVCallToolsExtraInput) nextVCallToolsExtraInput.value = ''
+  }
+
+  syncNextVCallInspectorToolsModeUi()
+  renderNextVCallInspectorToolsChecklist()
+}
+
+function applyNextVCallInspectorArtifactPrefill(artifact, options = {}) {
+  const replayPayload = artifact?.replayPayload
+  if (!replayPayload || typeof replayPayload !== 'object' || Array.isArray(replayPayload)) {
+    nextVCallInspectorReplayMessages = []
+    nextVCallInspectorReplayProvenance = { callId: '', source: '' }
+    renderNextVCallInspectorReplayMessages()
+    return {
+      ok: false,
+      reason: 'selected call has no replay payload',
+    }
+  }
+
+  const targetKindRaw = String(replayPayload.targetKind ?? '').trim().toLowerCase()
+  const targetKind = targetKindRaw === 'model' ? 'model' : 'agent'
+  if (nextVCallTargetKindInput) {
+    nextVCallTargetKindInput.value = targetKind
+  }
+  syncNextVCallInspectorTargetMode()
+
+  const targetValue = targetKind === 'model'
+    ? String(replayPayload.model ?? '').trim()
+    : String(replayPayload.agent ?? '').trim()
+  if (targetValue) {
+    if (targetKind === 'model') {
+      ensureNextVCallInspectorOption(nextVCallTargetInput, targetValue)
+    } else {
+      ensureNextVCallInspectorOption(nextVCallTargetAgentInput, targetValue)
+    }
+  }
+
+  nextVCallInspectorReplayMessages = Array.isArray(replayPayload.messages)
+    ? replayPayload.messages
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') return null
+        const role = String(entry.role ?? '').trim()
+        const content = String(entry.content ?? '').trim()
+        if (!role || !content) return null
+        return { role, content }
+      })
+      .filter(Boolean)
+    : []
+  nextVCallInspectorReplayProvenance = {
+    callId: String(options?.callId ?? artifact?.callId ?? '').trim(),
+    source: String(options?.source ?? '').trim(),
+  }
+  renderNextVCallInspectorReplayMessages()
+
+  const hasReturns = Object.prototype.hasOwnProperty.call(replayPayload, 'returns')
+  const rawReturnsText = hasReturns ? stringifyInspectorPane(replayPayload.returns) : ''
+  const returnsText = normalizeReturnsContractText(rawReturnsText)
+  const hasDecide = Array.isArray(replayPayload.decide) && replayPayload.decide.length > 0
+  const contractMode = returnsText
+    ? 'returns'
+    : (hasDecide ? 'decide' : 'none')
+  setNextVCallInspectorContractMode(contractMode)
+  applyNextVCallInspectorPrefill({
+    instructions: String(replayPayload.instructions ?? ''),
+    prompt: String(replayPayload.prompt ?? ''),
+    returnsText,
+    decide: Array.isArray(replayPayload.decide) ? replayPayload.decide : null,
+    validate: String(replayPayload.validate ?? ''),
+    retry: Number(replayPayload.retry_on_contract_violation),
+  }, { replaceEmpty: true })
+  syncNextVCallInspectorContractModeUi({ clearInactive: true })
+
+  applyNextVCallInspectorToolsPrefill(replayPayload.tools)
+
+  return {
+    ok: true,
+    targetKind,
+    targetValue,
+  }
+}
+
+async function fetchNextVCallInspectorArtifact(callId) {
+  const encodedCallId = encodeURIComponent(String(callId ?? '').trim())
+  const res = await fetch(buildNextVApiPath(`/api/nextv/call-inspector/artifact?callId=${encodedCallId}`))
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw new Error(data.error ?? 'failed to load call inspector artifact')
+  }
+  return data?.artifact && typeof data.artifact === 'object' ? data.artifact : null
 }
 
 export async function openNextVCallInspectorForToken(kind, value, options = {}) {
   const targetKind = String(kind ?? '').trim().toLowerCase() === 'model' ? 'model' : 'agent'
   const targetValue = String(value ?? '').trim()
+  const callId = String(options?.callId ?? '').trim()
 
   if (nextVCallInspectorPanel?.hidden) {
     toggleNextVCallInspectorPanel()
@@ -2508,6 +2846,34 @@ export async function openNextVCallInspectorForToken(kind, value, options = {}) 
 
   applyNextVCallInspectorPrefill(options?.prefill)
 
+  let statusMessage = targetValue
+    ? `call inspector target set to ${targetKind}.${targetValue}`
+    : `call inspector opened for ${targetKind} target`
+  if (callId) {
+    try {
+      const artifact = await fetchNextVCallInspectorArtifact(callId)
+      const hydration = applyNextVCallInspectorArtifactPrefill(artifact, {
+        callId,
+        source: 'token',
+      })
+      if (hydration.ok) {
+        await refreshNextVCallInspectorHistory({ quiet: true, selectCallId: callId })
+        const hydratedLabel = hydration.targetValue
+          ? `${hydration.targetKind}.${hydration.targetValue}`
+          : `${hydration.targetKind}`
+        statusMessage = `call inspector context loaded from call ${callId} (${hydratedLabel})`
+      } else {
+        statusMessage = `call inspector context unavailable for call ${callId}; using target-only prefill`
+      }
+    } catch {
+      statusMessage = `call inspector context unavailable for call ${callId}; using target-only prefill`
+    }
+  } else {
+    nextVCallInspectorReplayMessages = []
+    nextVCallInspectorReplayProvenance = { callId: '', source: '' }
+    renderNextVCallInspectorReplayMessages()
+  }
+
   persistNextVCallInspectorInputs()
   renderNextVCallInspectorSnippet()
 
@@ -2515,12 +2881,51 @@ export async function openNextVCallInspectorForToken(kind, value, options = {}) 
     nextVCallPromptInput.focus()
   }
 
-  setStatus(
-    targetValue
-      ? `call inspector target set to ${targetKind}.${targetValue}`
-      : `call inspector opened for ${targetKind} target`
-  )
+  setStatus(statusMessage, callId && /unavailable/i.test(statusMessage) ? 'responding' : undefined)
   return true
+}
+
+export function clearNextVCallInspectorConfig(options = {}) {
+  const quiet = options?.quiet === true
+
+  if (nextVCallTargetKindInput) nextVCallTargetKindInput.value = 'agent'
+  if (nextVCallTargetAgentInput) nextVCallTargetAgentInput.value = ''
+  if (nextVCallTargetInput) nextVCallTargetInput.value = ''
+  if (nextVCallModeInput) nextVCallModeInput.value = 'call'
+  if (nextVCallValidateInput) nextVCallValidateInput.value = 'coerce'
+  if (nextVCallRetryInput) nextVCallRetryInput.value = '0'
+  if (nextVCallRepeatInput) nextVCallRepeatInput.value = '1'
+  if (nextVCallInstructionsInput) nextVCallInstructionsInput.value = ''
+  if (nextVCallPromptInput) nextVCallPromptInput.value = ''
+  setNextVCallInspectorContractMode('none')
+  if (nextVCallReturnsInput) nextVCallReturnsInput.value = ''
+  if (nextVCallDecideInput) nextVCallDecideInput.value = ''
+  if (nextVCallToolsModeInput) nextVCallToolsModeInput.value = 'disabled'
+  if (nextVCallToolsMaxRoundsInput) nextVCallToolsMaxRoundsInput.value = '8'
+  if (nextVCallToolsTimeoutMsInput) nextVCallToolsTimeoutMsInput.value = '0'
+  if (nextVCallCommandTimeoutMsInput) nextVCallCommandTimeoutMsInput.value = '10000'
+  if (nextVCallToolsDenyUnknownInput) nextVCallToolsDenyUnknownInput.checked = true
+  if (nextVCallToolsExtraInput) nextVCallToolsExtraInput.value = ''
+  if (nextVCallHistorySelect) nextVCallHistorySelect.value = ''
+
+  nextVCallInspectorReplayMessages = []
+  nextVCallInspectorReplayProvenance = { callId: '', source: '' }
+  nextVCallInspectorToolsState.checked = new Set()
+  nextVCallInspectorToolsState.lastTargetKey = ''
+
+  syncNextVCallInspectorTargetMode()
+  syncNextVCallInspectorContractModeUi({ clearInactive: true })
+  syncNextVCallInspectorToolsModeUi()
+  renderNextVCallInspectorToolsChecklist()
+  renderNextVCallInspectorReplayMessages()
+  renderNextVCallInspectorResolvedCall(null)
+  renderNextVCallInspectorResult({ status: 'call inspector ready' }, { forceTab: 'raw' })
+  renderNextVCallInspectorSnippet()
+  persistNextVCallInspectorInputs()
+
+  if (!quiet) {
+    setStatus('call inspector config cleared')
+  }
 }
 
 export function setNextVCallInspectorResultTab(tab) {
@@ -2633,8 +3038,16 @@ export function renderNextVCallInspectorResult(data, options = {}) {
     })
   }
   if (nextVCallResultMetadata) {
+    const resultToolCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : []
+    const resultToolResults = Array.isArray(result?.toolResults) ? result.toolResults : []
+    const resultToolErrors = Array.isArray(result?.toolErrors) ? result.toolErrors : []
+    const resultToolEvents = Array.isArray(result?.toolEvents) ? result.toolEvents : []
     nextVCallResultMetadata.textContent = stringifyInspectorPane({
       metadata,
+      toolCalls: resultToolCalls,
+      toolResults: resultToolResults,
+      toolErrors: resultToolErrors,
+      toolEvents: resultToolEvents,
       aggregate: response?.aggregate ?? null,
       runs: Array.isArray(response?.runs)
         ? response.runs.map((run) => ({
@@ -2645,6 +3058,10 @@ export function renderNextVCallInspectorResult(data, options = {}) {
             error: run?.error ?? null,
             elapsedMs: Number(run?.elapsedMs ?? 0),
             callId: String(run?.artifact?.callId ?? ''),
+            toolCalls: Array.isArray(run?.result?.toolCalls) ? run.result.toolCalls : [],
+            toolResults: Array.isArray(run?.result?.toolResults) ? run.result.toolResults : [],
+            toolErrors: Array.isArray(run?.result?.toolErrors) ? run.result.toolErrors : [],
+            toolEvents: Array.isArray(run?.result?.toolEvents) ? run.result.toolEvents : [],
           }))
         : null,
     })
@@ -2662,7 +3079,8 @@ export function buildNextVCallInspectorSnippet() {
   const target = getNextVCallInspectorTargetValue(targetKind)
   const instructions = String(nextVCallInstructionsInput?.value ?? '').trim()
   const prompt = String(nextVCallPromptInput?.value ?? '').trim()
-  const returnsText = String(nextVCallReturnsInput?.value ?? '').trim()
+  const contractMode = getNextVCallInspectorContractMode()
+  const returnsText = normalizeReturnsContractText(nextVCallReturnsInput?.value ?? '')
   const decideText = String(nextVCallDecideInput?.value ?? '').trim()
   const validateRaw = String(nextVCallValidateInput?.value ?? 'coerce').trim().toLowerCase()
   const validate = ['strict', 'coerce', 'none'].includes(validateRaw) ? validateRaw : 'coerce'
@@ -2679,10 +3097,10 @@ export function buildNextVCallInspectorSnippet() {
   if (instructions) {
     lines.push(`  instructions=${JSON.stringify(instructions)},`)
   }
-  if (returnsText) {
+  if (contractMode === 'returns' && returnsText) {
     lines.push(`  returns=${returnsText},`)
   }
-  if (decideText) {
+  if (contractMode === 'decide' && decideText) {
     const decideList = decideText
       .split(',')
       .map((value) => value.trim())
@@ -2743,11 +3161,15 @@ export function initNextVCallInspector() {
     nextVCallRepeatInput,
     nextVCallInstructionsInput,
     nextVCallPromptInput,
+    nextVCallContractNoneInput,
+    nextVCallContractDecideInput,
+    nextVCallContractReturnsInput,
     nextVCallReturnsInput,
     nextVCallDecideInput,
     nextVCallToolsModeInput,
     nextVCallToolsMaxRoundsInput,
     nextVCallToolsTimeoutMsInput,
+    nextVCallCommandTimeoutMsInput,
     nextVCallToolsDenyUnknownInput,
     nextVCallToolsExtraInput,
   ]
@@ -2763,6 +3185,13 @@ export function initNextVCallInspector() {
       }
       if (control === nextVCallTargetAgentInput || control === nextVCallTargetInput) {
         renderNextVCallInspectorToolsChecklist()
+      }
+      if (
+        control === nextVCallContractNoneInput
+        || control === nextVCallContractDecideInput
+        || control === nextVCallContractReturnsInput
+      ) {
+        syncNextVCallInspectorContractModeUi({ clearInactive: true })
       }
       if (control === nextVCallToolsModeInput) {
         syncNextVCallInspectorToolsModeUi()
@@ -2786,6 +3215,13 @@ export function initNextVCallInspector() {
     nextVCallToolsResetDefaultsBtn.dataset.callInspectorBound = '1'
     nextVCallToolsResetDefaultsBtn.addEventListener('click', () => {
       resetNextVCallInspectorToolsToDefaults()
+    })
+  }
+
+  if (nextVCallHistorySelect && nextVCallHistorySelect.dataset.callInspectorHistoryBound !== '1') {
+    nextVCallHistorySelect.dataset.callInspectorHistoryBound = '1'
+    nextVCallHistorySelect.addEventListener('change', () => {
+      void hydrateSelectedNextVCallInspectorHistoryContext()
     })
   }
 
@@ -2823,10 +3259,12 @@ export function initNextVCallInspector() {
 
   restoreNextVCallInspectorInputs()
   syncNextVCallInspectorTargetMode()
+  syncNextVCallInspectorContractModeUi({ clearInactive: true })
   syncNextVCallInspectorToolsModeUi()
   refreshNextVCallInspectorAgents({ quiet: true })
   refreshNextVCallInspectorHistory({ quiet: true })
   renderNextVCallInspectorSnippet()
+  renderNextVCallInspectorReplayMessages()
   renderNextVCallInspectorResolvedCall(null)
   renderNextVCallInspectorResult({ status: 'call inspector ready' }, { forceTab: getStoredNextVCallInspectorResultTab() })
 }

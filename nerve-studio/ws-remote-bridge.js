@@ -180,7 +180,7 @@ export function createWsRemoteBridge({
     }
   }
 
-  function sendCommand({ type, payload = {}, requestId } = {}) {
+  function sendCommand({ type, payload = {}, requestId, commandTimeoutMs: perCommandTimeoutMs } = {}) {
     const commandType = String(type ?? '').trim()
     if (!commandType) {
       return Promise.reject(new Error('command type is required'))
@@ -193,12 +193,16 @@ export function createWsRemoteBridge({
     }
 
     const resolvedRequestId = String(requestId ?? '').trim() || `studio-${randomUUID()}`
+    const parsedPerCommandTimeoutMs = Number(perCommandTimeoutMs)
+    const effectiveCommandTimeoutMs = Number.isInteger(parsedPerCommandTimeoutMs) && parsedPerCommandTimeoutMs >= 0
+      ? parsedPerCommandTimeoutMs
+      : commandTimeoutMs
 
     return new Promise((resolveCommand, rejectCommand) => {
       const timeoutId = setTimeout(() => {
         pendingByRequestId.delete(resolvedRequestId)
         rejectCommand(new Error(`remote runtime command timed out: ${commandType}`))
-      }, commandTimeoutMs)
+      }, effectiveCommandTimeoutMs)
 
       pendingByRequestId.set(resolvedRequestId, {
         resolve: resolveCommand,

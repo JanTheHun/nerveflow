@@ -20,9 +20,13 @@ export function initNextVTokenClickPlugin() {
 
     const kind = String(target.dataset.nerveTokenKind ?? '').trim().toLowerCase()
     const value = String(target.dataset.nerveTokenValue ?? '').trim()
+    const callId = String(target.dataset.nerveTokenCallId ?? '').trim()
     if (!value || (kind !== 'agent' && kind !== 'model')) return
 
     event.preventDefault()
-    openNextVCallInspectorForToken(kind, value, { focusPrompt: true }).catch(() => {})
+    openNextVCallInspectorForToken(kind, value, {
+      focusPrompt: true,
+      ...(callId ? { callId } : {}),
+    }).catch(() => {})
   })
 }

@@ -81,11 +81,13 @@ export const storageKeys = {
   nextVCallInspectorRepeat: 'local-agent.nextv.callInspectorRepeat',
   nextVCallInspectorInstructions: 'local-agent.nextv.callInspectorInstructions',
   nextVCallInspectorPrompt: 'local-agent.nextv.callInspectorPrompt',
+  nextVCallInspectorContractMode: 'local-agent.nextv.callInspectorContractMode',
   nextVCallInspectorReturns: 'local-agent.nextv.callInspectorReturns',
   nextVCallInspectorDecide: 'local-agent.nextv.callInspectorDecide',
   nextVCallInspectorToolsMode: 'local-agent.nextv.callInspectorToolsMode',
   nextVCallInspectorToolsMaxRounds: 'local-agent.nextv.callInspectorToolsMaxRounds',
   nextVCallInspectorToolsTimeoutMs: 'local-agent.nextv.callInspectorToolsTimeoutMs',
+  nextVCallInspectorCommandTimeoutMs: 'local-agent.nextv.callInspectorCommandTimeoutMs',
   nextVCallInspectorToolsDenyUnknown: 'local-agent.nextv.callInspectorToolsDenyUnknown',
   nextVCallInspectorToolsExtra: 'local-agent.nextv.callInspectorToolsExtra',
   nextVCallInspectorToolsChecked: 'local-agent.nextv.callInspectorToolsChecked',
@@ -406,11 +408,17 @@ export const nextVCallRetryInput = document.getElementById('nextv-call-retry')
 export const nextVCallRepeatInput = document.getElementById('nextv-call-repeat')
 export const nextVCallInstructionsInput = document.getElementById('nextv-call-instructions')
 export const nextVCallPromptInput = document.getElementById('nextv-call-prompt')
+export const nextVCallContractNoneInput = document.getElementById('nextv-call-contract-none')
+export const nextVCallContractDecideInput = document.getElementById('nextv-call-contract-decide')
+export const nextVCallContractReturnsInput = document.getElementById('nextv-call-contract-returns')
+export const nextVCallDecideWrap = document.getElementById('nextv-call-decide-wrap')
+export const nextVCallReturnsWrap = document.getElementById('nextv-call-returns-wrap')
 export const nextVCallReturnsInput = document.getElementById('nextv-call-returns')
 export const nextVCallDecideInput = document.getElementById('nextv-call-decide')
 export const nextVCallToolsModeInput = document.getElementById('nextv-call-tools-mode')
 export const nextVCallToolsMaxRoundsInput = document.getElementById('nextv-call-tools-max-rounds')
 export const nextVCallToolsTimeoutMsInput = document.getElementById('nextv-call-tools-timeout-ms')
+export const nextVCallCommandTimeoutMsInput = document.getElementById('nextv-call-command-timeout-ms')
 export const nextVCallToolsDenyUnknownInput = document.getElementById('nextv-call-tools-deny-unknown')
 export const nextVCallToolsExtraInput = document.getElementById('nextv-call-tools-extra')
 export const nextVCallToolsList = document.getElementById('nextv-call-tools-list')
@@ -419,6 +427,7 @@ export const nextVCallToolsWarning = document.getElementById('nextv-call-tools-w
 export const nextVCallToolsSection = document.getElementById('nextv-call-tools-section')
 export const nextVCallResolvedLabel = document.getElementById('nextv-call-resolved-label')
 export const nextVCallResolvedOutput = document.getElementById('nextv-call-resolved')
+export const nextVCallReplayMessagesOutput = document.getElementById('nextv-call-replay-messages')
 export const nextVIngressNameInput = document.getElementById('nextv-ingress-name')
 export const nextVIngressValueInput = document.getElementById('nextv-ingress-value')
 export const nextVIngressControlsRow = document.getElementById('nextv-ingress-controls-row')
@@ -493,6 +502,9 @@ export const nextVCallResultValidation = document.getElementById('nextv-call-res
 export const nextVCallResultTry = document.getElementById('nextv-call-result-try')
 export const nextVCallResultMetadata = document.getElementById('nextv-call-result-metadata')
 export const nextVCallHistorySelect = document.getElementById('nextv-call-history')
+export const nextVCallContextMode = document.getElementById('nextv-call-context-mode')
+export const nextVCallContextModeText = document.getElementById('nextv-call-context-mode-text')
+export const nextVCallContextChip = document.getElementById('nextv-call-context-chip')
 export const settingsMenu = document.getElementById('settings-menu')
 export const scriptEditorPanel = document.getElementById('script-editor-panel')
 export const nextVInputExternalPane = document.getElementById('nextv-input-external-pane')

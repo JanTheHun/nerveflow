@@ -355,8 +355,13 @@ function buildCallInspectorArtifactFromResponse(responsePayload, {
     result: {
       actual: String(result.actual ?? result.output ?? ''),
       value: Object.prototype.hasOwnProperty.call(result, 'value') ? result.value : null,
+      metadata: result?.metadata ?? null,
       hadContractViolation: result.hadContractViolation === true,
       violation: result.violation ?? null,
+      toolCalls: Array.isArray(result.toolCalls) ? result.toolCalls : [],
+      toolResults: Array.isArray(result.toolResults) ? result.toolResults : [],
+      toolErrors: Array.isArray(result.toolErrors) ? result.toolErrors : [],
+      toolEvents: Array.isArray(result.toolEvents) ? result.toolEvents : [],
     },
     elapsedMs: Number.isFinite(Number(payload.elapsedMs)) ? Math.max(0, Number(payload.elapsedMs)) : 0,
     replayPayload: {
@@ -710,6 +715,7 @@ function buildResolvedCallSummary({
   target = '',
   prompt = '',
   instructions = '',
+  inputMessages = [],
   validate = 'coerce',
   retryOnViolation = 0,
   returnsContract = null,
@@ -737,8 +743,8 @@ function buildResolvedCallSummary({
       .filter(Boolean)
   }
 
-  function buildFinalRequestSummary(request = {}, wirePayload = {}, resolvedModel = '') {
-    const finalMessages = sanitizeRequestMessages(request.messages ?? wirePayload.messages)
+  function buildFinalRequestSummary(request = {}, wirePayload = {}, resolvedModel = '', fallbackMessages = []) {
+    const finalMessages = sanitizeRequestMessages(request.messages ?? wirePayload.messages ?? fallbackMessages)
     const toolNames = Array.isArray(request.toolNames)
       ? request.toolNames.map((value) => String(value ?? '').trim()).filter(Boolean)
       : []
@@ -789,7 +795,7 @@ function buildResolvedCallSummary({
   const messageCount = Number.isFinite(messageCountRaw)
     ? Math.max(0, Math.round(messageCountRaw))
     : undefined
-  const finalMessages = sanitizeRequestMessages(request.messages ?? wirePayload.messages)
+  const finalMessages = sanitizeRequestMessages(request.messages ?? wirePayload.messages ?? inputMessages)
   const attemptRaw = Number(request.attempt)
   const attempt = Number.isFinite(attemptRaw) ? Math.max(1, Math.round(attemptRaw)) : 1
   const retryLimitRaw = Number(request.retryLimit)
@@ -812,7 +818,7 @@ function buildResolvedCallSummary({
     retryLimit,
     retryGuidanceInjected: detectRetryGuidanceInjected(finalMessages),
     finalMessages,
-    finalRequest: buildFinalRequestSummary(request, wirePayload, resolvedModel),
+    finalRequest: buildFinalRequestSummary(request, wirePayload, resolvedModel, inputMessages),
     validate: String(request.validate ?? validate ?? 'coerce').trim() || 'coerce',
     retry_on_contract_violation: Number.isInteger(Number(request.retry_on_contract_violation))
       ? Math.max(0, Math.min(8, Number(request.retry_on_contract_violation)))
@@ -833,6 +839,66 @@ function normalizeCallInspectorCallResult(callResult) {
     value: callResult,
     outputText: typeof callResult === 'string' ? callResult : '',
     metadata: null,
+  }
+}
+
+function normalizeCallInspectorToolEvent(rawEvent) {
+  if (!rawEvent || typeof rawEvent !== 'object' || Array.isArray(rawEvent)) return null
+  const typeRaw = String(rawEvent.type ?? '').trim().toLowerCase()
+  if (!typeRaw) return null
+  const type = ['tool_call', 'tool_result', 'tool_error'].includes(typeRaw)
+    ? typeRaw
+    : null
+  if (!type) return null
+  const tool = String(rawEvent.tool ?? rawEvent.name ?? '').trim()
+  const roundRaw = Number(rawEvent.round)
+  const normalized = {
+    type,
+    tool,
+    correlationId: String(rawEvent.correlationId ?? rawEvent.tool_call_id ?? rawEvent.id ?? '').trim(),
+    round: Number.isFinite(roundRaw) ? Math.max(0, Math.round(roundRaw)) : null,
+    status: String(rawEvent.status ?? '').trim(),
+    executionRole: String(rawEvent.executionRole ?? '').trim(),
+  }
+  if (type === 'tool_call') {
+    normalized.args = rawEvent.args ?? null
+    normalized.schemaSource = String(rawEvent.schemaSource ?? '').trim()
+  }
+  if (type === 'tool_result') {
+    normalized.result = Object.prototype.hasOwnProperty.call(rawEvent, 'result')
+      ? rawEvent.result
+      : null
+  }
+  if (type === 'tool_error') {
+    normalized.error = rawEvent.error ?? null
+  }
+  return normalized
+}
+
+function collectCallInspectorToolTrace(metadata, governedToolEvents = []) {
+  const metadataObj = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? metadata
+    : {}
+  const metadataEvents = Array.isArray(metadataObj.toolEvents) ? metadataObj.toolEvents : []
+  const mergedEvents = []
+  for (const event of governedToolEvents) {
+    const normalized = normalizeCallInspectorToolEvent(event)
+    if (normalized) mergedEvents.push(normalized)
+  }
+  for (const event of metadataEvents) {
+    const normalized = normalizeCallInspectorToolEvent(event)
+    if (normalized) mergedEvents.push(normalized)
+  }
+
+  const toolCalls = mergedEvents.filter((event) => event.type === 'tool_call')
+  const toolResults = mergedEvents.filter((event) => event.type === 'tool_result')
+  const toolErrors = mergedEvents.filter((event) => event.type === 'tool_error')
+
+  return {
+    toolEvents: mergedEvents,
+    toolCalls,
+    toolResults,
+    toolErrors,
   }
 }
 
@@ -1078,10 +1144,41 @@ function buildWorkflowCallInspectorArtifact(runtimePayload, runtimeTarget = 'emb
         retryOnViolation: Number(requestMetadata?.retry_on_contract_violation ?? requestMetadata?.retryLimit ?? 0),
         requestMetadata,
       })
+  const replayPayload = (targetKind === 'agent' || targetKind === 'model') && requestMetadata
+    ? {
+        workspaceDir,
+        targetKind,
+        mode: 'call',
+        ...(targetKind === 'model' ? { model: target } : { agent: target }),
+        prompt: String(requestMetadata.prompt ?? ''),
+        instructions: String(requestMetadata.instructions ?? ''),
+        ...(Array.isArray(requestMetadata.messages)
+          ? {
+              messages: requestMetadata.messages
+                .map((entry) => {
+                  if (!entry || typeof entry !== 'object') return null
+                  const role = String(entry.role ?? '').trim()
+                  const content = String(entry.content ?? '').trim()
+                  if (!role || !content) return null
+                  return { role, content }
+                })
+                .filter(Boolean),
+            }
+          : {}),
+        validate: String(requestMetadata.validate ?? 'coerce').trim().toLowerCase() || 'coerce',
+        retry_on_contract_violation: Number.isInteger(Number(requestMetadata.retry_on_contract_violation))
+          ? Number(requestMetadata.retry_on_contract_violation)
+          : (Number.isInteger(Number(requestMetadata.retryLimit)) ? Number(requestMetadata.retryLimit) : 0),
+        ...(Object.prototype.hasOwnProperty.call(requestMetadata, 'returns') ? { returns: requestMetadata.returns } : {}),
+        ...(Array.isArray(requestMetadata.decide) && requestMetadata.decide.length > 0 ? { decide: requestMetadata.decide } : {}),
+        ...(requestMetadata.tools && typeof requestMetadata.tools === 'object' ? { tools: requestMetadata.tools } : {}),
+      }
+    : null
+  const eventCallId = String(runtimeEvent.callId ?? '').trim()
 
   return {
     schemaVersion: CALL_INSPECTOR_ARTIFACT_SCHEMA_VERSION,
-    callId: randomUUID(),
+    callId: eventCallId || randomUUID(),
     replayOf: null,
     source: 'workflow',
     createdAt: new Date().toISOString(),
@@ -1109,6 +1206,7 @@ function buildWorkflowCallInspectorArtifact(runtimePayload, runtimeTarget = 'emb
       violation,
     },
     elapsedMs: Number.isFinite(Number(metadata.elapsedMs)) ? Math.max(0, Number(metadata.elapsedMs)) : 0,
+    ...(replayPayload ? { replayPayload } : {}),
   }
 }
 
@@ -2857,9 +2955,14 @@ async function handleApi(req, res, url) {
         if (!remoteWorkspaceDir || remoteWorkspaceDir === '.' || isAbsolute(remoteWorkspaceDir)) {
           delete remotePayload.workspaceDir
         }
+        const commandTimeoutMsRaw = Number(url.searchParams.get('commandTimeoutMs'))
+        const commandTimeoutMs = Number.isInteger(commandTimeoutMsRaw) && commandTimeoutMsRaw >= 0
+          ? commandTimeoutMsRaw
+          : null
         response = await runtimeBridge.sendCommand({
           type: 'call_inspector_execute',
           payload: remotePayload,
+          ...(commandTimeoutMs == null ? {} : { commandTimeoutMs }),
         })
       } catch (err) {
         if (String(err?.code ?? '') === 'validation_error') {
@@ -3013,6 +3116,7 @@ async function handleApi(req, res, url) {
 
       const runOnce = async () => {
         const startedAt = Date.now()
+        const governedToolEvents = []
         let callResult = null
         let tryEnvelope = null
         let tryError = null
@@ -3042,6 +3146,11 @@ async function handleApi(req, res, url) {
               value: renderComposedTextPreview(promptInput.parts),
               payload: {},
             },
+            onGovernedToolEvent: async (toolEvent) => {
+              if (toolEvent && typeof toolEvent === 'object') {
+                governedToolEvents.push(toolEvent)
+              }
+            },
           })
         } catch (err) {
           if (mode !== 'try') throw err
@@ -3067,6 +3176,7 @@ async function handleApi(req, res, url) {
         const hadTryContractViolation = mode === 'try'
           && tryEnvelope?.ok === false
           && String(tryEnvelope?.error?.type ?? '').trim().toLowerCase() === 'agent_return_contract_violation'
+        const toolTrace = collectCallInspectorToolTrace(normalizedCallResult?.metadata, governedToolEvents)
 
         const responsePayload = {
           call: {
@@ -3084,6 +3194,7 @@ async function handleApi(req, res, url) {
             target: targetKind === 'agent' ? agentName : modelName,
             prompt,
             instructions,
+            inputMessages: normalizedMessages,
             validate: validateMode,
             retryOnViolation,
             returnsContract,
@@ -3101,6 +3212,10 @@ async function handleApi(req, res, url) {
               ? tryEnvelope
               : (isViolation ? null : (normalizedCallResult?.value ?? null)),
             metadata: normalizedCallResult?.metadata ?? null,
+            toolCalls: toolTrace.toolCalls,
+            toolResults: toolTrace.toolResults,
+            toolErrors: toolTrace.toolErrors,
+            toolEvents: toolTrace.toolEvents,
             violation: mode === 'try'
               ? (hadTryContractViolation
                 ? {
@@ -3184,6 +3299,10 @@ async function handleApi(req, res, url) {
             parsed: null,
             value: null,
             metadata: null,
+            toolCalls: [],
+            toolResults: [],
+            toolErrors: [],
+            toolEvents: [],
             violation: null,
             hadContractViolation: false,
           },
@@ -3222,6 +3341,33 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, {
       ok: true,
       artifacts: listCallInspectorArtifacts(url.searchParams.get('limit')),
+      ...buildRemoteModeMetadata(runtimeTarget, url),
+    })
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/nextv/call-inspector/artifact') {
+    const runtimeTarget = resolveRuntimeTarget(url)
+    const callId = String(url.searchParams.get('callId') ?? '').trim()
+    if (!callId) {
+      return sendJson(res, 400, {
+        ok: false,
+        error: 'callId query parameter is required',
+        ...buildRemoteModeMetadata(runtimeTarget, url),
+      })
+    }
+
+    const artifact = getCallInspectorArtifact(callId)
+    if (!artifact) {
+      return sendJson(res, 404, {
+        ok: false,
+        error: `call inspector artifact not found for callId "${callId}"`,
+        ...buildRemoteModeMetadata(runtimeTarget, url),
+      })
+    }
+
+    return sendJson(res, 200, {
+      ok: true,
+      artifact,
       ...buildRemoteModeMetadata(runtimeTarget, url),
     })
   }

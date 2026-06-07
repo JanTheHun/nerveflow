@@ -1868,9 +1868,44 @@ body.mode-nextv.nextv-primary-editor #nextv-floating-panel-chooser {
   flex-shrink: 0;
 }
 
+.nextv-call-contract-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.nextv-call-contract-mode .nextv-call-target-config-label {
+  margin-right: 2px;
+}
+
 .nextv-call-target-config-label {
   font-size: 12px;
   color: var(--call-config-label);
+}
+
+.nextv-call-context-mode {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--call-config-label);
+  border: 1px dashed var(--call-config-border);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.nextv-call-context-mode.is-replay {
+  border-style: solid;
+}
+
+.nextv-call-context-chip {
+  border: 1px solid var(--call-config-border);
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 7px;
 }
 
 .nextv-call-target-config-output {
@@ -1893,6 +1928,15 @@ body.mode-nextv.nextv-primary-editor #nextv-floating-panel-chooser {
   max-height: none;
   resize: vertical;
   flex: 0 0 auto;
+}
+
+.nextv-call-messages-output {
+  min-height: 84px;
+  max-height: 180px;
+}
+
+#nextv-call-history {
+  min-height: 210px;
 }
 
 .nextv-call-generated-code-output,
@@ -4483,7 +4527,7 @@ body.mode-nextv #nextv-stop-btn:hover {
 }
 
 .nextv-call-inline-field input[type="number"] {
-  width: 50px;
+  width: 80px;
   padding: 3px 6px;
 }
 

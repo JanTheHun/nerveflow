@@ -111,6 +111,7 @@ import {
   syncNextVRuntimeState,
   runNextVRuntime,
   killNextVRuntime,
+  clearNextVCallInspectorConfig,
   applyLeftPanelHeights,
   applyStoredLeftPanelHeights
 } from './12_stream.js'
@@ -600,6 +601,8 @@ export function toggleNextVCallInspectorPanel() {
     window.requestAnimationFrame(() => {
       restoreNextVCallInspectorPanelLayout()
     })
+    // Opening from the tab always starts blank; explicit context open flows hydrate after toggle.
+    clearNextVCallInspectorConfig({ quiet: true })
   }
   
   if (nextVViewCallInspector) {

@@ -369,6 +369,7 @@
           <div class="nextv-call-inspector-header">
             <span id="nextv-call-inspector-title" class="nextv-call-inspector-title">call inspector</span>
             <div class="nextv-call-inspector-actions">
+              <button id="nextv-call-clear-config" type="button" class="mini-btn" onclick="clearNextVCallInspectorConfig()" title="clear call inspector config">clear</button>
               <button type="button" class="panel-icon-btn" onclick="toggleNextVCallInspectorPanel()" title="close panel" aria-label="close panel">✕</button>
             </div>
           </div>
@@ -398,19 +399,31 @@
                   <span>retry</span>
                   <input id="nextv-call-retry" type="number" min="0" max="8" step="1" value="0" title="retry count" />
                 </label>
-                <label class="nextv-call-inline-field" for="nextv-call-repeat">
-                  <span>repeat</span>
-                  <input id="nextv-call-repeat" type="number" min="1" max="50" step="1" value="1" title="repeat count" />
-                </label>
                 <button type="button" onclick="executeNextVCallInspector()">run call</button>
-                <button type="button" onclick="refreshNextVCallInspectorHistory()">refresh history</button>
-                <button type="button" onclick="replayLastNextVCallInspectorCall()">replay last</button>
-                <button type="button" onclick="replaySelectedNextVCallInspectorCall()">replay selected</button>
               </div>
               <textarea id="nextv-call-instructions" rows="2" placeholder="system instructions (optional)" autocomplete="off" spellcheck="false"></textarea>
               <textarea id="nextv-call-prompt" rows="3" placeholder="prompt" autocomplete="off" spellcheck="false"></textarea>
-              <textarea id="nextv-call-returns" rows="3" placeholder="returns contract JSON (optional)"></textarea>
-              <input id="nextv-call-decide" type="text" placeholder="decide options (comma-separated, optional)" autocomplete="off" spellcheck="false" />
+              <div class="nextv-call-contract-mode">
+                <span class="nextv-call-target-config-label">contract mode</span>
+                <label class="check-label">
+                  <input id="nextv-call-contract-none" name="nextv-call-contract-mode" type="radio" value="none" checked>
+                  no contract
+                </label>
+                <label class="check-label">
+                  <input id="nextv-call-contract-decide" name="nextv-call-contract-mode" type="radio" value="decide">
+                  decide
+                </label>
+                <label class="check-label">
+                  <input id="nextv-call-contract-returns" name="nextv-call-contract-mode" type="radio" value="returns">
+                  returns
+                </label>
+              </div>
+              <div id="nextv-call-decide-wrap" hidden>
+                <input id="nextv-call-decide" type="text" placeholder="decide options (comma-separated)" autocomplete="off" spellcheck="false" />
+              </div>
+              <div id="nextv-call-returns-wrap" hidden>
+                <textarea id="nextv-call-returns" rows="3" placeholder="returns contract JSON"></textarea>
+              </div>
               <div id="nextv-call-tools-section" class="nextv-call-target-config">
                 <div class="nextv-call-target-config-label">governed tools policy</div>
                 <div id="nextv-call-tools-warning" class="nextv-call-tools-warning" hidden></div>
@@ -427,6 +440,10 @@
                     <span>timeout ms</span>
                     <input id="nextv-call-tools-timeout-ms" type="number" min="0" step="100" value="0" title="tools timeout ms" />
                   </label>
+                  <label class="nextv-call-inline-field" for="nextv-call-command-timeout-ms">
+                    <span>command timeout ms</span>
+                    <input id="nextv-call-command-timeout-ms" type="number" min="0" step="1000" value="10000" title="remote command timeout ms" />
+                  </label>
                   <label class="check-label">
                     <input id="nextv-call-tools-deny-unknown" type="checkbox" checked>
                     deny unknown tools
@@ -442,8 +459,28 @@
             </div>
             <div class="nextv-call-inspector-right">
               <div class="nextv-call-target-config">
+                <div class="nextv-call-target-config-label">replay controls</div>
+                <div class="footer-row" style="gap:8px;flex-wrap:wrap;align-items:center">
+                  <label class="nextv-call-inline-field" for="nextv-call-repeat">
+                    <span>repeat</span>
+                    <input id="nextv-call-repeat" type="number" min="1" max="50" step="1" value="1" title="repeat count" />
+                  </label>
+                  <button type="button" onclick="refreshNextVCallInspectorHistory()">refresh history</button>
+                  <button type="button" onclick="replayLastNextVCallInspectorCall()">replay last</button>
+                  <button type="button" onclick="replaySelectedNextVCallInspectorCall()">replay selected</button>
+                </div>
+              </div>
+              <div class="nextv-call-target-config">
                 <div class="nextv-call-target-config-label">history</div>
-                <select id="nextv-call-history" title="call inspector history" size="6" style="width:100%"></select>
+                <select id="nextv-call-history" title="call inspector history" size="10" style="width:100%"></select>
+              </div>
+              <div id="nextv-call-context-mode" class="nextv-call-context-mode" aria-live="polite">
+                <span id="nextv-call-context-mode-text">execution context: prompt/instructions fields</span>
+                <span id="nextv-call-context-chip" class="nextv-call-context-chip" hidden></span>
+              </div>
+              <div class="nextv-call-target-config">
+                <div class="nextv-call-target-config-label">context messages</div>
+                <pre id="nextv-call-replay-messages" class="panel-scroll nextv-call-target-config-output nextv-call-messages-output"></pre>
               </div>
               <div class="nextv-call-target-config">
                 <div id="nextv-call-resolved-label" class="nextv-call-target-config-label">resolved call</div>
@@ -503,6 +540,6 @@
   <script src="dagre.min.js"></script>
   <script src="nextv_graph_mapping.js?v=20260429a"></script>
   <script src="nextv_graph_timer_api.js?v=20260503a"></script>
-  <script type="module" src="src-app/14_init.js?v=20260528a"></script>
+  <script type="module" src="src-app/14_init.js?v=20260601c"></script>
 </body>
 </html>

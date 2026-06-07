@@ -1,10 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { createServer as createHttpServer } from 'node:http'
 import { createServer as createNetServer } from 'node:net'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
+import { WebSocketServer } from 'ws'
 
 const SERVER_BOOT_TIMEOUT_MS = 20000
 
@@ -55,6 +57,96 @@ function waitForOutput(child, text, timeoutMs = SERVER_BOOT_TIMEOUT_MS) {
     child.stderr.on('data', onData)
     child.once('exit', onExit)
   })
+}
+
+async function createRuntimeWsHarness({
+  callInspectorResponse = null,
+} = {}) {
+  const port = await findOpenPort()
+  const server = createHttpServer((_req, res) => {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
+    res.end('Not Found')
+  })
+
+  const path = '/api/runtime/ws'
+  const wss = new WebSocketServer({ server, path })
+
+  wss.on('connection', (socket) => {
+    socket.send(JSON.stringify({
+      type: 'response',
+      protocolVersion: '1.0',
+      sessionId: 'runtime-ws-test',
+      ok: true,
+      data: {
+        connected: true,
+        active: true,
+        workspaceDir: 'examples/mqtt-simple-host',
+        entrypointPath: 'workflow.nrv',
+        snapshot: {
+          running: true,
+          executionCount: 0,
+        },
+      },
+      timestamp: new Date().toISOString(),
+    }))
+
+    socket.on('message', (raw) => {
+      let parsed
+      try {
+        parsed = JSON.parse(String(raw ?? '{}'))
+      } catch {
+        return
+      }
+
+      if (parsed?.type === 'snapshot') {
+        socket.send(JSON.stringify({
+          type: 'response',
+          protocolVersion: '1.0',
+          requestId: parsed.requestId,
+          sessionId: 'runtime-ws-test',
+          ok: true,
+          data: {
+            running: true,
+            workspaceDir: 'examples/mqtt-simple-host',
+            entrypointPath: 'workflow.nrv',
+            snapshot: {
+              running: true,
+              queueLength: 0,
+            },
+          },
+          timestamp: new Date().toISOString(),
+        }))
+        return
+      }
+
+      if (parsed?.type === 'call_inspector_execute') {
+        socket.send(JSON.stringify({
+          type: 'response',
+          protocolVersion: '1.0',
+          requestId: parsed.requestId,
+          sessionId: 'runtime-ws-test',
+          ok: true,
+          data: callInspectorResponse,
+          timestamp: new Date().toISOString(),
+        }))
+      }
+    })
+  })
+
+  await new Promise((resolveListen, rejectListen) => {
+    server.listen(port, '127.0.0.1', (err) => {
+      if (err) return rejectListen(err)
+      resolveListen()
+    })
+  })
+
+  return {
+    wsUrl: `ws://127.0.0.1:${port}${path}`,
+    async close() {
+      await new Promise((resolveClose) => wss.close(() => resolveClose()))
+      await new Promise((resolveClose) => server.close(() => resolveClose()))
+    },
+  }
 }
 
 function stopProcess(child) {
@@ -385,6 +477,164 @@ test('preview server records call inspector artifacts and serves history', async
   }
 })
 
+test('preview server serves a specific call inspector artifact by callId', async () => {
+  const studioPort = await findOpenPort()
+  let studioChild
+
+  try {
+    studioChild = spawn(process.execPath, [
+      'nerve-studio/preview-server.js',
+    ], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PORT: String(studioPort),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    await waitForOutput(studioChild, 'nerve-studio preview running at')
+
+    const executeResponse = await fetch(`http://127.0.0.1:${studioPort}/api/nextv/call-inspector/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspaceDir: 'examples/mqtt-simple-host',
+        targetKind: 'model',
+        mode: 'try',
+        model: 'test-model',
+        prompt: 'artifact lookup prompt',
+        messages: [
+          { role: 'user', content: 'artifact lookup prompt' },
+          { role: 'assistant', content: 'artifact lookup reply' },
+        ],
+      }),
+    })
+    const executePayload = await executeResponse.json().catch(() => ({}))
+
+    assert.equal(executeResponse.ok, true)
+    assert.equal(typeof executePayload.artifact?.callId, 'string')
+
+    const callId = encodeURIComponent(String(executePayload.artifact.callId))
+    const artifactResponse = await fetch(`http://127.0.0.1:${studioPort}/api/nextv/call-inspector/artifact?callId=${callId}`)
+    const artifactPayload = await artifactResponse.json().catch(() => ({}))
+
+    assert.equal(artifactResponse.ok, true)
+    assert.equal(artifactPayload.ok, true)
+    assert.equal(String(artifactPayload.artifact?.callId ?? ''), String(executePayload.artifact.callId))
+    assert.equal(String(artifactPayload.artifact?.replayPayload?.prompt ?? ''), 'artifact lookup prompt')
+    assert.equal(Array.isArray(artifactPayload.artifact?.replayPayload?.messages), true)
+    assert.equal(artifactPayload.artifact.replayPayload.messages.length > 0, true)
+  } finally {
+    await stopProcess(studioChild)
+  }
+})
+
+test('preview server preserves metadata when building stored artifact from remote ws call inspector response', async () => {
+  const studioPort = await findOpenPort()
+  const runtimeHarness = await createRuntimeWsHarness({
+    callInspectorResponse: {
+      call: {
+        mode: 'call',
+        targetKind: 'model',
+        target: 'test-model',
+        validate: 'coerce',
+        retry_on_contract_violation: 0,
+      },
+      resolvedCall: {
+        targetKind: 'model',
+        target: 'test-model',
+        prompt: 'artifact lookup prompt',
+        instructions: '',
+        validate: 'coerce',
+        retry_on_contract_violation: 0,
+        finalMessages: [
+          { role: 'user', content: 'artifact lookup prompt' },
+          { role: 'assistant', content: 'artifact lookup reply' },
+        ],
+      },
+      result: {
+        actual: 'artifact lookup reply',
+        value: 'artifact lookup reply',
+        metadata: {
+          request: {
+            prompt: 'artifact lookup prompt',
+            messages: [
+              { role: 'user', content: 'artifact lookup prompt' },
+              { role: 'assistant', content: 'artifact lookup reply' },
+            ],
+          },
+          provider: 'test-provider',
+        },
+        toolCalls: [],
+        toolResults: [],
+        toolErrors: [],
+        toolEvents: [],
+        violation: null,
+        hadContractViolation: false,
+      },
+      elapsedMs: 12,
+    },
+  })
+  let studioChild
+
+  try {
+    studioChild = spawn(process.execPath, [
+      'nerve-studio/preview-server.js',
+      '--remote-ws',
+      runtimeHarness.wsUrl,
+    ], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PORT: String(studioPort),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    await waitForOutput(studioChild, 'nerve-studio preview running at')
+    await waitForSnapshot(
+      `http://127.0.0.1:${studioPort}/api/nextv/snapshot`,
+      (response, payload) => response.ok && payload?.remoteTransport === 'ws' && payload?.running === true,
+    )
+
+    const executeResponse = await fetch(`http://127.0.0.1:${studioPort}/api/nextv/call-inspector/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspaceDir: 'examples/mqtt-simple-host',
+        targetKind: 'model',
+        mode: 'call',
+        model: 'test-model',
+        prompt: 'artifact lookup prompt',
+      }),
+    })
+    const executePayload = await executeResponse.json().catch(() => ({}))
+
+    assert.equal(executeResponse.ok, true)
+    assert.equal(typeof executePayload.artifact?.callId, 'string')
+
+    const callId = encodeURIComponent(String(executePayload.artifact.callId))
+    const artifactResponse = await fetch(`http://127.0.0.1:${studioPort}/api/nextv/call-inspector/artifact?callId=${callId}`)
+    const artifactPayload = await artifactResponse.json().catch(() => ({}))
+
+    assert.equal(artifactResponse.ok, true)
+    assert.equal(artifactPayload.ok, true)
+    assert.equal(Boolean(artifactPayload.artifact?.result?.metadata), true)
+    assert.equal(
+      String(artifactPayload.artifact?.result?.metadata?.request?.prompt ?? ''),
+      'artifact lookup prompt',
+    )
+    assert.equal(
+      String(artifactPayload.artifact?.result?.metadata?.provider ?? ''),
+      'test-provider',
+    )
+  } finally {
+    await stopProcess(studioChild)
+    await runtimeHarness.close()
+  }
+})
+
 test('preview server call inspector supports repeat aggregation in local mode', async () => {
   const studioPort = await findOpenPort()
   let studioChild
@@ -470,7 +720,7 @@ test('preview server attach call inspector forwards structured prompt and instru
     )
 
     const response = await fetch(
-      `http://127.0.0.1:${studioPort}/api/nextv/call-inspector/execute?runtimeTarget=attach&attachWsUrl=${encodedAttachWsUrl}`,
+      `http://127.0.0.1:${studioPort}/api/nextv/call-inspector/execute?runtimeTarget=attach&attachWsUrl=${encodedAttachWsUrl}&commandTimeoutMs=30000`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

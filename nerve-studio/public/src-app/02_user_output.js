@@ -605,11 +605,12 @@ function parseExecutionToolArgs(value) {
   }
 }
 
-function getExecutionEventTokenTarget(event) {
+export function getExecutionEventTokenTarget(event) {
+  const callId = String(event?.callId ?? '').trim()
   const type = String(event?.type ?? '').trim().toLowerCase()
   if (type === 'agent_call') {
     const agent = String(event?.agent ?? '').trim()
-    if (agent) return { kind: 'agent', value: agent }
+    if (agent) return { kind: 'agent', value: agent, callId }
     return null
   }
 
@@ -625,7 +626,7 @@ function getExecutionEventTokenTarget(event) {
   for (const key of candidateKeys) {
     const value = String(args?.[key] ?? '').trim()
     if (value) {
-      return { kind: tool, value }
+      return { kind: tool, value, callId }
     }
   }
 
@@ -642,7 +643,7 @@ function removeFirstCaseInsensitive(haystack, needle) {
   return `${source.slice(0, index)}${source.slice(index + target.length)}`
 }
 
-function buildExecutionEventContentFragment(event) {
+export function buildExecutionEventContentFragment(event) {
   const fragment = document.createDocumentFragment()
   const tokenTarget = getExecutionEventTokenTarget(event)
   if (!tokenTarget) {
@@ -661,6 +662,9 @@ function buildExecutionEventContentFragment(event) {
   tokenEl.className = 'exec-event-token'
   tokenEl.dataset.nerveTokenKind = tokenTarget.kind
   tokenEl.dataset.nerveTokenValue = tokenTarget.value
+  if (tokenTarget.callId) {
+    tokenEl.dataset.nerveTokenCallId = tokenTarget.callId
+  }
   tokenEl.textContent = tokenTarget.value
   tokenEl.title = `open call inspector for ${tokenTarget.kind} ${tokenTarget.value}`
   fragment.appendChild(tokenEl)

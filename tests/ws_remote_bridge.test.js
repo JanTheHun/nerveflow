@@ -209,3 +209,32 @@ test('ws remote bridge forwards events and supports command round-trip', async (
     await harness.close()
   }
 })
+
+test('ws remote bridge supports per-command timeout override', async () => {
+  const harness = await createRemoteBridgeHarness()
+  const eventBus = createEventBus()
+  const bridge = createWsRemoteBridge({
+    wsUrl: harness.wsUrl,
+    eventBus,
+    commandTimeoutMs: 10000,
+  })
+
+  try {
+    await waitUntil(() => bridge.getStatus().connected === true)
+
+    const startedAt = Date.now()
+    await assert.rejects(
+      () => bridge.sendCommand({
+        type: 'never_reply',
+        payload: { value: 'x' },
+        commandTimeoutMs: 25,
+      }),
+      /remote runtime command timed out: never_reply/i,
+    )
+    const elapsedMs = Date.now() - startedAt
+    assert.equal(elapsedMs < 1500, true)
+  } finally {
+    bridge.disconnect()
+    await harness.close()
+  }
+})

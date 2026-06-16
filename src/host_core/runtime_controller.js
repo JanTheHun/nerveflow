@@ -98,6 +98,7 @@ export function createNextVRuntimeController({
   callAgent,
   defaultModel = '',
   slowAgentWarningMs = 15000,
+  promptSugarStrict = false,
   parallelMaxConcurrency = null,
 }) {
   let nextVRunner = null
@@ -716,6 +717,7 @@ export function createNextVRuntimeController({
       buildDecideRetryPrompt,
       validateDecideOutput,
       toolRuntime,
+      promptSugarStrict,
     })
     nextVRuntimeCallHooks = runtimeCallHooks
 

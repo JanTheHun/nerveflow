@@ -1694,6 +1694,70 @@ test('agent() supports explicit messages array', async () => {
   assert.equal(result.locals.answer, 'I can help with local automation.')
 })
 
+test('agent() emits deprecation warning when prompt sugar is used', async () => {
+  const result = await runNextVScript('answer = agent("chat", "hello")', {
+    callAgent: async () => 'hi',
+  })
+
+  const warning = result.warnings.find((event) => event.code === 'PROMPT_SUGAR_DEPRECATED')
+  assert.equal(Boolean(warning), true)
+  assert.match(String(warning?.message ?? ''), /prompt is deprecated/i)
+})
+
+test('model() emits deprecation warning when prompt sugar is used', async () => {
+  const result = await runNextVScript('answer = model("phi3:mini-128k", "hello")', {
+    callAgent: async () => 'hi',
+  })
+
+  const warning = result.warnings.find((event) => event.code === 'PROMPT_SUGAR_DEPRECATED')
+  assert.equal(Boolean(warning), true)
+  assert.match(String(warning?.message ?? ''), /prompt is deprecated/i)
+})
+
+test('agent() emits ambiguity warning for prompt and messages by default', async () => {
+  const result = await runNextVScript([
+    'history = [{ role: "user", content: "hello" }] ',
+    'answer = agent("chat", "what now?", messages=history)',
+  ].join('\n'), {
+    callAgent: async () => 'ok',
+  })
+
+  const warning = result.warnings.find((event) => event.code === 'PROMPT_MESSAGES_CONFLICT_DEPRECATED')
+  assert.equal(Boolean(warning), true)
+  assert.match(String(warning?.message ?? ''), /will become an error/i)
+})
+
+test('agent() prompt sugar strict mode rejects prompt usage', async () => {
+  await assert.rejects(
+    () => runNextVScript('answer = agent("chat", "hello")', {
+      promptSugarStrict: true,
+      callAgent: async () => 'unused',
+    }),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'PROMPT_SUGAR_STRICT')
+      return true
+    },
+  )
+})
+
+test('agent() prompt sugar strict mode rejects prompt+messages conflicts', async () => {
+  await assert.rejects(
+    () => runNextVScript([
+      'history = [{ role: "user", content: "hello" }] ',
+      'answer = agent("chat", "what now?", messages=history)',
+    ].join('\n'), {
+      promptSugarStrict: true,
+      callAgent: async () => 'unused',
+    }),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'PROMPT_MESSAGES_CONFLICT')
+      return true
+    },
+  )
+})
+
 test('agent() rejects invalid messages payload', async () => {
   await assert.rejects(
     () => runNextVScript('answer = agent("chat", messages="not-an-array")', {

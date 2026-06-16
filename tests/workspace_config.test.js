@@ -160,7 +160,7 @@ test('nextv.json toolsConfig overrides inline tools block', () => {
   }
 })
 
-test('nextv.json toolsConfig supports alias chains', () => {
+test('nextv.json toolsConfig rejects alias chains', () => {
   const workspaceDir = createWorkspace({
     'nextv.json': JSON.stringify({
       tools: {
@@ -181,13 +181,10 @@ test('nextv.json toolsConfig supports alias chains', () => {
   })
 
   try {
-    const config = loadConfig(workspaceDir)
-    assert.deepEqual(Array.from(config.tools.allow), ['leaf_tool'])
-    assert.deepEqual(config.tools.aliases, {
-      alias_a: 'alias_b',
-      alias_b: 'leaf_tool',
-    })
-    assert.equal(config.tools.source, 'tools.custom.json')
+    assert.throws(
+      () => loadConfig(workspaceDir),
+      /Alias chains are not allowed\./,
+    )
   } finally {
     rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
   }
@@ -227,7 +224,7 @@ test('rejects tools aliases with cycles', () => {
   try {
     assert.throws(
       () => loadConfig(workspaceDir),
-      /aliases contain a cycle/,
+      /Alias chains are not allowed\./,
     )
   } finally {
     rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
@@ -248,7 +245,32 @@ test('rejects tools aliases with self-reference', () => {
   try {
     assert.throws(
       () => loadConfig(workspaceDir),
-      /aliases contain a cycle/,
+      /Alias chains are not allowed\./,
+    )
+  } finally {
+    rmSync(workspaceDir.absolutePath, { recursive: true, force: true })
+  }
+})
+
+test('rejects aliases that conflict with canonical capability identity format', () => {
+  const workspaceDir = createWorkspace({
+    'nextv.json': JSON.stringify({
+      tools: {
+        aliases: {
+          'memory.store': 'memory.retrieve',
+        },
+      },
+    }),
+  })
+
+  try {
+    assert.throws(
+      () => loadConfig(workspaceDir),
+      (err) => {
+        assert.equal(err.code, 'ALIAS_CONFLICT')
+        assert.match(err.message, /conflicts with canonical capability identity format/i)
+        return true
+      },
     )
   } finally {
     rmSync(workspaceDir.absolutePath, { recursive: true, force: true })

@@ -6,7 +6,10 @@ const TOOL_METADATA = {
   run_command: { effectful: true, categories: ['process'], needsConfirmation: true },
   speak: { effectful: true, categories: ['audio'], needsConfirmation: false },
   render_view: { effectful: true, categories: ['visual'], needsConfirmation: false },
-  get_time: { effectful: false, categories: ['time'], needsConfirmation: false }
+  get_time: { effectful: false, categories: ['time'], needsConfirmation: false },
+  'time.now': { effectful: false, categories: ['time'], needsConfirmation: false },
+  'http.fetch': { effectful: false, categories: ['network'], needsConfirmation: false },
+  'rss.fetch': { effectful: false, categories: ['network'], needsConfirmation: false }
 }
 
 export function getToolMetadata(name) {

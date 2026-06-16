@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isComposedTextInputValue } from './structured_inputs.js'
+import { isCanonicalCapabilityIdentity } from './capability_identity.js'
 
 const BUILTIN_OUTPUT_CHANNELS = new Set(['text', 'console', 'voice', 'visual', 'json', 'interaction'])
 
@@ -137,29 +138,32 @@ function parseWorkspaceToolsConfig(raw, sourceLabel) {
   let allow
   let aliases = {}
 
+  const createAliasConflictError = (message) => {
+    const err = new Error(message)
+    err.code = 'ALIAS_CONFLICT'
+    return err
+  }
+
   const validateAliases = (aliasesMap) => {
     const aliasKeys = Object.keys(aliasesMap)
     for (const alias of aliasKeys) {
       const aliasName = String(alias).trim()
       if (!aliasName) {
-        throw new Error(`${sourceLabel}: alias names must be non-empty strings.`)
+        throw createAliasConflictError(`${sourceLabel}: alias names must be non-empty strings.`)
+      }
+      if (isCanonicalCapabilityIdentity(aliasName)) {
+        throw createAliasConflictError(
+          `${sourceLabel}: alias "${alias}" conflicts with canonical capability identity format (namespace.operation).`,
+        )
       }
       const targetName = String(aliasesMap[alias] ?? '').trim()
       if (!targetName) {
-        throw new Error(`${sourceLabel}: alias "${alias}" target must be a non-empty string.`)
+        throw createAliasConflictError(`${sourceLabel}: alias "${alias}" target must be a non-empty string.`)
       }
-    }
-
-    const hasAlias = (name) => Object.prototype.hasOwnProperty.call(aliasesMap, name)
-    for (const startAlias of aliasKeys) {
-      const visited = new Set()
-      let current = startAlias
-      while (hasAlias(current)) {
-        if (visited.has(current)) {
-          throw new Error(`${sourceLabel}: aliases contain a cycle involving "${current}".`)
-        }
-        visited.add(current)
-        current = String(aliasesMap[current] ?? '').trim()
+      if (Object.prototype.hasOwnProperty.call(aliasesMap, targetName)) {
+        throw createAliasConflictError(
+          `${sourceLabel}: alias "${alias}" points to alias "${targetName}". Alias chains are not allowed.`,
+        )
       }
     }
   }

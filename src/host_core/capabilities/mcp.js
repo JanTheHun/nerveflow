@@ -29,6 +29,7 @@ import { Client as MCPClient } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js'
+import { parseCapabilityIdentity } from '../capability_identity.js'
 
 export function mcpCapability({
   servers = [],
@@ -79,6 +80,7 @@ export function mcpCapability({
 
       for (const provider of providers) {
         const client = await provider.getOrInitializeClient()
+        await provider.refreshToolEntries()
 
         if (!detectToolConflicts) {
           continue
@@ -91,11 +93,13 @@ export function mcpCapability({
           const toolName = String(tool?.name ?? '').trim()
           if (!toolName) continue
 
-          if (seenTools.has(toolName)) {
-            const previousServerName = seenTools.get(toolName)
-            throw new Error(`Duplicate MCP tool name "${toolName}" detected across servers "${previousServerName}" and "${provider.serverName}"`)
+          const canonicalName = `${provider.serverName}.${toolName}`
+
+          if (seenTools.has(canonicalName)) {
+            const previousServerName = seenTools.get(canonicalName)
+            throw new Error(`Duplicate MCP capability name "${canonicalName}" detected across servers "${previousServerName}" and "${provider.serverName}"`)
           }
-          seenTools.set(toolName, provider.serverName)
+          seenTools.set(canonicalName, provider.serverName)
         }
       }
     }
@@ -120,10 +124,38 @@ function createMcpServerProvider(serverConfig) {
     config,
   } = normalizeMcpServerConfig(serverConfig)
 
-  // Create a tool provider object that lazily initializes the MCP client
-  const toolProvider = {}
+  const toolProvider = {
+    namespace: name,
+  }
   let clientPromise = null
   let listToolsPromise = null
+  let toolEntriesPromise = null
+  const toolEntries = {}
+
+  toolProvider.tools = new Proxy(toolEntries, {
+    get(target, prop, receiver) {
+      if (prop in target) {
+        return Reflect.get(target, prop, receiver)
+      }
+
+      if (typeof prop === 'string' && prop !== 'toJSON' && !prop.startsWith('_')) {
+        return async (...args) => {
+          const client = await getOrInitializeClient()
+          return callMcpTool(client, name, prop, args, listTools)
+        }
+      }
+
+      return undefined
+    },
+    ownKeys(target) {
+      return Reflect.ownKeys(target)
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      const descriptor = Object.getOwnPropertyDescriptor(target, prop)
+      if (descriptor) return descriptor
+      return undefined
+    },
+  })
 
   async function getOrInitializeClient() {
     if (clientPromise) return clientPromise
@@ -151,17 +183,56 @@ function createMcpServerProvider(serverConfig) {
     }
   }
 
+  async function refreshToolEntries() {
+    if (toolEntriesPromise) {
+      return toolEntriesPromise
+    }
+
+    toolEntriesPromise = (async () => {
+      const tools = await listTools()
+      const nextTools = {}
+
+      for (const tool of tools) {
+        const operation = String(tool?.name ?? '').trim()
+        if (!operation) continue
+        const canonicalName = `${name}.${operation}`
+        nextTools[canonicalName] = async (...args) => {
+          const client = await getOrInitializeClient()
+          return callMcpTool(client, name, canonicalName, args, listTools)
+        }
+      }
+
+      for (const key of Object.keys(toolEntries)) {
+        delete toolEntries[key]
+      }
+      Object.assign(toolEntries, nextTools)
+      return nextTools
+    })()
+
+    try {
+      return await toolEntriesPromise
+    } catch (err) {
+      toolEntriesPromise = null
+      throw err
+    }
+  }
+
   async function getToolMetadata(toolNameRaw) {
     const toolName = String(toolNameRaw ?? '').trim()
     if (!toolName) return null
 
+    const parsed = parseCapabilityIdentity(toolName)
+    if (!parsed.isNamespaced || !parsed.isValid || parsed.namespace !== name) {
+      return null
+    }
+
     try {
       const tools = await listTools()
-      const tool = tools.find((entry) => String(entry?.name ?? '').trim() === toolName)
+      const tool = tools.find((entry) => String(entry?.name ?? '').trim() === parsed.operation)
       if (!tool) return null
 
       return {
-        name: toolName,
+        name: `${name}.${parsed.operation}`,
         description: String(tool?.description ?? '').trim(),
         inputSchema: normalizeMcpInputSchema(tool?.inputSchema),
         serverName: name,
@@ -173,12 +244,8 @@ function createMcpServerProvider(serverConfig) {
 
   async function getAvailableToolNames() {
     try {
-      const tools = await listTools()
-      return [...new Set(
-        tools
-          .map((tool) => String(tool?.name ?? '').trim())
-          .filter(Boolean)
-      )].sort((left, right) => left.localeCompare(right))
+      const entries = await refreshToolEntries()
+      return Object.keys(entries).sort((left, right) => left.localeCompare(right))
     } catch {
       return []
     }
@@ -200,32 +267,14 @@ function createMcpServerProvider(serverConfig) {
     }
   }
 
-  // Attach dynamic tool methods
   return {
     serverName: name,
     getOrInitializeClient,
     closeClient,
+    refreshToolEntries,
     getAvailableToolNames,
     getToolMetadata,
-    toolProvider: new Proxy(toolProvider, {
-    get(target, prop, receiver) {
-      // Return the actual value if it exists
-      if (prop in target) {
-        return Reflect.get(target, prop, receiver)
-      }
-
-      // For any other property, assume it's a tool name
-      if (typeof prop === 'string' && prop !== 'toJSON' && !prop.startsWith('_')) {
-        // Return an async function that calls the tool on the MCP client
-        return async (...args) => {
-          const client = await getOrInitializeClient()
-          return callMcpTool(client, name, prop, args, listTools)
-        }
-      }
-
-      return undefined
-    },
-    }),
+    toolProvider,
   }
 }
 
@@ -455,14 +504,34 @@ function extractMcpToolErrorContentText(result) {
 }
 
 async function callMcpTool(client, serverName, toolName, args, listToolsFn = null) {
+  const parsed = parseCapabilityIdentity(toolName)
+  const resolvedToolName = parsed.isNamespaced && parsed.isValid
+    ? (parsed.namespace === serverName ? parsed.operation : '')
+    : String(toolName ?? '').trim()
+
+  if (!resolvedToolName) {
+    return {
+      ok: false,
+      handled: false,
+      error: `Tool ${toolName} not found in MCP server`,
+      errorCode: 'unavailable',
+      message: `Tool ${toolName} not found in MCP server`,
+      serverName,
+      toolName,
+      details: {
+        reason: 'tool_not_found',
+      },
+    }
+  }
+
   try {
     const tools = typeof listToolsFn === 'function'
       ? await listToolsFn()
       : (await client.listTools())?.tools || []
-    const tool = tools.find((t) => String(t?.name ?? '').trim() === toolName)
+    const tool = tools.find((t) => String(t?.name ?? '').trim() === resolvedToolName)
 
     if (!tool) {
-      const errorMessage = `Tool ${toolName} not found in MCP server`
+      const errorMessage = `Tool ${resolvedToolName} not found in MCP server`
       return {
         ok: false,
         handled: false,
@@ -470,7 +539,7 @@ async function callMcpTool(client, serverName, toolName, args, listToolsFn = nul
         errorCode: 'unavailable',
         message: errorMessage,
         serverName,
-        toolName,
+        toolName: resolvedToolName,
         details: {
           reason: 'tool_not_found',
         },
@@ -483,7 +552,7 @@ async function callMcpTool(client, serverName, toolName, args, listToolsFn = nul
     } = normalizeMcpToolInput(args)
 
     const result = await client.callTool({
-      name: toolName,
+      name: resolvedToolName,
       arguments: input,
     })
 
@@ -496,7 +565,7 @@ async function callMcpTool(client, serverName, toolName, args, listToolsFn = nul
         errorCode: 'tool_error',
         message: toolMessage,
         serverName,
-        toolName,
+        toolName: resolvedToolName,
         details: {
           argShape,
           isError: true,
@@ -510,7 +579,7 @@ async function callMcpTool(client, serverName, toolName, args, listToolsFn = nul
       content: result.content,
       metadata: {
         serverName,
-        toolName,
+        toolName: `${serverName}.${resolvedToolName}`,
         argShape,
       },
     }
@@ -524,7 +593,7 @@ async function callMcpTool(client, serverName, toolName, args, listToolsFn = nul
       errorCode,
       message: errorMessage,
       serverName,
-      toolName,
+      toolName: resolvedToolName,
     }
   }
 }

@@ -223,6 +223,40 @@ test('composable host supports method chaining', { timeout: 5000 }, async () => 
   await host.shutdown()
 })
 
+test('validateWorkspaceCapabilities rejects duplicate canonical tool registrations', { timeout: 1000 }, async () => {
+  const host = createComposableHost({
+    workspaceDir: 'examples/minimal-ws-host',
+    port: 4197,
+  })
+
+  host.attachCapability(() => ({
+    toolProviders: [
+      {
+        namespace: 'time',
+        tools: {
+          now: async () => ({ ok: true, source: 'first' }),
+        },
+      },
+    ],
+  }))
+
+  host.attachCapability(() => ({
+    toolProviders: [
+      {
+        'time.now': async () => ({ ok: true, source: 'second' }),
+      },
+    ],
+  }))
+
+  await assert.rejects(
+    () => host.validateWorkspaceCapabilities(),
+    (err) => {
+      assert.equal(err.code, 'CAPABILITY_ALREADY_REGISTERED')
+      return true
+    },
+  )
+})
+
 test('composable host hot-swap reloads changed workspace config when enabled', { timeout: 15000 }, async () => {
   const workspace = await createTempWorkspace({
     nextvConfig: {
@@ -794,6 +828,140 @@ test('composable host fails on unknown workspace module provider', { timeout: 10
       () => host.start(),
       /Unsupported workspace module provider "unknown-provider"/i,
     )
+  } finally {
+    await host.shutdown().catch(() => {})
+    await rm(workspace.workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('composable host validates workflow module provider capability wiring', { timeout: 10000 }, async () => {
+  const workspace = await createTempWorkspace({
+    nextvConfig: {
+      entrypointPath: 'entry.nrv',
+      externals: ['user_message'],
+      requires: {
+        'music.study_artist': {
+          required: true,
+          provider: 'music-study-artist',
+        },
+      },
+      modules: {
+        'music-study-artist': {
+          provider: 'workflow',
+          mode: 'embedded',
+          entrypointPath: './capabilities/workflows/study_artist.nrv',
+        },
+      },
+    },
+    entrySource: 'on external "user_message"\n  output text "ok"\nend\n',
+    extraFiles: [
+      {
+        path: 'capabilities/workflows/study_artist.nrv',
+        content: [
+          'on external "tool_workflow"',
+          '  return {',
+          '    status: "ready",',
+          '    action: null,',
+          '    data: { source: "workflow" }',
+          '  }',
+          'end',
+        ].join('\n'),
+      },
+    ],
+  })
+
+  const host = createComposableHost({
+    workspaceDir: workspace.workspaceRelativePath,
+    autoAttachCapabilitiesFromWorkspace: true,
+    port: 41981,
+  })
+
+  try {
+    const summary = await host.validateWorkspaceCapabilities()
+    assert.equal(summary.capabilities > 0, true)
+    assert.equal(summary.toolProviders > 0, true)
+    assert.equal(
+      summary.workspaceCapabilities.some((entry) => entry.capabilityName === 'music.study_artist' && entry.provider === 'workflow'),
+      true,
+    )
+  } finally {
+    await host.shutdown().catch(() => {})
+    await rm(workspace.workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('workflow-backed capability blocks self-recursive tool invocation', { timeout: 10000 }, async () => {
+  const workspace = await createTempWorkspace({
+    nextvConfig: {
+      entrypointPath: 'entry.nrv',
+      externals: ['user_message'],
+      requires: {
+        'music.study_artist': {
+          required: true,
+          provider: 'music-study-artist',
+        },
+      },
+      modules: {
+        'music-study-artist': {
+          provider: 'workflow',
+          mode: 'embedded',
+          entrypointPath: './capabilities/workflows/study_artist.nrv',
+        },
+      },
+    },
+    entrySource: [
+      'on external "user_message"',
+      '  response = tool("music.study_artist", { artist: event.value })',
+      '  output text "ok"',
+      'end',
+    ].join('\n'),
+    extraFiles: [
+      {
+        path: 'capabilities/workflows/study_artist.nrv',
+        content: [
+          'on external "tool_workflow"',
+          '  nested = tool("music.study_artist", { artist: "recursive" })',
+          '  return {',
+          '    status: "ready",',
+          '    action: null,',
+          '    data: nested',
+          '  }',
+          'end',
+        ].join('\n'),
+      },
+    ],
+  })
+
+  const host = createComposableHost({
+    workspaceDir: workspace.workspaceRelativePath,
+    autoAttachCapabilitiesFromWorkspace: true,
+    port: 41982,
+  })
+
+  const runtimeErrors = []
+
+  try {
+    const result = await host.start()
+    result.runtimeCore.eventBus.subscribe((eventName, payload) => {
+      if (eventName === 'nextv_error') {
+        runtimeErrors.push(payload)
+      }
+    })
+
+    result.runtimeCore.enqueue({
+      type: 'user_message',
+      source: 'external',
+      value: 'trigger recursion',
+    })
+
+    await waitForCondition(() => runtimeErrors.length > 0, { timeoutMs: 5000, intervalMs: 50 })
+
+    assert.equal(
+      runtimeErrors.some((entry) => String(entry?.code ?? '').trim() === 'WORKFLOW_TOOL_RECURSION'),
+      true,
+    )
+
+    await host.shutdown()
   } finally {
     await host.shutdown().catch(() => {})
     await rm(workspace.workspaceRoot, { recursive: true, force: true })

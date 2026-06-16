@@ -4,20 +4,22 @@ import { createHostAdapter } from '../src/host_core/runtime_session.js'
 import { createToolRuntime } from '../src/host_core/tool_runtime.js'
 
 function buildAdapter(workspaceConfig, options = {}) {
+  const workspaceDir = options.workspaceDir ?? {
+    absolutePath: '/workspace',
+    relativePath: '.',
+  }
+
   return createHostAdapter({
-    workspaceDir: {
-      absolutePath: '/workspace',
-      relativePath: '.',
-    },
+    workspaceDir,
     workspaceConfig,
     callAgent: async () => 'ok',
     defaultModel: 'test-model',
-    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({
+    resolvePathFromBaseDirectory: options.resolvePathFromBaseDirectory ?? ((baseDir, pathRaw) => ({
       absolutePath: `${baseDir}/${pathRaw}`,
       relativePath: pathRaw,
-    }),
-    existsSync: () => false,
-    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    })),
+    existsSync: options.existsSync ?? (() => false),
+    runNextVScriptFromFile: options.runNextVScriptFromFile ?? (async () => ({ returnValue: undefined })),
     validateOutputContract: () => {},
     appendAgentFormatInstructions: (prompt) => prompt,
     normalizeAgentFormattedOutput: (value) => value,
@@ -63,7 +65,7 @@ test('callTool denies tools outside allow-list after alias resolution', async ()
   )
 })
 
-test('callTool resolves alias chains before allow-list checks', async () => {
+test('callTool rejects alias chains before allow-list checks', async () => {
   const adapter = buildAdapter({
     tools: {
       allow: new Set(['leaf_tool']),
@@ -79,7 +81,7 @@ test('callTool resolves alias chains before allow-list checks', async () => {
   await assert.rejects(
     () => adapter.callTool({ name: 'first_alias' }),
     (err) => {
-      assert.match(err.message, /Tool "leaf_tool" is not available in this host yet\./)
+      assert.match(err.message, /Alias chains are not allowed\./)
       return true
     },
   )
@@ -138,6 +140,56 @@ test('callTool dispatches to configured tool runtime after alias resolution', as
   assert.equal(calls[0].name, 'real_tool')
   assert.equal(calls[0].requestedName, 'alias_tool')
   assert.deepEqual(calls[0].args, { sample: true })
+})
+
+test('callTool payload exposes callScript helper for workflow-backed tools', async () => {
+  const toolRuntime = createToolRuntime({
+    providers: [
+      {
+        'music.study_artist': async (payload) => {
+          const result = await payload.callScript({
+            path: 'capabilities/study_artist.nrv',
+            state: payload.state,
+            event: { type: 'tool_workflow', value: payload.args },
+            locals: payload.locals,
+          })
+          return result?.returnValue ?? null
+        },
+      },
+    ],
+  })
+
+  const runCalls = []
+  const adapter = buildAdapter({
+    tools: {
+      allow: new Set(['music.study_artist']),
+      aliases: {},
+    },
+    agents: { profiles: {} },
+    operators: { map: {} },
+  }, {
+    toolRuntime,
+    existsSync: (filePath) => filePath === '/workspace/capabilities/study_artist.nrv',
+    runNextVScriptFromFile: async (filePath, options) => {
+      runCalls.push({ filePath, options })
+      return {
+        returnValue: { ok: true, from: 'workflow' },
+        state: options.state,
+      }
+    },
+  })
+
+  const result = await adapter.callTool({
+    name: 'music.study_artist',
+    args: { artist: 'Radiohead' },
+    state: { scoped: true },
+    locals: { trace: 'x' },
+  })
+
+  assert.deepEqual(result, { ok: true, from: 'workflow' })
+  assert.equal(runCalls.length, 1)
+  assert.equal(runCalls[0].filePath, '/workspace/capabilities/study_artist.nrv')
+  assert.deepEqual(runCalls[0].options.event, { type: 'tool_workflow', value: { artist: 'Radiohead' } })
 })
 
 test('callTool enforces allow-list before tool runtime dispatch', async () => {

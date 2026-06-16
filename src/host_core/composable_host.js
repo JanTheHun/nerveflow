@@ -40,6 +40,10 @@ import {
   localVectorProviderFromEnv,
 } from './providers/local_vector.js'
 
+import {
+  parseCapabilityIdentity,
+} from './capability_identity.js'
+
 /**
  * createComposableHost creates a composable host that can attach capabilities
  * and surfaces additively around a stable runtime core.
@@ -63,10 +67,36 @@ export function createComposableHost({
   callAgent = null,
   defaultModel = '',
   slowAgentWarningMs = 15000,
+  promptSugarStrict = false,
   parallelMaxConcurrency = null,
   hotSwap = false,
   hotSwapDebounceMs = 150,
 } = {}) {
+  const WORKFLOW_TOOL_STACK_SYMBOL = Symbol.for('nerveflow.workflowToolCapabilityStack')
+  const WORKFLOW_TOOL_MAX_DEPTH_RAW = Number(process.env.NERVEFLOW_WORKFLOW_TOOL_MAX_DEPTH ?? 16)
+  const WORKFLOW_TOOL_MAX_DEPTH = Number.isFinite(WORKFLOW_TOOL_MAX_DEPTH_RAW) && WORKFLOW_TOOL_MAX_DEPTH_RAW > 0
+    ? Math.floor(WORKFLOW_TOOL_MAX_DEPTH_RAW)
+    : 16
+
+  function isPlainObject(value) {
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+  }
+
+  function resolveWorkflowEntrypointPath(moduleConfig = {}) {
+    const pathCandidates = [
+      moduleConfig.entrypointPath,
+      moduleConfig.path,
+      moduleConfig.workflowPath,
+    ]
+
+    for (const candidate of pathCandidates) {
+      const value = String(candidate ?? '').trim()
+      if (value) return value
+    }
+
+    return ''
+  }
+
   // Resolve repo root if not provided
   const resolvedRepoRoot = repoRoot || resolveDefaultRepoRoot()
 
@@ -388,7 +418,7 @@ export function createComposableHost({
     }
   }
 
-  function buildCapabilityFactoryFromModuleProvider(provider, moduleConfig = {}, moduleName = '', workspaceAbsolutePath = '') {
+  function buildCapabilityFactoryFromModuleProvider(provider, moduleConfig = {}, moduleName = '', workspaceAbsolutePath = '', capabilityName = '') {
     const normalizedProvider = String(provider ?? '').trim().toLowerCase()
 
     if (normalizedProvider === 'memory-pgvector') {
@@ -420,6 +450,139 @@ export function createComposableHost({
         servers: resolvedServers,
         eagerConnect,
         detectToolConflicts,
+      })
+    }
+
+    if (normalizedProvider === 'workflow') {
+      const parsed = parseCapabilityIdentity(capabilityName)
+      if (!parsed.isNamespaced || !parsed.isValid) {
+        throw new Error(
+          `Workflow provider module "${moduleName}" requires a canonical capability id (namespace.operation). Received: "${capabilityName}"`,
+        )
+      }
+
+      const entrypointPath = resolveWorkflowEntrypointPath(moduleConfig)
+      if (!entrypointPath) {
+        throw new Error(
+          `Workflow provider module "${moduleName}" requires one of "entrypointPath", "path", or "workflowPath".`,
+        )
+      }
+
+      const absolutePath = resolve(workspaceAbsolutePath, entrypointPath)
+      if (!existsSync(absolutePath)) {
+        throw new Error(
+          `Workflow provider module "${moduleName}" entrypoint file not found: ${entrypointPath.replace(/\\/g, '/')}`,
+        )
+      }
+
+      const operationHandler = async ({
+        name,
+        requestedName,
+        args,
+        positional,
+        state,
+        event,
+        locals,
+        line,
+        statement,
+        callScript,
+      } = {}) => {
+        if (typeof callScript !== 'function') {
+          throw new Error(`Workflow capability "${capabilityName}" requires script() host support.`)
+        }
+
+        const runtimeState = isPlainObject(state) ? state : {}
+        const stackFromState = Array.isArray(runtimeState[WORKFLOW_TOOL_STACK_SYMBOL])
+          ? runtimeState[WORKFLOW_TOOL_STACK_SYMBOL]
+          : []
+        const stackFromEvent = Array.isArray(event?.payload?.workflowToolStack)
+          ? event.payload.workflowToolStack
+          : []
+        const stack = stackFromState.length >= stackFromEvent.length
+          ? stackFromState
+          : stackFromEvent
+
+        if (stack.includes(capabilityName)) {
+          const err = new Error(`Workflow capability "${capabilityName}" recursively invoked itself.`)
+          err.code = 'WORKFLOW_TOOL_RECURSION'
+          throw err
+        }
+
+        if (stack.length >= WORKFLOW_TOOL_MAX_DEPTH) {
+          const err = new Error(
+            `Workflow capability call depth exceeded (${WORKFLOW_TOOL_MAX_DEPTH}).`,
+          )
+          err.code = 'WORKFLOW_TOOL_DEPTH_EXCEEDED'
+          throw err
+        }
+
+        const nextStack = [...stack, capabilityName]
+        runtimeState[WORKFLOW_TOOL_STACK_SYMBOL] = nextStack
+
+        const scopedState = isPlainObject(runtimeState[capabilityName])
+          ? { ...runtimeState[capabilityName] }
+          : {}
+
+        const scopedEvent = {
+          type: 'tool_workflow',
+          source: 'tool',
+          tool: String(name ?? capabilityName),
+          requestedTool: String(requestedName ?? ''),
+          value: args ?? null,
+          payload: {
+            args: isPlainObject(args) ? args : {},
+            positional: Array.isArray(positional) ? positional : [],
+            parentEvent: event ?? null,
+            workflowToolStack: nextStack,
+          },
+        }
+
+        let result
+        try {
+          result = await callScript({
+            path: entrypointPath,
+            state: scopedState,
+            event: scopedEvent,
+            locals,
+            line,
+            statement,
+            executionRole: 'tool-workflow',
+          })
+        } finally {
+          runtimeState[WORKFLOW_TOOL_STACK_SYMBOL] = stack
+        }
+
+        if (isPlainObject(runtimeState)) {
+          runtimeState[capabilityName] = isPlainObject(result?.state)
+            ? result.state
+            : scopedState
+        }
+
+        return result?.returnValue ?? null
+      }
+
+      return () => ({
+        toolProviders: [
+          {
+            namespace: parsed.namespace,
+            tools: {
+              [parsed.operation]: operationHandler,
+            },
+          },
+        ],
+        toolMetadataProviders: [
+          {
+            [capabilityName]: {
+              name: capabilityName,
+              description: `Workflow-backed capability (${entrypointPath.replace(/\\/g, '/')})`,
+              inputSchema: {
+                type: 'object',
+                properties: {},
+                additionalProperties: true,
+              },
+            },
+          },
+        ],
       })
     }
 
@@ -464,7 +627,7 @@ export function createComposableHost({
         moduleName,
         provider,
         mode,
-        factory: buildCapabilityFactoryFromModuleProvider(provider, moduleConfig, moduleName, workspaceAbsolutePath),
+        factory: buildCapabilityFactoryFromModuleProvider(provider, moduleConfig, moduleName, workspaceAbsolutePath, capabilityName),
       })
     }
 
@@ -505,10 +668,18 @@ export function createComposableHost({
     const summary = {
       capabilities: capabilityFactories.length,
       toolProviders: 0,
+      toolMetadataProviders: 0,
+      toolEnumerators: 0,
       ingressConnectors: 0,
       effectRealizers: 0,
       workspaceCapabilities: resolution.workspaceCapabilities,
     }
+
+    const allToolProviders = []
+    const allToolMetadataProviders = []
+    const allToolEnumerators = []
+    const allIngressConnectors = []
+    const allEffectRealizers = []
 
     for (const capabilityFactory of capabilityFactories) {
       const capability = await capabilityFactory()
@@ -516,9 +687,54 @@ export function createComposableHost({
         throw new Error('Capability factory must return an object')
       }
 
-      summary.toolProviders += Array.isArray(capability.toolProviders) ? capability.toolProviders.length : 0
-      summary.ingressConnectors += Array.isArray(capability.ingressConnectors) ? capability.ingressConnectors.length : 0
-      summary.effectRealizers += Array.isArray(capability.effectRealizers) ? capability.effectRealizers.length : 0
+      if (Array.isArray(capability.toolProviders)) {
+        summary.toolProviders += capability.toolProviders.length
+        allToolProviders.push(...capability.toolProviders)
+      }
+
+      if (Array.isArray(capability.toolMetadataProviders)) {
+        const providers = capability.toolMetadataProviders.filter((entry) => typeof entry === 'function')
+        summary.toolMetadataProviders += providers.length
+        allToolMetadataProviders.push(...providers)
+      }
+
+      if (Array.isArray(capability.toolProviderEnumerators)) {
+        const enumerators = capability.toolProviderEnumerators.filter((entry) => typeof entry === 'function')
+        summary.toolEnumerators += enumerators.length
+        allToolEnumerators.push(...enumerators)
+      }
+
+      if (typeof capability.getToolMetadata === 'function') {
+        summary.toolMetadataProviders += 1
+        allToolMetadataProviders.push(capability.getToolMetadata)
+      }
+
+      if (Array.isArray(capability.ingressConnectors)) {
+        summary.ingressConnectors += capability.ingressConnectors.length
+        allIngressConnectors.push(...capability.ingressConnectors)
+      }
+
+      if (Array.isArray(capability.effectRealizers)) {
+        summary.effectRealizers += capability.effectRealizers.length
+        allEffectRealizers.push(...capability.effectRealizers)
+      }
+    }
+
+    // Dry-run runtime assembly to ensure validation and startup enforce the same constraints.
+    if (allToolProviders.length > 0) {
+      createToolRuntime({
+        providers: allToolProviders,
+        metadataProviders: allToolMetadataProviders,
+        toolNameEnumerators: allToolEnumerators,
+      })
+    }
+
+    if (allIngressConnectors.length > 0) {
+      createIngressConnectorRuntime({ connectors: allIngressConnectors })
+    }
+
+    if (allEffectRealizers.length > 0) {
+      createEffectRealizerRuntime({ realizers: allEffectRealizers })
     }
 
     return summary
@@ -617,6 +833,7 @@ export function createComposableHost({
         }),
         defaultModel,
         slowAgentWarningMs,
+        promptSugarStrict,
         parallelMaxConcurrency,
       })
 

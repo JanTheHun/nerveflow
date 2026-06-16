@@ -1303,6 +1303,88 @@ function normalizeAgentMessagesValue(value, context) {
   return normalized
 }
 
+function wasNamedArgumentProvided(namedArgs, key) {
+  return isPlainObject(namedArgs) && Object.prototype.hasOwnProperty.call(namedArgs, key)
+}
+
+async function applyPromptSugarPolicy({
+  runtimeContext,
+  line,
+  statement,
+  sourcePath,
+  sourceLine,
+  usageLabel,
+  promptInput,
+  messages,
+  named,
+  positional,
+}) {
+  const promptProvidedByPosition = Array.isArray(positional) && positional.length > 1
+  const promptProvidedByName = wasNamedArgumentProvided(named, 'prompt')
+  const promptProvided = promptProvidedByPosition || promptProvidedByName
+  const messagesProvided = wasNamedArgumentProvided(named, 'messages')
+  const strictPromptSugar = runtimeContext?.promptSugarStrict === true
+
+  if (promptProvided) {
+    await runtimeContext.emitWarning({
+      code: 'PROMPT_SUGAR_DEPRECATED',
+      message: `${usageLabel} prompt is deprecated; prefer messages=[{ role, content }] for explicit conversation state.`,
+      details: {
+        strict: strictPromptSugar,
+        providedBy: promptProvidedByPosition ? 'positional' : 'named',
+      },
+    }, {
+      line,
+      sourcePath,
+      sourceLine,
+    })
+  }
+
+  if (promptProvided && messagesProvided) {
+    if (strictPromptSugar) {
+      throw nextvError({
+        line,
+        kind: 'runtime',
+        code: 'PROMPT_MESSAGES_CONFLICT',
+        statement,
+        message: `${usageLabel} cannot combine prompt and messages when promptSugarStrict=true. Use messages only.`,
+        sourcePath,
+        sourceLine,
+      })
+    }
+
+    await runtimeContext.emitWarning({
+      code: 'PROMPT_MESSAGES_CONFLICT_DEPRECATED',
+      message: `${usageLabel} currently accepts prompt+messages but this merge is deprecated and will become an error.`,
+      details: {
+        strict: strictPromptSugar,
+      },
+    }, {
+      line,
+      sourcePath,
+      sourceLine,
+    })
+  }
+
+  if (strictPromptSugar && promptProvided && messages.length === 0) {
+    throw nextvError({
+      line,
+      kind: 'runtime',
+      code: 'PROMPT_SUGAR_STRICT',
+      statement,
+      message: `${usageLabel} prompt is disabled when promptSugarStrict=true. Provide messages=[{ role, content }] instead.`,
+      sourcePath,
+      sourceLine,
+    })
+  }
+
+  return {
+    promptProvided,
+    messagesProvided,
+    hasPromptContent: hasMeaningfulComposedParts(promptInput.normalized.parts),
+  }
+}
+
 function toJsonText(value, context, usage) {
   try {
     const encoded = JSON.stringify(value, null, 2)
@@ -1869,6 +1951,7 @@ async function executeFunctionCall(name, args, context, origin, callOptions = nu
     if (err instanceof NextVError) throw err
     if (err?.code === 'INVALID_OUTPUT_CONTRACT') throw err
     if (err?.code === 'AGENT_RETURN_CONTRACT_VIOLATION') throw err
+    const propagatedCode = typeof err?.code === 'string' ? err.code.trim() : ''
     const rawErrorDetail = (
       typeof err?.message === 'string'
         ? err.message
@@ -1880,7 +1963,7 @@ async function executeFunctionCall(name, args, context, origin, callOptions = nu
       sourcePath: context.sourcePath,
       sourceLine: context.sourceLine,
       kind: 'runtime',
-      code: 'FUNCTION_CALL_ERROR',
+      code: propagatedCode || 'FUNCTION_CALL_ERROR',
       statement: context.statement,
       message: `${name}() failed: ${errorDetail}`,
     })
@@ -2381,10 +2464,23 @@ function buildFunctions(options, runtimeContext) {
       const format = String(named?.format ?? '').trim().toLowerCase()
       const toolsPolicy = normalizeAgentToolsPolicy(named?.tools ?? null, context, 'agent()')
 
+      const promptPolicy = await applyPromptSugarPolicy({
+        runtimeContext,
+        line,
+        statement,
+        sourcePath,
+        sourceLine,
+        usageLabel: 'agent()',
+        promptInput,
+        messages,
+        named,
+        positional,
+      })
+
       if (!agentName) {
         runtimeUnavailable('AGENT_NAME_REQUIRED', 'agent() requires an agent profile name.')
       }
-      if (!hasMeaningfulComposedParts(promptInput.normalized.parts) && messages.length === 0) {
+      if (!promptPolicy.hasPromptContent && messages.length === 0) {
         runtimeUnavailable('AGENT_PROMPT_REQUIRED', 'agent() requires a prompt as second argument, or provide messages=... .')
       }
       if (format && !NEXTV_AGENT_OUTPUT_FORMATS.has(format)) {
@@ -2647,10 +2743,23 @@ function buildFunctions(options, runtimeContext) {
       const format = String(named?.format ?? '').trim().toLowerCase()
       const toolsPolicy = normalizeAgentToolsPolicy(named?.tools ?? null, context, 'model()')
 
+      const promptPolicy = await applyPromptSugarPolicy({
+        runtimeContext,
+        line,
+        statement,
+        sourcePath,
+        sourceLine,
+        usageLabel: 'model()',
+        promptInput,
+        messages,
+        named,
+        positional,
+      })
+
       if (!modelName) {
         runtimeUnavailable('MODEL_NAME_REQUIRED', 'model() requires a model name as first argument.')
       }
-      if (!hasMeaningfulComposedParts(promptInput.normalized.parts) && messages.length === 0) {
+      if (!promptPolicy.hasPromptContent && messages.length === 0) {
         runtimeUnavailable('MODEL_PROMPT_REQUIRED', 'model() requires a prompt as second argument, or provide messages=... .')
       }
       if (format && !NEXTV_AGENT_OUTPUT_FORMATS.has(format)) {
@@ -3011,6 +3120,7 @@ function normalizeRuntimeOptions(options = {}) {
   const runtimeOptions = { ...options }
   const adapter = isPlainObject(options.hostAdapter) ? options.hostAdapter : null
   runtimeOptions.executionRole = normalizeExecutionRole(options.executionRole, 'router')
+  runtimeOptions.promptSugarStrict = options.promptSugarStrict === true
 
   if (adapter) {
     if (runtimeOptions.callTool == null && typeof adapter.callTool === 'function') {
@@ -3221,6 +3331,7 @@ export async function runNextVScript(source, options = {}) {
         state,
         event: activeEvent,
         executionRole,
+        promptSugarStrict: runtimeOptions.promptSugarStrict === true,
         parallelMaxConcurrency: runtimeOptions.parallelMaxConcurrency,
         agentCallMetadata,
         emitStateUpdates: runtimeOptions.emitStateUpdates === true,

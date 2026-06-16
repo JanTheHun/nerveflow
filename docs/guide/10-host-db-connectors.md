@@ -121,6 +121,26 @@ npx nerve-compose add mcp <workspaceDir> --inline
 
 Inline mode stores `servers` directly under `modules.mcp`.
 
+### MCP tool naming rules
+
+MCP server tool names are treated as operation names under the server namespace.
+
+Canonical capability identity remains:
+
+```text
+<server-name>.<operation>
+```
+
+For example, with server name `local-mcp`, registering:
+
+```js
+server.registerTool('get_time', ...)
+```
+
+exposes capability `local-mcp.get_time`.
+
+Do not register MCP tools with dotted names such as `time.now` under a namespaced server, because that creates an invalid multi-segment capability identity.
+
 ## Validation and failure model
 
 Use `nerve-compose validate` as the preflight gate for package workflows:

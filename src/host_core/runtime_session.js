@@ -5,6 +5,7 @@ import {
   normalizeComposedTextInput,
   resolveComposedTextParts,
 } from './structured_inputs.js'
+import { createCapabilityParseError, parseCapabilityIdentity } from './capability_identity.js'
 
 function extractEventImages(event) {
   const payload = event && typeof event === 'object' ? event.payload : null
@@ -331,6 +332,7 @@ export function createHostAdapter({
   validateDecideOutput = null,
   captureAgentRequestPayload = false,
   modelResolutionMode = 'strict',
+  promptSugarStrict = false,
   toolRuntime = null,
 }) {
   const normalizedModelResolutionMode = String(modelResolutionMode ?? '').trim().toLowerCase() || 'strict'
@@ -349,15 +351,24 @@ export function createHostAdapter({
   function resolveToolName(toolNameRaw) {
     const aliases = readWorkspaceConfig()?.tools?.aliases ?? {}
     const fallbackName = String(toolNameRaw ?? '').trim()
-    let current = fallbackName
-    const visited = new Set()
+    if (!fallbackName) return ''
 
-    while (current && Object.prototype.hasOwnProperty.call(aliases, current)) {
-      if (visited.has(current)) break
-      visited.add(current)
+    let current = fallbackName
+    if (Object.prototype.hasOwnProperty.call(aliases, current)) {
       const next = String(aliases[current] ?? '').trim()
-      if (!next) break
-      current = next
+      if (next) {
+        if (Object.prototype.hasOwnProperty.call(aliases, next)) {
+          const err = new Error(`Alias "${current}" points to alias "${next}". Alias chains are not allowed.`)
+          err.code = 'ALIAS_CHAIN_NOT_ALLOWED'
+          throw err
+        }
+        current = next
+      }
+    }
+
+    const parsed = parseCapabilityIdentity(current)
+    if (parsed.isNamespaced && !parsed.isValid) {
+      throw createCapabilityParseError(current)
     }
 
     return current || fallbackName
@@ -549,6 +560,7 @@ export function createHostAdapter({
           locals,
           line,
           statement,
+          callScript: async (payload) => adapter.callScript(payload),
         })
       }
       throw new Error(`Tool "${toolName}" is not available in this host yet.`)
@@ -1336,6 +1348,7 @@ export function createHostAdapter({
         event,
         locals,
         executionRole,
+        promptSugarStrict: promptSugarStrict === true,
         emitStateUpdates: false,
         onEvent,
         hostAdapter: {

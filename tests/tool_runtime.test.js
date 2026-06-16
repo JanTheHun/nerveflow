@@ -138,3 +138,112 @@ test('tool runtime ignores failed enumerators during list discovery', async () =
   const names = await runtime.listAvailable()
   assert.deepEqual(names, ['ping', 'proxy_tool_c'])
 })
+
+test('tool runtime dispatches to namespace provider handler', async () => {
+  const runtime = createToolRuntime({
+    providers: [
+      {
+        namespace: 'time',
+        tools: {
+          now: async () => ({ ok: true, source: 'namespace' }),
+        },
+      },
+    ],
+  })
+
+  const result = await runtime.call({ name: 'time.now' })
+  assert.deepEqual(result, { ok: true, source: 'namespace' })
+})
+
+test('tool runtime raises namespace error for missing namespace', async () => {
+  const runtime = createToolRuntime({
+    providers: [
+      {
+        namespace: 'time',
+        tools: {
+          now: async () => ({ ok: true }),
+        },
+      },
+    ],
+  })
+
+  await assert.rejects(
+    () => runtime.call({ name: 'memory.store' }),
+    (err) => {
+      assert.equal(err.code, 'CAPABILITY_NAMESPACE_NOT_FOUND')
+      assert.match(err.message, /namespace missing/)
+      return true
+    },
+  )
+})
+
+test('tool runtime raises operation error for missing operation in existing namespace', async () => {
+  const runtime = createToolRuntime({
+    providers: [
+      {
+        namespace: 'time',
+        tools: {
+          now: async () => ({ ok: true }),
+        },
+      },
+    ],
+  })
+
+  await assert.rejects(
+    () => runtime.call({ name: 'time.later' }),
+    (err) => {
+      assert.equal(err.code, 'CAPABILITY_NOT_FOUND')
+      assert.match(err.message, /operation missing/)
+      return true
+    },
+  )
+})
+
+test('tool runtime rejects duplicate canonical capability registrations at startup', async () => {
+  assert.throws(
+    () => createToolRuntime({
+      providers: [
+        {
+          namespace: 'time',
+          tools: {
+            now: async () => ({ ok: true, source: 'a' }),
+          },
+        },
+        {
+          'time.now': async () => ({ ok: true, source: 'b' }),
+        },
+      ],
+    }),
+    (err) => {
+      assert.equal(err.code, 'CAPABILITY_ALREADY_REGISTERED')
+      assert.match(err.message, /already registered/)
+      return true
+    },
+  )
+})
+
+test('tool runtime rejects multiple namespace owners at startup', async () => {
+  assert.throws(
+    () => createToolRuntime({
+      providers: [
+        {
+          namespace: 'memory',
+          tools: {
+            store: async () => ({ ok: true }),
+          },
+        },
+        {
+          namespace: 'memory',
+          tools: {
+            retrieve: async () => ({ ok: true }),
+          },
+        },
+      ],
+    }),
+    (err) => {
+      assert.equal(err.code, 'CAPABILITY_ALREADY_REGISTERED')
+      assert.match(err.message, /namespace .*already registered/i)
+      return true
+    },
+  )
+})

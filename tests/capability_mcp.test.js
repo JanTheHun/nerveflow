@@ -149,11 +149,11 @@ test('mcpCapability exports toolProviderEnumerators for server tool discovery', 
   })
 
   try {
-    assert.equal(Array.isArray(capability.toolProviderEnumerators), true)
-    assert.equal(capability.toolProviderEnumerators.length, 1)
-    const discovered = await capability.toolProviderEnumerators[0]()
+      assert.equal(Array.isArray(capability.toolProviderEnumerators), true)
+      assert.equal(capability.toolProviderEnumerators.length, 1)
+      const discovered = await capability.toolProviderEnumerators[0]()
     assert.equal(Array.isArray(discovered), true)
-    assert.deepEqual(discovered, ['enumerator_tool'])
+    assert.deepEqual(discovered, ['enumerator-server.enumerator_tool'])
   } finally {
     if (typeof capability.teardown === 'function') {
       await capability.teardown()
@@ -199,7 +199,7 @@ test('mcpCapability validates stdio command at call time', async () => {
   })
 
   await assert.rejects(
-    () => capability.toolProviders[0].echo_message({ text: 'hi' }),
+      () => capability.toolProviders[0].tools['broken-stdio.echo_message']({ text: 'hi' }),
     /stdio transport requires config.command/i,
   )
 })
@@ -216,7 +216,7 @@ test('mcpCapability validates sse url schema at call time', async () => {
   })
 
   await assert.rejects(
-    () => capability.toolProviders[0].echo_message({ text: 'hi' }),
+      () => capability.toolProviders[0].tools['broken-sse.echo_message']({ text: 'hi' }),
     /sse transport config\.url must use http or https/i,
   )
 })
@@ -233,7 +233,7 @@ test('mcpCapability validates websocket url schema at call time', async () => {
   })
 
   await assert.rejects(
-    () => capability.toolProviders[0].echo_message({ text: 'hi' }),
+      () => capability.toolProviders[0].tools['broken-websocket.echo_message']({ text: 'hi' }),
     /websocket transport config\.url must use ws or wss/i,
   )
 })
@@ -263,7 +263,7 @@ test('mcpCapability supports stdio tool round-trip', async () => {
       await capability.setup()
     }
 
-    const result = await capability.toolProviders[0].echo_message()
+      const result = await capability.toolProviders[0].tools['roundtrip-server.echo_message']()
     assert.equal(result.ok, true)
     assert.equal(Array.isArray(result.content), true)
     assert.equal(JSON.stringify(result.content).includes('roundtrip:'), true)
@@ -294,7 +294,7 @@ test('mcpCapability parses JSON string arguments for MCP tool calls', async () =
   })
 
   try {
-    const result = await capability.toolProviders[0].echo_message('{"text":"hello"}')
+      const result = await capability.toolProviders[0].tools['json-args-server.echo_message']('{"text":"hello"}')
     assert.equal(result.ok, true)
     assert.equal(JSON.stringify(result.content).includes('json:'), true)
     assert.equal(result.metadata?.argShape, 'json_string_object')
@@ -326,7 +326,7 @@ test('mcpCapability returns structured error metadata when tool is missing', asy
   })
 
   try {
-    const result = await capability.toolProviders[0].not_real_tool({ text: 'hi' })
+      const result = await capability.toolProviders[0].tools['missing-tool-server.not_real_tool']({ text: 'hi' })
     assert.equal(result.ok, false)
     assert.equal(result.errorCode, 'unavailable')
     assert.equal(result.toolName, 'not_real_tool')
@@ -378,7 +378,7 @@ test('mcpCapability surfaces MCP isError content text in tool error message', as
   })
 
   try {
-    const result = await capability.toolProviders[0].list_directory({ path: '/tmp' })
+    const result = await capability.toolProviders[0].tools['error-content-server.list_directory']({ path: '/tmp' })
     assert.equal(result.ok, false)
     assert.equal(result.errorCode, 'tool_error')
     assert.match(String(result.message ?? ''), /Access denied for test path/)
@@ -411,8 +411,8 @@ test('mcpCapability exposes tool metadata for discovered tools', async () => {
   })
 
   try {
-    const metadata = await capability.getToolMetadata('echo_message')
-    assert.equal(metadata?.name, 'echo_message')
+    const metadata = await capability.getToolMetadata('metadata-server.echo_message')
+    assert.equal(metadata?.name, 'metadata-server.echo_message')
     assert.equal(metadata?.serverName, 'metadata-server')
     assert.equal(typeof metadata?.description, 'string')
     if (metadata?.inputSchema != null) {
@@ -462,8 +462,8 @@ test('mcpCapability preserves inputSchema from MCP server in tool metadata', asy
   })
 
   try {
-    const metadata = await capability.getToolMetadata('read_file')
-    assert.equal(metadata?.name, 'read_file')
+    const metadata = await capability.getToolMetadata('schema-server.read_file')
+    assert.equal(metadata?.name, 'schema-server.read_file')
     assert.equal(metadata?.description, 'Read the contents of a file')
     assert.ok(metadata?.inputSchema != null, 'inputSchema should be present')
     assert.equal(typeof metadata.inputSchema, 'object')
@@ -518,7 +518,7 @@ test('mcpCapability toolRuntime forwards named args to schema-backed tools', asy
   const toolRuntime = createToolRuntime({ providers: capability.toolProviders })
 
   try {
-    const result = await toolRuntime.call({ name: 'read_file', args: { path: 'AGENTS.md' } })
+    const result = await toolRuntime.call({ name: 'runtime-schema-call-server.read_file', args: { path: 'AGENTS.md' } })
     assert.equal(result?.ok, true)
     assert.equal(result?.metadata?.argShape, 'runtime_payload_named_args')
     assert.equal(JSON.stringify(result?.content ?? '').includes('AGENTS.md'), true)
@@ -545,7 +545,7 @@ test('mcpCapability setup rejects duplicate tool names across servers', async ()
   const capability = mcpCapability({
     servers: [
       {
-        name: 'dup-a',
+        name: 'dup',
         transport: 'stdio',
         config: {
           command: process.execPath,
@@ -553,7 +553,7 @@ test('mcpCapability setup rejects duplicate tool names across servers', async ()
         },
       },
       {
-        name: 'dup-b',
+        name: 'dup',
         transport: 'stdio',
         config: {
           command: process.execPath,
@@ -567,7 +567,7 @@ test('mcpCapability setup rejects duplicate tool names across servers', async ()
   try {
     await assert.rejects(
       () => capability.setup(),
-      /Duplicate MCP tool name "duplicate_tool"/i,
+      /Duplicate MCP capability name/i,
     )
   } finally {
     if (typeof capability.teardown === 'function') {
@@ -614,21 +614,21 @@ test('mcpCapability multi-server falls through unavailable tool to next server',
   const toolRuntime = createToolRuntime({ providers: capability.toolProviders })
 
   try {
-    const fromA = await toolRuntime.call({ name: 'tool_from_a_only', args: { text: 'one' } })
+    const fromA = await toolRuntime.call({ name: 'server-a.tool_from_a_only', args: { text: 'one' } })
     assert.equal(fromA?.ok, true)
     assert.equal(fromA?.metadata?.serverName, 'server-a')
     assert.equal(fromA?.metadata?.argShape, 'runtime_payload_named_args')
     assert.equal(JSON.stringify(fromA?.content ?? '').includes('a:'), true)
 
-    const fromB = await toolRuntime.call({ name: 'tool_from_b_only', args: { text: 'two' } })
+    const fromB = await toolRuntime.call({ name: 'server-b.tool_from_b_only', args: { text: 'two' } })
     assert.equal(fromB?.ok, true)
     assert.equal(fromB?.metadata?.serverName, 'server-b')
     assert.equal(fromB?.metadata?.argShape, 'runtime_payload_named_args')
     assert.equal(JSON.stringify(fromB?.content ?? '').includes('b:'), true)
 
     await assert.rejects(
-      () => toolRuntime.call({ name: 'tool_from_nowhere' }),
-      /Tool "tool_from_nowhere" is not available in this host yet\./,
+      () => toolRuntime.call({ name: 'server-c.tool_from_nowhere' }),
+      /Capability "server-c\.tool_from_nowhere" was not found/i,
     )
   } finally {
     if (typeof capability.teardown === 'function') {

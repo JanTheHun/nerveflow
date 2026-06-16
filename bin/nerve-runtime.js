@@ -149,6 +149,7 @@ const PARALLEL_MAX_CONCURRENCY_RAW = Number(process.env.PARALLEL_MAX_CONCURRENCY
 const PARALLEL_MAX_CONCURRENCY = Number.isFinite(PARALLEL_MAX_CONCURRENCY_RAW) && PARALLEL_MAX_CONCURRENCY_RAW > 0
   ? Math.floor(PARALLEL_MAX_CONCURRENCY_RAW)
   : null
+const PROMPT_SUGAR_STRICT = /^(1|true|yes|on)$/i.test(String(process.env.NERVEFLOW_PROMPT_SUGAR_STRICT ?? '').trim())
 
 const OLLAMA_DEBUG_LOG_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.OLLAMA_DEBUG_LOG ?? '').trim())
 const OLLAMA_DEBUG_SUMMARY_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.OLLAMA_DEBUG_SUMMARY ?? '').trim())
@@ -307,6 +308,7 @@ const runtimeCore = createRuntimeCore({
   effectRuntime,
   defaultModel: DEFAULT_AGENT_MODEL,
   slowAgentWarningMs: SLOW_AGENT_WARNING_MS,
+  promptSugarStrict: PROMPT_SUGAR_STRICT,
   parallelMaxConcurrency: PARALLEL_MAX_CONCURRENCY,
 })
 

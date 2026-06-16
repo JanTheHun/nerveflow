@@ -152,6 +152,7 @@ export function createRuntimeCore({
   effectRuntime = null,
   defaultModel = '',
   slowAgentWarningMs = 15000,
+  promptSugarStrict = false,
   parallelMaxConcurrency = null,
   resolvers,
 } = {}) {
@@ -213,6 +214,7 @@ export function createRuntimeCore({
     callAgent,
     defaultModel,
     slowAgentWarningMs,
+    promptSugarStrict,
     parallelMaxConcurrency,
   })
 
@@ -1010,6 +1012,7 @@ export function createRuntimeCore({
       getWorkspaceConfig: () => workspaceConfig,
       callAgent,
       defaultModel,
+      promptSugarStrict,
       modelResolutionMode: String(process.env.AGENT_MODEL_RESOLUTION ?? 'strict').trim().toLowerCase() || 'strict',
       captureAgentRequestPayload: true,
       resolvePathFromBaseDirectory: resolvers.resolvePathFromBaseDirectory,

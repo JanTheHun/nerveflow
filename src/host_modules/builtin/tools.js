@@ -106,103 +106,112 @@ function createTimeoutSignal(timeoutMsRaw) {
 }
 
 export function createRuntimeBuiltinToolProvider({ fetchImpl = fetch } = {}) {
-  return {
-    get_time: async ({ args }) => {
-      const input = toObject(args)
-      const now = new Date()
-      const timeZone = String(input.timeZone ?? 'UTC').trim() || 'UTC'
-      return {
-        iso: now.toISOString(),
-        epochMs: now.getTime(),
-        timeZone,
+  const timeNow = async ({ args }) => {
+    const input = toObject(args)
+    const now = new Date()
+    const timeZone = String(input.timeZone ?? 'UTC').trim() || 'UTC'
+    return {
+      iso: now.toISOString(),
+      epochMs: now.getTime(),
+      timeZone,
+    }
+  }
+
+  const httpFetch = async ({ args }) => {
+    const input = toObject(args)
+    const url = String(input.url ?? '').trim()
+    if (!url) throw new Error('http.fetch requires args.url')
+
+    const method = String(input.method ?? 'GET').trim().toUpperCase() || 'GET'
+    const headers = buildHeaders(input.headers)
+    const body = input.body == null ? undefined : String(input.body)
+    const timeout = createTimeoutSignal(input.timeoutMs)
+
+    try {
+      const response = await fetchImpl(url, {
+        method,
+        headers,
+        body,
+        signal: timeout?.signal,
+      })
+      const contentType = String(response.headers.get('content-type') ?? '')
+      const text = await response.text()
+
+      let parsedJson = null
+      if (contentType.includes('application/json')) {
+        try {
+          parsedJson = JSON.parse(text)
+        } catch {
+          parsedJson = null
+        }
       }
-    },
 
-    http_fetch: async ({ args }) => {
-      const input = toObject(args)
-      const url = String(input.url ?? '').trim()
-      if (!url) throw new Error('http_fetch requires args.url')
+      return {
+        ok: response.ok,
+        status: response.status,
+        url,
+        contentType,
+        text,
+        json: parsedJson,
+      }
+    } finally {
+      timeout?.cleanup()
+    }
+  }
 
-      const method = String(input.method ?? 'GET').trim().toUpperCase() || 'GET'
-      const headers = buildHeaders(input.headers)
-      const body = input.body == null ? undefined : String(input.body)
+  const rssFetch = async ({ args }) => {
+    const input = toObject(args)
+    const urlsRaw = Array.isArray(input.urls) ? input.urls : [input.url]
+    const urls = urlsRaw.map((item) => String(item ?? '').trim()).filter(Boolean)
+    if (urls.length === 0) throw new Error('rss.fetch requires args.url or args.urls')
+    const limit = Number.isFinite(Number(input.limit)) ? Math.max(1, Math.floor(Number(input.limit))) : 20
+
+    const allItems = []
+    for (const url of urls) {
       const timeout = createTimeoutSignal(input.timeoutMs)
-
       try {
         const response = await fetchImpl(url, {
-          method,
-          headers,
-          body,
+          method: 'GET',
           signal: timeout?.signal,
+          headers: {
+            Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*',
+          },
         })
-        const contentType = String(response.headers.get('content-type') ?? '')
-        const text = await response.text()
-
-        let parsedJson = null
-        if (contentType.includes('application/json')) {
-          try {
-            parsedJson = JSON.parse(text)
-          } catch {
-            parsedJson = null
-          }
-        }
-
-        return {
-          ok: response.ok,
-          status: response.status,
-          url,
-          contentType,
-          text,
-          json: parsedJson,
-        }
+        if (!response.ok) continue
+        const xml = await response.text()
+        allItems.push(...parseRssOrAtom(xml, url, limit))
+        if (allItems.length >= limit) break
+      } catch {
+        // Keep runtime resilient when one feed fails.
       } finally {
         timeout?.cleanup()
       }
-    },
+    }
 
-    rss_fetch: async ({ args }) => {
-      const input = toObject(args)
-      const urlsRaw = Array.isArray(input.urls) ? input.urls : [input.url]
-      const urls = urlsRaw.map((item) => String(item ?? '').trim()).filter(Boolean)
-      if (urls.length === 0) throw new Error('rss_fetch requires args.url or args.urls')
-      const limit = Number.isFinite(Number(input.limit)) ? Math.max(1, Math.floor(Number(input.limit))) : 20
+    const deduped = []
+    const seen = new Set()
+    for (const item of allItems) {
+      const id = String(item?.id ?? '').trim()
+      if (!id || seen.has(id)) continue
+      seen.add(id)
+      deduped.push(item)
+      if (deduped.length >= limit) break
+    }
 
-      const allItems = []
-      for (const url of urls) {
-        const timeout = createTimeoutSignal(input.timeoutMs)
-        try {
-          const response = await fetchImpl(url, {
-            method: 'GET',
-            signal: timeout?.signal,
-            headers: {
-              Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*',
-            },
-          })
-          if (!response.ok) continue
-          const xml = await response.text()
-          allItems.push(...parseRssOrAtom(xml, url, limit))
-          if (allItems.length >= limit) break
-        } catch {
-          // Keep runtime resilient when one feed fails.
-        } finally {
-          timeout?.cleanup()
-        }
-      }
+    return {
+      count: deduped.length,
+      items: deduped,
+    }
+  }
 
-      const deduped = []
-      const seen = new Set()
-      for (const item of allItems) {
-        const id = String(item?.id ?? '').trim()
-        if (!id || seen.has(id)) continue
-        seen.add(id)
-        deduped.push(item)
-        if (deduped.length >= limit) break
-      }
+  return {
+    'time.now': timeNow,
+    'http.fetch': httpFetch,
+    'rss.fetch': rssFetch,
 
-      return {
-        count: deduped.length,
-        items: deduped,
-      }
-    },
+    // Legacy compatibility aliases retained at provider level.
+    get_time: timeNow,
+    http_fetch: httpFetch,
+    rss_fetch: rssFetch,
   }
 }

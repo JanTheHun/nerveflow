@@ -1,0 +1,101 @@
+{
+  "name": "nerveflow-vscode-conversation-composer",
+  "displayName": "Nerveflow Conversation Composer",
+  "description": "Compose AI conversations with model, system markdown, tools, and runtime chat.",
+  "version": "0.0.1",
+  "private": true,
+  "publisher": "nerveflow-local",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/janthehun/nerveflow.git"
+  },
+  "files": [
+    "dist/**",
+    "src/**",
+    "resources/**",
+    "node_modules/ws/**",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "main": "./src/extension.js",
+  "categories": [
+    "Other"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "secondarySidebar": [
+        {
+          "id": "conversationComposer",
+          "title": "Composer",
+          "icon": "resources/nerveflow.svg"
+        }
+      ]
+    },
+    "views": {
+      "conversationComposer": [
+        {
+          "id": "conversationComposerView",
+          "name": "Visual Conversation Composer",
+          "type": "webview",
+          "icon": "resources/nerveflow.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "composer.initializeWorkspace",
+        "title": "Composer: Initialize Session"
+      },
+      {
+        "command": "composer.connectRuntime",
+        "title": "Composer: Connect Runtime"
+      },
+      {
+        "command": "composer.disconnectRuntime",
+        "title": "Composer: Disconnect Runtime"
+      },
+      {
+        "command": "composer.sendMessage",
+        "title": "Composer: Send Message"
+      }
+    ],
+    "configuration": {
+      "title": "Visual Conversation Composer",
+      "properties": {
+        "nerveflow.composerRuntimeEndpoint": {
+          "type": "string",
+          "default": "ws://127.0.0.1:4190/api/runtime/ws",
+          "description": "WebSocket endpoint for the Nerveflow runtime protocol."
+        },
+        "nerveflow.composerModels": {
+          "type": "array",
+          "default": [
+            "qwen3-coder",
+            "llama3.1"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Available model options in Conversation Composer."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build:embedded-runtime": "node ./scripts/build-embedded-runtime.mjs",
+    "check:boundaries": "node ./scripts/check-import-boundaries.js",
+    "build": "npm run build:embedded-runtime && npm run check:boundaries",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.6"
+  }
+}

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src __STYLE_URI__ 'unsafe-inline'; script-src 'nonce-__NONCE__';" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Conversation Composer</title>
+  <link rel="stylesheet" href="__STYLE_URI__" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Conversation Composer</h1>
+    <div id="status">Disconnected</div>
+  </header>
+
+  <section class="card">
+    <h4>Model</h4>
+    <select id="modelSelect"></select>
+  </section>
+
+  <section class="card">
+    <h4>System Files</h4>
+    <button id="addSystemFile" class="secondary">+ Add</button>
+    <ul id="systemList"></ul>
+  </section>
+
+  <section class="card">
+    <h4>Tools</h4>
+    <ul id="toolList"></ul>
+  </section>
+
+  <section class="card">
+    <div class="sectionHeader">
+      <h4>Errors</h4>
+      <button id="clearErrors" class="secondary">Clear</button>
+    </div>
+    <div id="errorLog" class="errorLog"></div>
+  </section>
+
+  <section class="card">
+    <div class="sectionHeader">
+      <h4>Conversation</h4>
+      <button id="clearConversation" class="secondary">Clear</button>
+    </div>
+    <div id="conversation" class="conversation"></div>
+  </section>
+
+  <section class="card">
+    <h4>Input</h4>
+    <textarea id="messageInput" placeholder="Ask something..."></textarea>
+    <div class="actions">
+      <button id="initializeWorkspace">Initialize Composer</button>
+      <button id="connectRuntime">Connect</button>
+      <button id="disconnectRuntime" class="secondary">Disconnect</button>
+      <button id="sendMessage">Send</button>
+    </div>
+  </section>
+
+  <script nonce="__NONCE__" src="__SCRIPT_URI__"></script>
+</body>
+</html>

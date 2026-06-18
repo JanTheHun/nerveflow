@@ -1,0 +1,190 @@
+:root {
+  --space-1: 6px;
+  --space-2: 10px;
+  --space-3: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: var(--space-3);
+  font-family: var(--vscode-font-family);
+  color: var(--vscode-foreground);
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-2);
+}
+
+h1 {
+  font-size: 15px;
+  margin: 0;
+}
+
+h2 {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.card {
+  border: 1px solid var(--vscode-editorWidget-border);
+  border-radius: 8px;
+  padding: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.sectionHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+select,
+textarea,
+button {
+  width: 100%;
+  font: inherit;
+}
+
+textarea {
+  min-height: 70px;
+  margin-top: var(--space-1);
+  resize: vertical;
+}
+
+button {
+  border: none;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+
+button.secondary {
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+}
+
+button.danger {
+  width: auto;
+  background: var(--vscode-errorForeground);
+  color: var(--vscode-editor-background);
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+ul {
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+  padding: 4px 0;
+}
+
+.empty {
+  opacity: 0.7;
+}
+
+.conversation {
+  margin-top: var(--space-1);
+  max-height: 220px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.message {
+  border-radius: 6px;
+  padding: 7px;
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-editorWidget-border);
+}
+
+.message.user {
+  border-left: 4px solid var(--vscode-charts-blue);
+}
+
+.message.assistant {
+  border-left: 4px solid var(--vscode-charts-green);
+}
+
+.message .role {
+  font-size: 11px;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.message .content {
+  white-space: pre-wrap;
+}
+
+.errorLog {
+  margin-top: var(--space-1);
+  max-height: 170px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.errorEntry {
+  border-radius: 6px;
+  padding: 7px;
+  background: var(--vscode-inputValidation-errorBackground);
+  border: 1px solid var(--vscode-inputValidation-errorBorder);
+  border-left: 4px solid var(--vscode-errorForeground);
+}
+
+.errorCode {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--vscode-errorForeground);
+}
+
+.errorMessage {
+  margin-top: 2px;
+  white-space: pre-wrap;
+}
+
+.errorLocation {
+  margin-top: 3px;
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.errorStatement {
+  margin-top: 4px;
+  padding: 4px;
+  border-radius: 4px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  background: var(--vscode-editor-background);
+}
+
+.errorGuidance {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}

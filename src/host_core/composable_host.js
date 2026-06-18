@@ -37,10 +37,6 @@ import {
 } from './capabilities/semantic_surface.js'
 
 import {
-  localVectorProviderFromEnv,
-} from './providers/local_vector.js'
-
-import {
   parseCapabilityIdentity,
 } from './capability_identity.js'
 
@@ -422,9 +418,16 @@ export function createComposableHost({
     const normalizedProvider = String(provider ?? '').trim().toLowerCase()
 
     if (normalizedProvider === 'memory-pgvector') {
-      return () => storageCapability({
-        provider: localVectorProviderFromEnv(),
-      })
+      return async () => {
+        const moduleNamespace = await import('./providers/local_vector.js')
+        const localVectorProviderFromEnv = moduleNamespace?.localVectorProviderFromEnv
+        if (typeof localVectorProviderFromEnv !== 'function') {
+          throw new Error('localVectorProviderFromEnv is unavailable from host_core/providers/local_vector.js')
+        }
+        return storageCapability({
+          provider: localVectorProviderFromEnv(),
+        })
+      }
     }
 
     if (normalizedProvider === 'speech-surface') {

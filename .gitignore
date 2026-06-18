@@ -6,3 +6,6 @@ examples/news-agent/voice-spa/.tmp/
 .tmp/
 examples/news-agent/.data/
 workspaces-local/
+*.tgz
+*.vsix
+extensions/vscode-conversation-composer/dist/

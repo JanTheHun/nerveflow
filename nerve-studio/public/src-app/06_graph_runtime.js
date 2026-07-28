@@ -7,6 +7,9 @@ import {
   normalizeNextVGraphDirection
 } from './03_ui_controls.js'
 import {
+  applyGraphLayoutPositions
+} from './graph_layout.js'
+import {
   getNextVGraphViewport,
   getNextVGraphCanvas,
   getNextVGraphRenderScale,
@@ -391,6 +394,7 @@ function startNextVGraphAgentTimer(runtimeEvent) {
   timerRecord.nextStartIndex = Math.min(slotIndex + 1, timerRecord.slots.length - 1)
   nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, timerRecord)
   nextVGraphState.runtimeLastDispatchedNode = currentNode
+  syncNextVGraphAgentTicker()
   applyNextVGraphRuntimeVisuals()
   return true
 }
@@ -418,6 +422,7 @@ function finishNextVGraphAgentTimer(runtimeEvent) {
   timerRecord.nextStartIndex = Math.min(slotIndex + 1, timerRecord.slots.length - 1)
   nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, timerRecord)
   nextVGraphState.runtimeLastDispatchedNode = currentNode
+  syncNextVGraphAgentTicker()
   applyNextVGraphRuntimeVisuals()
   return true
 }
@@ -1039,7 +1044,7 @@ export function getNextVGraphNodeVisual(nodeObj, effectLabel = '') {
     width,
     height,
     cornerRadius: 12,
-    edgeClip: Math.max(width, height) * 0.5,
+    edgeClip: nodeKind === 'effect' ? height * 0.5 : Math.max(width, height) * 0.5,
     externalTagOffsetY: Math.round(height * 0.62),
     badgeOffsetX: Math.round(width * 0.34),
     badgeOffsetY: Math.round(height * -0.34),
@@ -1058,6 +1063,9 @@ export function applyNextVGraphRuntimeVisuals() {
     const stepLabel = nextVGraphState.stepLabelElements.get(nodeName)
     const handlerLineElements = nextVGraphState.handlerLabelLineElements.get(nodeName)
     const agentTimerRecord = nextVGraphState.runtimeAgentCallTimersByNode.get(nodeName)
+    const isAgentCallActive = Array.isArray(agentTimerRecord?.slots)
+      ? agentTimerRecord.slots.some((slot) => slot?.active === true)
+      : false
 
     nodeElement.classList.toggle('is-active', isActive)
     nodeElement.classList.toggle('is-runtime-warning', hasWarning)
@@ -1065,6 +1073,7 @@ export function applyNextVGraphRuntimeVisuals() {
     nodeElement.classList.toggle('is-external-triggered', isTriggeredExternal)
     nodeElement.classList.toggle('declared-external', nextVGraphState.declaredExternalNodes.has(nodeName))
     nodeElement.classList.toggle('contract-warning', nextVGraphState.contractWarningNodes.has(nodeName))
+    nodeElement.classList.toggle('is-agent-call-active', isAgentCallActive)
 
     if (stepLabel) {
       if (Number.isFinite(stepValue) && stepValue > 0) {
@@ -1373,6 +1382,7 @@ export function buildNextVGraphLayout(graphNodes, options = {}) {
   const externalNodeIds = options.externalNodeIds instanceof Set ? options.externalNodeIds : new Set()
   const graphEdges = Array.isArray(options.graphEdges) ? options.graphEdges : []
   const effectNodeById = options.effectNodeById instanceof Map ? options.effectNodeById : new Map()
+  const manualPositions = options.manualPositions instanceof Map ? options.manualPositions : new Map()
   const layoutDirection = normalizeNextVGraphDirection(options.layoutDirection)
 
   // ── 1. Build file group membership ────────────────────────────────────────
@@ -1418,7 +1428,11 @@ export function buildNextVGraphLayout(graphNodes, options = {}) {
   for (const nodeObj of graphNodes) {
     const effectLabel = nodeObj.kind === 'effect' ? String(effectNodeById.get(nodeObj.id)?.label ?? '') : ''
     const visual = getNextVGraphNodeVisual(nodeObj, effectLabel)
-    g.setNode(nodeObj.id, { width: visual.width + 18, height: visual.height + 14 })
+    const isEffectNode = nodeObj.kind === 'effect'
+    g.setNode(nodeObj.id, {
+      width: visual.width + (isEffectNode ? 0 : 18),
+      height: visual.height + (isEffectNode ? 0 : 14),
+    })
   }
   for (const edge of graphEdges) {
     if (edge.from !== edge.to && g.hasNode(edge.from) && g.hasNode(edge.to)) {
@@ -1542,12 +1556,14 @@ export function buildNextVGraphLayout(graphNodes, options = {}) {
     }
   }
 
+  applyGraphLayoutPositions(positions, manualPositions)
+
   // ── 4. Extract edge bendpoints ─────────────────────────────────────────────
   const edgeBendpoints = new Map()
   for (const e of g.edges()) {
     const ed = g.edge(e)
     if (ed && Array.isArray(ed.points) && ed.points.length >= 2) {
-      if (movedNodeIds.has(String(e.v)) || movedNodeIds.has(String(e.w))) continue
+      if (movedNodeIds.has(String(e.v)) || movedNodeIds.has(String(e.w)) || manualPositions.has(String(e.v)) || manualPositions.has(String(e.w))) continue
       edgeBendpoints.set(`${e.v}\u0000${e.w}`, ed.points)
     }
   }

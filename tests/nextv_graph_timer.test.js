@@ -14,6 +14,14 @@ function loadTimerApi() {
   return api
 }
 
+function getFunctionSource(source, functionName, nextFunctionName) {
+  const start = source.indexOf(`function ${functionName}(`)
+  const end = source.indexOf(`function ${nextFunctionName}(`, start)
+  assert.notEqual(start, -1, `expected ${functionName} to exist`)
+  assert.notEqual(end, -1, `expected ${nextFunctionName} to follow ${functionName}`)
+  return source.slice(start, end)
+}
+
 function makeState(overrides = {}) {
   return {
     runtimeAgentCallTimersByNode: new Map(),
@@ -97,6 +105,16 @@ test('syncTicker does nothing when no timers exist and no interval is running', 
 
   assert.equal(state.runtimeAgentTickerId, null)
   assert.equal(win._intervals.size, 0)
+})
+
+test('agent call lifecycle synchronizes the live ticker', () => {
+  const runtimePath = resolve(process.cwd(), 'nerve-studio/public/src-app/06_graph_runtime.js')
+  const source = readFileSync(runtimePath, 'utf8')
+  const startSource = getFunctionSource(source, 'startNextVGraphAgentTimer', 'finishNextVGraphAgentTimer')
+  const finishSource = getFunctionSource(source, 'finishNextVGraphAgentTimer', 'finalizeNextVGraphActiveAgentTimers')
+
+  assert.match(startSource, /syncNextVGraphAgentTicker\(\)/)
+  assert.match(finishSource, /syncNextVGraphAgentTicker\(\)/)
 })
 
 // --- finalizeActive ---

@@ -38,6 +38,7 @@ In Nerveflow:
 
 - Static UI (`public/`)
   - editor, output panel, graph view
+  - draggable graph nodes with view-only positions saved per workflow and layout direction; use **auto layout** to discard manual positions
 - Lightweight preview server (`preview-server.js`)
 - Event-driven interaction model (UI -> runtime -> UI)
 

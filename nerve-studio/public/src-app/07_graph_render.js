@@ -27,6 +27,7 @@ import {
   getNextVGraphPadding,
   clampNextVGraphZoom,
   getNextVGraphWheelZoomStep,
+  getNextVGraphRenderScale,
   applyNextVGraphZoom,
   positionNextVGraphPopover,
   centerNextVGraphViewport,
@@ -70,6 +71,13 @@ import {
   setStatus,
   appendScriptLogRow
 } from './13_layout.js'
+import {
+  getGraphLayoutScope,
+  loadGraphLayoutPositions,
+  saveGraphLayoutPosition,
+  clearGraphLayoutPositions,
+  getClippedGraphEdgeLine
+} from './graph_layout.js'
 
 function getThemeColorToken(name, fallback) {
   const rootStyle = getComputedStyle(document.body || document.documentElement)
@@ -91,6 +99,9 @@ export function renderNextVGraph(data = {}, options = {}) {
   const contractWarnings = Array.isArray(data.contractWarnings) ? data.contractWarnings : []
   const declaredExternals = Array.isArray(data.declaredExternals) ? data.declaredExternals : []
   const entrypointPath = String(data.entrypointPath ?? '')
+  const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
+  const layoutScope = getGraphLayoutScope(workspaceDir, entrypointPath, layoutDirection)
+  const manualPositions = loadGraphLayoutPositions(localStorage, layoutScope)
   const transitionByEvent = buildNextVGraphTransitionLookup(transitions)
   const handlerSourceByEvent = new Map(
     nodes
@@ -205,7 +216,114 @@ export function renderNextVGraph(data = {}, options = {}) {
 
   const nodeById = new Map(graphNodes.map((node) => [node.id, node]))
   const nodeClickHandlers = new Map()
+  let suppressNodeClick = false
   let selectedNodeId = ''
+
+  const previewDraggedNode = (nodeId, origin, position, nodeElement) => {
+    const dx = position.x - origin.x
+    const dy = position.y - origin.y
+    nodeElement.setAttribute('transform', `translate(${dx} ${dy})`)
+    nextVGraphState.layoutPositions.set(nodeId, position)
+
+    for (const edgeElement of svg.querySelectorAll('.nextv-graph-edge[data-from][data-to]')) {
+      const from = String(edgeElement?.dataset?.from ?? '')
+      const to = String(edgeElement?.dataset?.to ?? '')
+      if (from !== nodeId && to !== nodeId) continue
+      if (from === to) continue
+
+      const start = nextVGraphState.layoutPositions.get(from)
+      const end = nextVGraphState.layoutPositions.get(to)
+      if (!start || !end) continue
+
+      const line = getClippedGraphEdgeLine(
+        start,
+        end,
+        {
+          shape: edgeElement.dataset.fromShape,
+          width: Number(edgeElement.dataset.fromWidth),
+          height: Number(edgeElement.dataset.fromHeight),
+        },
+        {
+          shape: edgeElement.dataset.toShape,
+          width: Number(edgeElement.dataset.toWidth),
+          height: Number(edgeElement.dataset.toHeight),
+        },
+      )
+      if (!line) continue
+
+      if (edgeElement.tagName.toLowerCase() === 'line') {
+        edgeElement.setAttribute('x1', String(line.x1))
+        edgeElement.setAttribute('y1', String(line.y1))
+        edgeElement.setAttribute('x2', String(line.x2))
+        edgeElement.setAttribute('y2', String(line.y2))
+      } else {
+        edgeElement.setAttribute('d', `M ${line.x1} ${line.y1} L ${line.x2} ${line.y2}`)
+      }
+    }
+
+    positionNextVGraphPopover()
+  }
+
+  const bindNodeDragging = (nodeId, nodeElement, visual) => {
+    nodeElement.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || !event.isPrimary) return
+      const origin = nextVGraphState.layoutPositions.get(nodeId)
+      if (!origin) return
+
+      const startClientX = event.clientX
+      const startClientY = event.clientY
+      const pointerId = event.pointerId
+      let moved = false
+      let position = { x: origin.x, y: origin.y }
+
+      const finishDrag = (commit) => {
+        window.removeEventListener('pointermove', moveNode)
+        window.removeEventListener('pointerup', finishPointerDrag)
+        window.removeEventListener('pointercancel', cancelPointerDrag)
+        nodeElement.classList.remove('is-dragging')
+        if (!moved) return
+
+        suppressNodeClick = true
+        if (commit) {
+          saveGraphLayoutPosition(localStorage, layoutScope, nodeId, position)
+        }
+        const savedViewport = captureNextVGraphViewportState()
+        renderNextVGraph(data, { preserveViewport: true, viewportState: savedViewport })
+        window.setTimeout(() => {
+          suppressNodeClick = false
+        }, 0)
+      }
+
+      const moveNode = (moveEvent) => {
+        if (moveEvent.pointerId !== pointerId) return
+        const renderScale = getNextVGraphRenderScale(nextVGraphState.zoom) || 1
+        const dx = (moveEvent.clientX - startClientX) / renderScale
+        const dy = (moveEvent.clientY - startClientY) / renderScale
+        if (!moved && Math.hypot(dx, dy) < 3) return
+        moved = true
+        position = {
+          x: Math.max((visual.width / 2) + 10, Math.round(origin.x + dx)),
+          y: Math.max((visual.height / 2) + 10, Math.round(origin.y + dy)),
+        }
+        previewDraggedNode(nodeId, origin, position, nodeElement)
+        moveEvent.preventDefault()
+      }
+
+      const finishPointerDrag = (upEvent) => {
+        if (upEvent.pointerId === pointerId) finishDrag(true)
+      }
+      const cancelPointerDrag = (cancelEvent) => {
+        if (cancelEvent.pointerId === pointerId) finishDrag(false)
+      }
+
+      nodeElement.classList.add('is-dragging')
+      window.addEventListener('pointermove', moveNode)
+      window.addEventListener('pointerup', finishPointerDrag)
+      window.addEventListener('pointercancel', cancelPointerDrag)
+      event.stopPropagation()
+      event.preventDefault()
+    })
+  }
 
   const buildSelectedNodeCard = (nodeId) => {
     const normalizedNodeId = String(nodeId ?? '').trim()
@@ -442,6 +560,20 @@ export function renderNextVGraph(data = {}, options = {}) {
   resetBtn.title = 'reset zoom'
   resetBtn.addEventListener('click', () => resetNextVGraphZoom())
 
+  const resetLayoutBtn = document.createElement('button')
+  resetLayoutBtn.type = 'button'
+  resetLayoutBtn.className = 'nextv-graph-layout-btn'
+  resetLayoutBtn.textContent = 'auto layout'
+  resetLayoutBtn.title = 'discard manual node positions'
+  resetLayoutBtn.disabled = manualPositions.size === 0
+  resetLayoutBtn.addEventListener('click', () => {
+    clearGraphLayoutPositions(localStorage, layoutScope)
+    renderNextVGraph(data, {
+      preserveViewport: true,
+      viewportState: captureNextVGraphViewportState(),
+    })
+  })
+
   const layoutTbBtn = document.createElement('button')
   layoutTbBtn.type = 'button'
   layoutTbBtn.className = 'nextv-graph-layout-btn'
@@ -465,7 +597,8 @@ export function renderNextVGraph(data = {}, options = {}) {
 
   const hint = document.createElement('span')
   hint.className = 'nextv-graph-hint'
-  hint.textContent = 'drag to pan • wheel to zoom'
+  hint.textContent = 'drag nodes'
+  hint.title = 'drag nodes to arrange; drag the background to pan; use the wheel to zoom'
 
   const autoFollowLabel = document.createElement('label')
   autoFollowLabel.className = 'nextv-graph-toolbar-check'
@@ -507,6 +640,7 @@ export function renderNextVGraph(data = {}, options = {}) {
   toolbar.appendChild(zoomOutBtn)
   toolbar.appendChild(zoomInBtn)
   toolbar.appendChild(resetBtn)
+  toolbar.appendChild(resetLayoutBtn)
   toolbar.appendChild(zoomLabel)
   toolbar.appendChild(hint)
   toolbar.appendChild(controlBranchesBtn)
@@ -572,6 +706,7 @@ export function renderNextVGraph(data = {}, options = {}) {
 
   viewport.addEventListener('mousedown', (event) => {
     if (event.button !== 0) return
+    if (event.target.closest?.('.nextv-graph-node')) return
     isPanning = true
     panStartX = event.clientX
     panStartY = event.clientY
@@ -603,6 +738,7 @@ export function renderNextVGraph(data = {}, options = {}) {
     externalNodeIds: externalCandidates,
     graphEdges,
     effectNodeById,
+    manualPositions,
     layoutDirection: nextVGraphState.layoutDirection,
   })
   if (fileCount > 0) {
@@ -677,9 +813,7 @@ export function renderNextVGraph(data = {}, options = {}) {
 
   const filesLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g')
   filesLayer.setAttribute('class', 'nextv-graph-files')
-  const containerByKey = new Map()
   for (const box of containers) {
-    containerByKey.set(box.key, box)
     const group = document.createElementNS('http://www.w3.org/2000/svg', 'g')
     group.setAttribute('class', 'nextv-graph-file-box')
 
@@ -710,50 +844,6 @@ export function renderNextVGraph(data = {}, options = {}) {
     filesLayer.appendChild(group)
   }
   svg.appendChild(filesLayer)
-
-  const membershipLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g')
-  membershipLayer.setAttribute('class', 'nextv-graph-membership-layer')
-  for (const nodeObj of graphNodes) {
-    const pos = positions.get(nodeObj.id)
-    if (!pos) continue
-
-    const groupKey = nodeGroupById.get(nodeObj.id)
-    if (!groupKey) continue
-
-    const container = containerByKey.get(groupKey)
-    if (!container) continue
-
-    const effectLabel = nodeObj.kind === 'effect' ? String(effectNodeById.get(nodeObj.id)?.label ?? '') : ''
-    const visual = getNextVGraphNodeVisual(nodeObj, effectLabel)
-    const isLeftToRight = layoutDirection === 'LR'
-
-    const anchorX = Math.max(container.x + 12, Math.min(container.x + container.width - 12, pos.x))
-    const anchorY = Math.max(container.y + 12, Math.min(container.y + container.height - 12, pos.y))
-
-    if (nodeObj?.kind === 'event' && externalCandidates.has(nodeObj.id)) {
-      const link = document.createElementNS('http://www.w3.org/2000/svg', 'line')
-      link.setAttribute('class', 'nextv-graph-membership-edge')
-      if (isLeftToRight) {
-        const startX = pos.x + (visual.width / 2)
-        link.setAttribute('x1', String(startX))
-        link.setAttribute('y1', String(pos.y))
-        link.setAttribute('x2', String(container.x))
-        link.setAttribute('y2', String(anchorY))
-      } else {
-        const startY = pos.y + (visual.height / 2)
-        link.setAttribute('x1', String(pos.x))
-        link.setAttribute('y1', String(startY))
-        link.setAttribute('x2', String(anchorX))
-        link.setAttribute('y2', String(container.y))
-      }
-      membershipLayer.appendChild(link)
-      continue
-    }
-
-    // Effect nodes already have explicit effect edges; skip auxiliary membership
-    // connectors here to avoid visual "double arrows".
-  }
-  svg.appendChild(membershipLayer)
 
   const cycleNodes = new Set()
   const cycleEdges = new Set()
@@ -808,10 +898,21 @@ export function renderNextVGraph(data = {}, options = {}) {
     // Determine node radii for endpoint clipping.
     const toNode = graphNodes.find((n) => n.id === to)
     const toEffectLabel = toNode?.kind === 'effect' ? String(effectNodeById.get(to)?.label ?? '') : ''
-    const toRadius = toNode ? getNextVGraphNodeVisual(toNode, toEffectLabel).edgeClip : 24
+    const toVisual = toNode ? getNextVGraphNodeVisual(toNode, toEffectLabel) : { shape: 'circle', width: 48, height: 48, edgeClip: 24 }
+    const toRadius = toVisual.edgeClip
     const fromNodeObj = graphNodes.find((n) => n.id === from)
     const fromEffectLabel = fromNodeObj?.kind === 'effect' ? String(effectNodeById.get(from)?.label ?? '') : ''
-    const fromRadius = fromNodeObj ? getNextVGraphNodeVisual(fromNodeObj, fromEffectLabel).edgeClip : 24
+    const fromVisual = fromNodeObj ? getNextVGraphNodeVisual(fromNodeObj, fromEffectLabel) : { shape: 'circle', width: 48, height: 48, edgeClip: 24 }
+    const fromRadius = fromVisual.edgeClip
+
+    const tagEdgeGeometry = (edgeElement) => {
+      edgeElement.dataset.fromShape = String(fromVisual.shape)
+      edgeElement.dataset.fromWidth = String(fromVisual.width)
+      edgeElement.dataset.fromHeight = String(fromVisual.height)
+      edgeElement.dataset.toShape = String(toVisual.shape)
+      edgeElement.dataset.toWidth = String(toVisual.width)
+      edgeElement.dataset.toHeight = String(toVisual.height)
+    }
 
     const getSubscriptionEdgeLabelText = () => {
       if (edgeType === 'collapsed-emit') return String(edge.eventLabel ?? '').trim()
@@ -848,6 +949,7 @@ export function renderNextVGraph(data = {}, options = {}) {
       path.dataset.edgeKey = edgeKey
       path.dataset.from = from
       path.dataset.to = to
+      tagEdgeGeometry(path)
       path.setAttribute('d', `M ${start.x} ${start.y - 22} C ${start.x + 42} ${start.y - 60}, ${start.x - 42} ${start.y - 60}, ${start.x} ${start.y - 22}`)
       path.setAttribute('marker-end', isCycleEdge ? 'url(#nextv-graph-arrow-cycle)' : 'url(#nextv-graph-arrow)')
       const title = document.createElementNS('http://www.w3.org/2000/svg', 'title')
@@ -884,6 +986,7 @@ export function renderNextVGraph(data = {}, options = {}) {
         pathEl.dataset.edgeKey = edgeKey
         pathEl.dataset.from = from
         pathEl.dataset.to = to
+        tagEdgeGeometry(pathEl)
         // Smooth elbow: cubic bezier from start through waypoint to end.
         pathEl.setAttribute('d',
           `M ${Math.round(sx)} ${Math.round(sy)} ` +
@@ -912,6 +1015,7 @@ export function renderNextVGraph(data = {}, options = {}) {
       pathEl.dataset.edgeKey = edgeKey
       pathEl.dataset.from = from
       pathEl.dataset.to = to
+      tagEdgeGeometry(pathEl)
       pathEl.setAttribute('d', buildSmoothPath(bendpoints))
       pathEl.setAttribute('marker-end', isCycleEdge ? 'url(#nextv-graph-arrow-cycle)' : 'url(#nextv-graph-arrow)')
       const title = document.createElementNS('http://www.w3.org/2000/svg', 'title')
@@ -934,19 +1038,16 @@ export function renderNextVGraph(data = {}, options = {}) {
     }
 
     // Straight-line fallback (no dagre bendpoints for this edge).
-    const dx = end.x - start.x
-    const dy = end.y - start.y
-    const distance = Math.hypot(dx, dy) || 1
-    const x1 = start.x + ((dx / distance) * fromRadius)
-    const y1 = start.y + ((dy / distance) * fromRadius)
-    const x2 = end.x - ((dx / distance) * toRadius)
-    const y2 = end.y - ((dy / distance) * toRadius)
+    const clippedLine = getClippedGraphEdgeLine(start, end, fromVisual, toVisual)
+    if (!clippedLine) continue
+    const { x1, y1, x2, y2 } = clippedLine
 
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
     line.setAttribute('class', edgeClass)
     line.dataset.edgeKey = edgeKey
     line.dataset.from = from
     line.dataset.to = to
+    tagEdgeGeometry(line)
     line.setAttribute('x1', String(x1))
     line.setAttribute('y1', String(y1))
     line.setAttribute('x2', String(x2))
@@ -1174,8 +1275,10 @@ export function renderNextVGraph(data = {}, options = {}) {
     nextVGraphState.nodeElements.set(nodeId, group)
     nodeClickHandlers.set(nodeId, () => setSelectedGraphNode(nodeId))
     group.classList.add('clickable')
+    bindNodeDragging(nodeId, group, visual)
     group.addEventListener('click', (event) => {
       event.stopPropagation()
+      if (suppressNodeClick) return
       const onClick = nodeClickHandlers.get(nodeId)
       if (typeof onClick === 'function') onClick()
     })

@@ -3,6 +3,9 @@ import {
   nextVWorkspaceDirInput,
   workspace
 } from './state.js'
+import {
+  normalizeWorkspacePath
+} from './workspace_path.js'
 
 export function normalizeRelativePath(pathValue) {
   return String(pathValue ?? '')
@@ -15,7 +18,7 @@ export function normalizeRelativePath(pathValue) {
 }
 
 export function normalizeNextVWorkspaceDir(pathValue) {
-  const normalized = normalizeRelativePath(pathValue)
+  const normalized = normalizeWorkspacePath(pathValue)
   if (!normalized || normalized === '.') return ''
   return normalized
 }
@@ -102,4 +105,4 @@ export function normalizeGraphSourcePathForEditor(pathValue) {
 
   return normalized
 }
-
+

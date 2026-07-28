@@ -2382,6 +2382,8 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
 .nextv-graph-toolbar button {
   min-width: 32px;
   padding: 2px 8px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .nextv-graph-toolbar .nextv-graph-layout-btn {
@@ -2406,6 +2408,7 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
   color: var(--dim);
   margin-left: 8px;
   font-size: 11px;
+  white-space: nowrap;
 }
 
 .nextv-graph-toolbar-check {
@@ -2438,6 +2441,19 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
 .nextv-graph-viewport.is-panning {
   cursor: grabbing;
   user-select: none;
+}
+
+.nextv-graph-node.clickable {
+  cursor: move;
+  touch-action: none;
+}
+
+.nextv-graph-node.is-dragging {
+  cursor: grabbing;
+}
+
+.nextv-graph-node.is-dragging .nextv-graph-node-shape {
+  filter: brightness(1.12);
 }
 
 .nextv-graph-canvas {
@@ -2561,19 +2577,6 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
 .nextv-graph-file-count {
   fill: var(--graph-file-count);
   font-size: 10px;
-}
-
-.nextv-graph-membership-edge {
-  stroke: var(--green);
-  stroke-width: 1.2;
-  stroke-dasharray: 4 3;
-  opacity: 0.75;
-}
-
-.nextv-graph-membership-edge.leaving {
-  stroke: var(--yellow);
-  stroke-dasharray: 3 3;
-  opacity: 0.82;
 }
 
 .nextv-graph-edge {
@@ -2813,6 +2816,12 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
 .nextv-graph-node.is-active .nextv-graph-node-shape {
   stroke-width: 3.8;
   filter: drop-shadow(0 0 5px color-mix(in srgb, var(--graph-edge-active) 80%, transparent));
+}
+
+.nextv-graph-node.is-agent-call-active .nextv-graph-node-shape {
+  stroke-width: 4.2;
+  stroke: var(--thinking);
+  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--thinking) 85%, transparent));
 }
 
 .nextv-graph-node.is-external-triggered .nextv-graph-node-shape {

@@ -1,0 +1,3 @@
+on "ping"
+  emit("pong", event.value)
+end

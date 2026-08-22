@@ -1,0 +1,13 @@
+{
+  "entrypointPath": "workflow.nrv",
+  "externals": [
+    "ping"
+  ],
+  "transports": {
+    "openai": {
+      "provider": "openai_compat",
+      "baseUrl": "${env:OPENAI_BASE_URL}",
+      "apiKey": "stub-key"
+    }
+  }
+}

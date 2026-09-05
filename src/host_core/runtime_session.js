@@ -217,9 +217,82 @@ function normalizeGovernedToolParameters(inputSchemaRaw) {
   return schema
 }
 
+const GOVERNED_TOOL_WIRE_NAME_MAX_LENGTH = 64
+
+function hashGovernedToolName(valueRaw) {
+  const value = String(valueRaw ?? '')
+  let hash = 2166136261
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+function normalizeGovernedToolWireName(nameRaw) {
+  const name = String(nameRaw ?? '').trim()
+  const encoded = [...name]
+    .map((character) => /[A-Za-z0-9_-]/.test(character)
+      ? character
+      : `_x${character.codePointAt(0).toString(16)}_`)
+    .join('') || 'tool'
+
+  if (encoded.length <= GOVERNED_TOOL_WIRE_NAME_MAX_LENGTH) {
+    return { base: encoded, truncated: false }
+  }
+
+  return {
+    base: encoded.slice(0, GOVERNED_TOOL_WIRE_NAME_MAX_LENGTH),
+    truncated: true,
+  }
+}
+
+function appendGovernedToolWireHash(baseRaw, canonicalName) {
+  const suffix = `_${hashGovernedToolName(canonicalName)}`
+  const base = String(baseRaw ?? '').slice(0, GOVERNED_TOOL_WIRE_NAME_MAX_LENGTH - suffix.length)
+  return `${base}${suffix}`
+}
+
+function buildGovernedToolWireNames(toolNames) {
+  const normalizedEntries = toolNames.map((canonicalName) => {
+    const parsed = parseCapabilityIdentity(canonicalName)
+    const preferredName = parsed.isNamespaced && parsed.isValid
+      ? parsed.operation
+      : canonicalName
+    return {
+      canonicalName,
+      preferred: normalizeGovernedToolWireName(preferredName),
+      canonical: normalizeGovernedToolWireName(canonicalName),
+    }
+  })
+  const preferredCounts = new Map()
+  for (const entry of normalizedEntries) {
+    preferredCounts.set(entry.preferred.base, (preferredCounts.get(entry.preferred.base) ?? 0) + 1)
+  }
+
+  const canonicalToWire = new Map()
+  const wireToCanonical = new Map()
+  for (const entry of normalizedEntries) {
+    const preferredIsUnique = preferredCounts.get(entry.preferred.base) === 1
+      && !entry.preferred.truncated
+    const wireName = preferredIsUnique
+      ? entry.preferred.base
+      : appendGovernedToolWireHash(entry.canonical.base, entry.canonicalName)
+    const existingCanonicalName = wireToCanonical.get(wireName)
+    if (existingCanonicalName && existingCanonicalName !== entry.canonicalName) {
+      throw new Error(`Governed tool wire name collision between "${existingCanonicalName}" and "${entry.canonicalName}".`)
+    }
+    canonicalToWire.set(entry.canonicalName, wireName)
+    wireToCanonical.set(wireName, entry.canonicalName)
+  }
+
+  return { canonicalToWire, wireToCanonical }
+}
+
 async function buildGovernedToolDefinitions(toolNames, getToolMetadata = null, onSchemaFallback = null) {
   const definitions = []
   const schemaSourceByName = {}
+  const wireNames = buildGovernedToolWireNames(toolNames)
 
   for (const name of toolNames) {
     let metadata = null
@@ -246,7 +319,7 @@ async function buildGovernedToolDefinitions(toolNames, getToolMetadata = null, o
     definitions.push({
       type: 'function',
       function: {
-        name,
+        name: wireNames.canonicalToWire.get(name),
         description,
         parameters: normalizeGovernedToolParameters(metadata?.inputSchema),
       },
@@ -256,18 +329,21 @@ async function buildGovernedToolDefinitions(toolNames, getToolMetadata = null, o
   return {
     definitions,
     schemaSourceByName,
+    ...wireNames,
   }
 }
 
-function extractTransportToolCalls(transportResult) {
+function extractTransportToolCalls(transportResult, wireToCanonical = new Map()) {
   const toolCalls = transportResult?.metadata?.toolCalls
   if (!Array.isArray(toolCalls)) return []
   return toolCalls
     .map((call, index) => {
       if (!call || typeof call !== 'object') return null
       const id = String(call.id ?? `tool-call-${index + 1}`).trim() || `tool-call-${index + 1}`
-      const name = String(call.name ?? '').trim()
-      if (!name) return null
+      const wireName = String(call.name ?? '').trim()
+      if (!wireName) return null
+      const knownWireName = wireToCanonical.has(wireName)
+      const name = knownWireName ? wireToCanonical.get(wireName) : ''
 
       const argsRaw = call.argumentsRaw != null
         ? String(call.argumentsRaw)
@@ -284,6 +360,8 @@ function extractTransportToolCalls(transportResult) {
       return {
         id,
         name,
+        wireName,
+        knownWireName,
         argsRaw,
         args,
       }
@@ -724,9 +802,10 @@ export function createHostAdapter({
         : null
       const governedToolDefinitionsResult = governedToolsEnabled
         ? await buildGovernedToolDefinitions(effectiveAllow, getGovernedToolMetadata, onSchemaFallback)
-        : { definitions: [], schemaSourceByName: {} }
+        : { definitions: [], schemaSourceByName: {}, canonicalToWire: new Map(), wireToCanonical: new Map() }
       const governedToolDefinitions = governedToolDefinitionsResult.definitions
       const governedToolSchemaSourceByName = governedToolDefinitionsResult.schemaSourceByName
+      const governedToolWireToCanonical = governedToolDefinitionsResult.wireToCanonical
 
       let lastViolation = null
       let previousViolationKey = null
@@ -924,7 +1003,7 @@ export function createHostAdapter({
 
               transportResult = await callAgent(callPayload)
               const currentOutput = normalizeAgentTransportResult(transportResult)
-              const toolCalls = extractTransportToolCalls(transportResult)
+              const toolCalls = extractTransportToolCalls(transportResult, governedToolWireToCanonical)
 
               if (toolCalls.length === 0) {
                 resolvedOutput = currentOutput
@@ -940,17 +1019,17 @@ export function createHostAdapter({
               for (const toolCall of toolCalls) {
                 governedSummary.toolCalls += 1
                 const correlationId = toolCall.id
-                if (!effectiveAllow.includes(toolCall.name)) {
+                if (!toolCall.knownWireName || !effectiveAllow.includes(toolCall.name)) {
                   governedSummary.deniedToolCalls += 1
                   if (governedDenyOnUnknownTool) {
-                    throw new Error(`${callLabel} requested tool "${toolCall.name}" which is not allowed by tools policy.`)
+                    throw new Error(`${callLabel} requested tool "${toolCall.wireName}" which is not allowed by tools policy.`)
                   }
 
                   assistantToolCalls.push({
                     id: toolCall.id,
                     type: 'function',
                     function: {
-                      name: toolCall.name,
+                      name: toolCall.wireName,
                       arguments: toolCall.argsRaw,
                     },
                   })
@@ -958,8 +1037,8 @@ export function createHostAdapter({
                   pendingToolMessages.push({
                     role: 'tool',
                     tool_call_id: toolCall.id,
-                    name: toolCall.name,
-                    content: JSON.stringify({ error: `Tool "${toolCall.name}" denied by runtime tools policy.` }),
+                    name: toolCall.wireName,
+                    content: JSON.stringify({ error: `Tool "${toolCall.wireName}" denied by runtime tools policy.` }),
                   })
                   continue
                 }
@@ -1042,7 +1121,7 @@ export function createHostAdapter({
                   id: toolCall.id,
                   type: 'function',
                   function: {
-                    name: toolCall.name,
+                    name: toolCall.wireName,
                     arguments: toolCall.argsRaw,
                   },
                 })
@@ -1057,7 +1136,7 @@ export function createHostAdapter({
                 pendingToolMessages.push({
                   role: 'tool',
                   tool_call_id: toolCall.id,
-                  name: toolCall.name,
+                  name: toolCall.wireName,
                   content: toolResultContent,
                 })
               }

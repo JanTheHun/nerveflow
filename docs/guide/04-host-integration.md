@@ -650,6 +650,9 @@ Example:
 Workspace tool policy is loaded from host config and applied before any tool execution.
 
 - Aliases resolve before allow-list checks (`tools.aliases` -> canonical tool name)
+- Governed agent calls keep canonical capability names internally and expose concise provider-safe wire names to models. For example, unique `local-mcp.get_time` is sent as `get_time`; ambiguous operation names use deterministic namespaced fallbacks.
+- Structured tool calls are mapped back to canonical names before policy checks, execution, and observability events. Unknown wire names remain subject to `denyOnUnknownTool`.
+- Assistant text is not interpreted as a tool call. JSON and other structured text remain ordinary model output unless the provider returns a structured tool-call field.
 - If allow-list is configured and canonical tool is missing, host should throw a policy-denied error
 - If tool passes policy but host has no concrete implementation, host should throw an unavailable error
 

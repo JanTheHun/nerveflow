@@ -389,7 +389,7 @@ function buildGeneratedMcpServerSource(serverName) {
     '',
     `const server = new McpServer({ name: 'nerveflow-${serverName}', version: '1.0.0' })`,
     '',
-    "server.registerTool('time.now', {",
+    "server.registerTool('get_time', {",
     "  description: 'Returns the current server time.',",
     '}, async () => {',
     "  const text = new Date().toISOString()",

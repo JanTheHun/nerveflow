@@ -6,6 +6,7 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Governed agent calls now normalize canonical capability identities to provider-safe tool names on the model wire, then map structured calls back before policy checks and execution.
 - MCP capability provider registration now keeps provider tool keys as operation names, preventing duplicated canonical identities like `local-mcp.local-mcp.<operation>` during composable host startup.
 - MCP capability setup now fails with a targeted validation error when an MCP server exposes dotted operation names, clarifying that server-level namespaces already provide the canonical prefix.
 - `nerve-compose add mcp` now scaffolds the local sample MCP tool as `get_time` so generated workspaces align with canonical `namespace.operation` capability identity constraints.

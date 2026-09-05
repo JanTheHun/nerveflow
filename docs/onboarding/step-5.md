@@ -134,7 +134,7 @@ reply = agent(
   messages=state.conversation,
   tools={
     mode: "governed",
-    allow: [ "get_time" ],
+    allow: [ "local-mcp.get_time" ],
     maxRounds: 4
   }
 )

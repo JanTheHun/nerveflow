@@ -1273,6 +1273,197 @@ test('callAgent executes governed tool calls and feeds tool results back to mode
   assert.deepEqual(result.metadata.tools.toolsUsed, ['search'])
 })
 
+test('callAgent maps namespaced tools to wire-safe names and executes canonical capabilities', async () => {
+  const transportCalls = []
+  const runtimeCalls = []
+  const toolRuntime = createToolRuntime({
+    providers: [{
+      namespace: 'local-mcp',
+      tools: {
+        get_time: async ({ args }) => {
+          runtimeCalls.push(args)
+          return { iso: '2026-08-27T12:00:00.000Z' }
+        },
+      },
+    }],
+    metadataProviders: [async (name) => name === 'local-mcp.get_time'
+      ? {
+          name,
+          description: 'Returns the current server time.',
+          inputSchema: {
+            type: 'object',
+            properties: { timeZone: { type: 'string' } },
+            additionalProperties: false,
+          },
+        }
+      : null],
+  })
+
+  let callCount = 0
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: new Set(['local-mcp.get_time']), aliases: {} },
+      agents: { profiles: { chat: { model: 'llama3.2:latest' } } },
+      operators: { map: {} },
+    },
+    callAgent: async (payload) => {
+      transportCalls.push(payload)
+      callCount += 1
+      if (callCount === 1) {
+        return {
+          text: '',
+          metadata: {
+            provider: 'ollama',
+            toolCalls: [{
+              id: 'call-time',
+              name: 'get_time',
+              argumentsRaw: '{"timeZone":"UTC"}',
+            }],
+          },
+        }
+      }
+      return { text: 'It is noon.', metadata: { provider: 'ollama' } }
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+    toolRuntime,
+  })
+
+  const result = await adapter.callAgent({
+    agent: 'chat',
+    prompt: 'what time is it?',
+    tools: { mode: 'governed', maxRounds: 2, allow: ['local-mcp.get_time'] },
+    event: { type: 'user_message', source: 'external' },
+  })
+
+  assert.equal(result.value, 'It is noon.')
+  assert.deepEqual(runtimeCalls, [{ timeZone: 'UTC' }])
+  assert.equal(transportCalls[0].tools[0].function.name, 'get_time')
+  assert.equal(transportCalls[0].tools[0].function.description, 'Returns the current server time.')
+  assert.deepEqual(transportCalls[0].tools[0].function.parameters, {
+    type: 'object',
+    properties: { timeZone: { type: 'string' } },
+    additionalProperties: false,
+  })
+  assert.equal(transportCalls[1].messages.at(-2).tool_calls[0].function.name, 'get_time')
+  assert.equal(transportCalls[1].messages.at(-1).name, 'get_time')
+  assert.deepEqual(result.metadata.tools.toolsUsed, ['local-mcp.get_time'])
+})
+
+test('callAgent denies structured tool names missing from the governed wire map', async () => {
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: new Set(['local-mcp.get_time']), aliases: {} },
+      agents: { profiles: { chat: { model: 'llama3.2:latest' } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => ({
+      text: '',
+      metadata: {
+        provider: 'ollama',
+        toolCalls: [{ id: 'invented', name: 'fruit-colors', argumentsRaw: '{"color":"yellow"}' }],
+      },
+    }),
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  await assert.rejects(
+    () => adapter.callAgent({
+      agent: 'chat',
+      prompt: 'find yellow fruit',
+      tools: { mode: 'governed', maxRounds: 2, allow: ['local-mcp.get_time'] },
+      event: { type: 'user_message', source: 'external' },
+    }),
+    /requested tool "fruit-colors" which is not allowed by tools policy/,
+  )
+})
+
+test('callAgent leaves JSON assistant output untouched when no structured tool call exists', async () => {
+  const jsonOutput = '{"name":"fruit-colors","parameters":{"color":"yellow"}}'
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: new Set(['local-mcp.get_time']), aliases: {} },
+      agents: { profiles: { chat: { model: 'llama3.2:latest' } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => ({ text: jsonOutput, metadata: { provider: 'ollama', toolCalls: [] } }),
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  const result = await adapter.callAgent({
+    agent: 'chat',
+    prompt: 'return JSON',
+    tools: { mode: 'governed', maxRounds: 2, allow: ['local-mcp.get_time'] },
+    event: { type: 'user_message', source: 'external' },
+  })
+
+  assert.equal(result.value, jsonOutput)
+  assert.equal(result.metadata.tools.toolCalls, 0)
+})
+
+test('callAgent generates unique bounded wire names for normalization collisions and long names', async () => {
+  let transportPayload = null
+  const canonicalNames = [
+    'alpha.get_time',
+    'beta.get_time',
+    `long.${'operation'.repeat(12)}`,
+  ]
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: new Set(canonicalNames), aliases: {} },
+      agents: { profiles: { chat: { model: 'llama3.2:latest' } } },
+      operators: { map: {} },
+    },
+    callAgent: async (payload) => {
+      transportPayload = payload
+      return { text: 'done', metadata: { provider: 'ollama', toolCalls: [] } }
+    },
+    defaultModel: 'test-model',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  await adapter.callAgent({
+    agent: 'chat',
+    prompt: 'done',
+    tools: { mode: 'governed', maxRounds: 1, allow: canonicalNames },
+    event: { type: 'user_message', source: 'external' },
+  })
+
+  const wireNames = transportPayload.tools.map((entry) => entry.function.name)
+  assert.equal(new Set(wireNames).size, canonicalNames.length)
+  assert.equal(wireNames.every((name) => /^[A-Za-z0-9_-]+$/.test(name)), true)
+  assert.equal(wireNames.every((name) => name.length <= 64), true)
+  assert.match(wireNames[0], /^alpha_x2e_get_time_[0-9a-f]{8}$/)
+  assert.match(wireNames[1], /^beta_x2e_get_time_[0-9a-f]{8}$/)
+  assert.match(wireNames[2], /_[0-9a-f]{8}$/)
+})
+
 test('callAgent governed mode auto-discovers capability tools when allow is omitted', async () => {
   let callCount = 0
   const toolRuntime = createToolRuntime({

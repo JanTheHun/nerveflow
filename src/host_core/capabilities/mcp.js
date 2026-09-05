@@ -195,10 +195,9 @@ function createMcpServerProvider(serverConfig) {
       for (const tool of tools) {
         const operation = String(tool?.name ?? '').trim()
         if (!operation) continue
-        const canonicalName = `${name}.${operation}`
-        nextTools[canonicalName] = async (...args) => {
+        nextTools[operation] = async (...args) => {
           const client = await getOrInitializeClient()
-          return callMcpTool(client, name, canonicalName, args, listTools)
+          return callMcpTool(client, name, operation, args, listTools)
         }
       }
 
@@ -245,7 +244,9 @@ function createMcpServerProvider(serverConfig) {
   async function getAvailableToolNames() {
     try {
       const entries = await refreshToolEntries()
-      return Object.keys(entries).sort((left, right) => left.localeCompare(right))
+      return Object.keys(entries)
+        .map((operation) => `${name}.${operation}`)
+        .sort((left, right) => left.localeCompare(right))
     } catch {
       return []
     }

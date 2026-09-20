@@ -429,6 +429,8 @@ import {
   DEFAULT_USER_OUTPUT_CHANNELS,
   _setVisualOutputWindow,
   _setNextVExecutionGroups,
+  _setNextVSelectedExecutionId,
+  _setNextVSelectedEventId,
   _setNextVEventsLiveMode,
   _setNextVEventsPausedBuffer,
   activeScriptAbortController,
@@ -436,6 +438,10 @@ import {
   nextVEventSource,
   nextVRuntimeRunning,
   nextVExecutionGroups,
+  nextVSelectedExecutionId,
+  nextVExpandedExecutionIds,
+  nextVSelectedEventId,
+  nextVExpandedEventIds,
   nextVEventsLiveMode,
   nextVEventsPausedBuffer,
   nextVEventsOutput,
@@ -925,96 +931,190 @@ export function renderExecutionGroups() {
     return
   }
 
-  for (const group of nextVExecutionGroups) {
-    const groupEl = document.createElement('div')
-    groupEl.className = 'exec-group'
-    groupEl.setAttribute('data-group-id', group.id)
+  const selectedGroup = nextVEventsLiveMode
+    ? nextVExecutionGroups[0]
+    : nextVExecutionGroups.find((group) => String(group.id) === String(nextVSelectedExecutionId))
+      ?? nextVExecutionGroups[0]
+  _setNextVSelectedExecutionId(selectedGroup.id)
 
-    // Calculate duration
+  if (!nextVExecutionGroups.some((group) => String(group.id) === String(nextVSelectedExecutionId))) {
+    _setNextVSelectedEventId(null)
+  }
+
+  const getEventId = (group, event, index) => String(event?.id ?? event?.callId ?? `${group.id}:${index}`)
+  const getEventKey = (group, event, index) => `${group.id}:${getEventId(group, event, index)}`
+  const selectedEventIndex = selectedGroup.events.findIndex((event, index) => (
+    getEventKey(selectedGroup, event, index) === String(nextVSelectedEventId)
+  ))
+  const focusedEvent = selectedEventIndex >= 0 ? selectedGroup.events[selectedEventIndex] : null
+
+  const layoutEl = document.createElement('div')
+  layoutEl.className = 'exec-layout'
+
+  const listEl = document.createElement('div')
+  listEl.className = 'exec-list'
+  listEl.setAttribute('role', 'listbox')
+  listEl.setAttribute('aria-label', 'executions')
+
+  for (const group of nextVExecutionGroups) {
     const duration = group.startTs && group.endTs
       ? ((new Date(group.endTs) - new Date(group.startTs)) / 1000).toFixed(3)
       : '0.000'
 
-    // Build summary line
     const summaryEl = document.createElement('div')
-    summaryEl.className = 'exec-group-summary'
-    summaryEl.innerHTML = `
-      <span class="exec-toggle">${group.expanded ? '▼' : '▶'}</span>
+    summaryEl.className = `exec-group-summary${String(group.id) === String(selectedGroup.id) ? ' selected' : ''}`
+    summaryEl.setAttribute('role', 'option')
+    summaryEl.setAttribute('aria-selected', String(group.id) === String(selectedGroup.id) ? 'true' : 'false')
+    summaryEl.tabIndex = 0
+    const toggleButton = document.createElement('button')
+    toggleButton.type = 'button'
+    toggleButton.className = 'exec-chevron'
+    toggleButton.textContent = nextVExpandedExecutionIds.has(String(group.id)) ? '▼' : '▶'
+    toggleButton.setAttribute('aria-label', `${nextVExpandedExecutionIds.has(String(group.id)) ? 'collapse' : 'expand'} query ${group.id}`)
+    toggleButton.setAttribute('aria-expanded', nextVExpandedExecutionIds.has(String(group.id)) ? 'true' : 'false')
+    toggleButton.addEventListener('click', (event) => {
+      event.stopPropagation()
+      const groupId = String(group.id)
+      if (nextVExpandedExecutionIds.has(groupId)) nextVExpandedExecutionIds.delete(groupId)
+      else nextVExpandedExecutionIds.add(groupId)
+      renderExecutionGroups()
+    })
+    summaryEl.appendChild(toggleButton)
+
+    const summaryContent = document.createElement('div')
+    summaryContent.className = 'exec-summary-content'
+    summaryContent.innerHTML = `
       <span class="exec-id">#${group.id}</span>
       <span class="exec-type">type=${group.ingressType}</span>
       <span class="exec-outcome exec-outcome-${group.outcome}">${group.outcome}</span>
       <span class="exec-duration">${duration}s</span>
       <span class="exec-count">${group.events.length} events</span>
     `
-    summaryEl.onclick = () => {
-      group.expanded = !group.expanded
+    summaryEl.appendChild(summaryContent)
+    const selectGroup = () => {
+      if (String(group.id) !== String(nextVExecutionGroups[0].id)) {
+        setNextVEventsLiveMode(false)
+      }
+      _setNextVSelectedExecutionId(group.id)
+      _setNextVSelectedEventId(null)
       renderExecutionGroups()
     }
-    groupEl.appendChild(summaryEl)
-
-    // Build body (collapsed by default)
-    if (group.expanded) {
-      const bodyEl = document.createElement('div')
-      bodyEl.className = 'exec-group-body'
-
-      for (const event of group.events) {
-        const eventEl = document.createElement('div')
-        eventEl.className = `exec-event exec-event-${event.type}`
-
-        const debugPayload = getExecutionEventDebugPayload(event)
-        const timestampEl = document.createElement('span')
-        timestampEl.className = 'exec-event-ts'
-        timestampEl.textContent = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '—'
-        eventEl.appendChild(timestampEl)
-
-        const typeEl = document.createElement('span')
-        typeEl.className = 'exec-event-type'
-        typeEl.textContent = String(event.type ?? '')
-        eventEl.appendChild(typeEl)
-
-        const contentEl = document.createElement('span')
-        contentEl.className = 'exec-event-content'
-        contentEl.appendChild(buildExecutionEventContentFragment(event))
-        eventEl.appendChild(contentEl)
-
-        if (debugPayload !== null) {
-          const toggleBtn = document.createElement('button')
-          toggleBtn.type = 'button'
-          toggleBtn.className = 'exec-event-debug-toggle'
-          toggleBtn.setAttribute('aria-label', 'show payload')
-          toggleBtn.title = 'show payload'
-          toggleBtn.textContent = '\u25B6'
-          eventEl.appendChild(toggleBtn)
-        }
-
-        if (debugPayload !== null) {
-          const toggleBtn = eventEl.querySelector('.exec-event-debug-toggle')
-          const debugEl = document.createElement('pre')
-          debugEl.className = 'exec-event-debug'
-          debugEl.hidden = true
-          debugEl.textContent = toPrettyJson(debugPayload)
-          eventEl.appendChild(debugEl)
-
-          if (toggleBtn) {
-            toggleBtn.addEventListener('click', (e) => {
-              e.stopPropagation()
-              const expanded = !debugEl.hidden
-              debugEl.hidden = expanded
-              toggleBtn.textContent = expanded ? '\u25B6' : '\u25BC'
-              toggleBtn.title = expanded ? 'show payload' : 'hide payload'
-              toggleBtn.setAttribute('aria-label', expanded ? 'show payload' : 'hide payload')
-            })
-          }
-        }
-
-        bodyEl.appendChild(eventEl)
+    summaryEl.addEventListener('click', selectGroup)
+    summaryEl.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        selectGroup()
       }
+    })
+    listEl.appendChild(summaryEl)
 
-      groupEl.appendChild(bodyEl)
+    if (nextVExpandedExecutionIds.has(String(group.id))) {
+      const eventListEl = document.createElement('div')
+      eventListEl.className = 'exec-left-event-list'
+      for (const [index, event] of group.events.entries()) {
+        const eventKey = getEventKey(group, event, index)
+        const eventRow = document.createElement('div')
+        eventRow.className = `exec-left-event${String(nextVSelectedEventId) === eventKey ? ' selected' : ''}`
+        eventRow.tabIndex = 0
+        eventRow.setAttribute('role', 'option')
+        eventRow.setAttribute('aria-selected', String(nextVSelectedEventId) === eventKey ? 'true' : 'false')
+        eventRow.innerHTML = `<span class="exec-event-type">${String(event.type ?? '')}</span><span class="exec-event-preview"></span>`
+        eventRow.querySelector('.exec-event-preview').appendChild(buildExecutionEventContentFragment(event))
+        const selectEvent = () => {
+          if (String(group.id) !== String(nextVExecutionGroups[0].id)) setNextVEventsLiveMode(false)
+          _setNextVSelectedExecutionId(group.id)
+          _setNextVSelectedEventId(eventKey)
+          nextVExpandedEventIds.add(eventKey)
+          renderExecutionGroups()
+        }
+        eventRow.addEventListener('click', selectEvent)
+        eventRow.addEventListener('keydown', (keyboardEvent) => {
+          if (keyboardEvent.key === 'Enter' || keyboardEvent.key === ' ') {
+            keyboardEvent.preventDefault()
+            selectEvent()
+          }
+        })
+        eventListEl.appendChild(eventRow)
+      }
+      listEl.appendChild(eventListEl)
     }
-
-    nextVEventsOutput.appendChild(groupEl)
   }
+
+  const detailEl = document.createElement('div')
+  detailEl.className = 'exec-detail'
+  detailEl.setAttribute('aria-live', 'polite')
+
+  const duration = selectedGroup.startTs && selectedGroup.endTs
+    ? ((new Date(selectedGroup.endTs) - new Date(selectedGroup.startTs)) / 1000).toFixed(3)
+    : '0.000'
+  const headerEl = document.createElement('div')
+  headerEl.className = 'exec-detail-header'
+  headerEl.innerHTML = `
+    <div class="exec-detail-title"><span class="exec-id">#${selectedGroup.id}</span> <span class="exec-type">type=${selectedGroup.ingressType}</span></div>
+    <div class="exec-detail-meta"><span class="exec-outcome exec-outcome-${selectedGroup.outcome}">${selectedGroup.outcome}</span><span>${duration}s</span><span>${selectedGroup.events.length} events</span></div>
+  `
+  detailEl.appendChild(headerEl)
+
+  const detailBodyEl = document.createElement('div')
+  detailBodyEl.className = 'exec-detail-body'
+  const detailEvents = focusedEvent ? [[selectedEventIndex, focusedEvent]] : selectedGroup.events.entries()
+  for (const [index, event] of detailEvents) {
+    const eventKey = getEventKey(selectedGroup, event, index)
+    const expanded = focusedEvent ? true : nextVExpandedEventIds.has(eventKey)
+    const eventEl = document.createElement('div')
+    eventEl.className = `exec-detail-event exec-event-${event.type}${expanded ? ' expanded' : ''}`
+
+    const eventHeader = document.createElement('div')
+    eventHeader.className = 'exec-detail-event-header'
+    const eventToggle = document.createElement('button')
+    eventToggle.type = 'button'
+    eventToggle.className = 'exec-chevron'
+    eventToggle.textContent = expanded ? '▼' : '▶'
+    eventToggle.setAttribute('aria-label', `${expanded ? 'collapse' : 'expand'} ${event.type ?? 'event'}`)
+    eventToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false')
+    eventToggle.addEventListener('click', (clickEvent) => {
+      clickEvent.stopPropagation()
+      if (nextVExpandedEventIds.has(eventKey)) nextVExpandedEventIds.delete(eventKey)
+      else nextVExpandedEventIds.add(eventKey)
+      renderExecutionGroups()
+    })
+    eventHeader.appendChild(eventToggle)
+    const timestampEl = document.createElement('span')
+    timestampEl.className = 'exec-event-ts'
+    timestampEl.textContent = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '—'
+    eventHeader.appendChild(timestampEl)
+    const typeEl = document.createElement('span')
+    typeEl.className = 'exec-event-type'
+    typeEl.textContent = String(event.type ?? '')
+    eventHeader.appendChild(typeEl)
+    const previewEl = document.createElement('span')
+    previewEl.className = 'exec-event-content'
+    previewEl.appendChild(buildExecutionEventContentFragment(event))
+    eventHeader.appendChild(previewEl)
+    eventEl.appendChild(eventHeader)
+
+    if (expanded) {
+      const eventBody = document.createElement('div')
+      eventBody.className = 'exec-detail-event-body'
+      const contentEl = document.createElement('div')
+      contentEl.className = 'exec-event-content'
+      contentEl.appendChild(buildExecutionEventContentFragment(event))
+      eventBody.appendChild(contentEl)
+      const debugPayload = getExecutionEventDebugPayload(event)
+      if (debugPayload !== null) {
+        const debugEl = document.createElement('pre')
+        debugEl.className = 'exec-event-debug'
+        debugEl.textContent = toPrettyJson(debugPayload)
+        eventBody.appendChild(debugEl)
+      }
+      eventEl.appendChild(eventBody)
+    }
+    detailBodyEl.appendChild(eventEl)
+  }
+  detailEl.appendChild(detailBodyEl)
+  layoutEl.appendChild(listEl)
+  layoutEl.appendChild(detailEl)
+  nextVEventsOutput.appendChild(layoutEl)
 }
 
 function parseExecutionToolArgs(value) {
@@ -3754,6 +3854,9 @@ import {
   normalizeNextVGraphDirection
 } from './03_ui_controls.js'
 import {
+  applyGraphLayoutPositions
+} from './graph_layout.js'
+import {
   getNextVGraphViewport,
   getNextVGraphCanvas,
   getNextVGraphRenderScale,
@@ -4138,6 +4241,7 @@ function startNextVGraphAgentTimer(runtimeEvent) {
   timerRecord.nextStartIndex = Math.min(slotIndex + 1, timerRecord.slots.length - 1)
   nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, timerRecord)
   nextVGraphState.runtimeLastDispatchedNode = currentNode
+  syncNextVGraphAgentTicker()
   applyNextVGraphRuntimeVisuals()
   return true
 }
@@ -4165,6 +4269,7 @@ function finishNextVGraphAgentTimer(runtimeEvent) {
   timerRecord.nextStartIndex = Math.min(slotIndex + 1, timerRecord.slots.length - 1)
   nextVGraphState.runtimeAgentCallTimersByNode.set(currentNode, timerRecord)
   nextVGraphState.runtimeLastDispatchedNode = currentNode
+  syncNextVGraphAgentTicker()
   applyNextVGraphRuntimeVisuals()
   return true
 }
@@ -4786,7 +4891,7 @@ export function getNextVGraphNodeVisual(nodeObj, effectLabel = '') {
     width,
     height,
     cornerRadius: 12,
-    edgeClip: Math.max(width, height) * 0.5,
+    edgeClip: nodeKind === 'effect' ? height * 0.5 : Math.max(width, height) * 0.5,
     externalTagOffsetY: Math.round(height * 0.62),
     badgeOffsetX: Math.round(width * 0.34),
     badgeOffsetY: Math.round(height * -0.34),
@@ -4805,6 +4910,9 @@ export function applyNextVGraphRuntimeVisuals() {
     const stepLabel = nextVGraphState.stepLabelElements.get(nodeName)
     const handlerLineElements = nextVGraphState.handlerLabelLineElements.get(nodeName)
     const agentTimerRecord = nextVGraphState.runtimeAgentCallTimersByNode.get(nodeName)
+    const isAgentCallActive = Array.isArray(agentTimerRecord?.slots)
+      ? agentTimerRecord.slots.some((slot) => slot?.active === true)
+      : false
 
     nodeElement.classList.toggle('is-active', isActive)
     nodeElement.classList.toggle('is-runtime-warning', hasWarning)
@@ -4812,6 +4920,7 @@ export function applyNextVGraphRuntimeVisuals() {
     nodeElement.classList.toggle('is-external-triggered', isTriggeredExternal)
     nodeElement.classList.toggle('declared-external', nextVGraphState.declaredExternalNodes.has(nodeName))
     nodeElement.classList.toggle('contract-warning', nextVGraphState.contractWarningNodes.has(nodeName))
+    nodeElement.classList.toggle('is-agent-call-active', isAgentCallActive)
 
     if (stepLabel) {
       if (Number.isFinite(stepValue) && stepValue > 0) {
@@ -5120,6 +5229,7 @@ export function buildNextVGraphLayout(graphNodes, options = {}) {
   const externalNodeIds = options.externalNodeIds instanceof Set ? options.externalNodeIds : new Set()
   const graphEdges = Array.isArray(options.graphEdges) ? options.graphEdges : []
   const effectNodeById = options.effectNodeById instanceof Map ? options.effectNodeById : new Map()
+  const manualPositions = options.manualPositions instanceof Map ? options.manualPositions : new Map()
   const layoutDirection = normalizeNextVGraphDirection(options.layoutDirection)
 
   // ── 1. Build file group membership ────────────────────────────────────────
@@ -5165,7 +5275,11 @@ export function buildNextVGraphLayout(graphNodes, options = {}) {
   for (const nodeObj of graphNodes) {
     const effectLabel = nodeObj.kind === 'effect' ? String(effectNodeById.get(nodeObj.id)?.label ?? '') : ''
     const visual = getNextVGraphNodeVisual(nodeObj, effectLabel)
-    g.setNode(nodeObj.id, { width: visual.width + 18, height: visual.height + 14 })
+    const isEffectNode = nodeObj.kind === 'effect'
+    g.setNode(nodeObj.id, {
+      width: visual.width + (isEffectNode ? 0 : 18),
+      height: visual.height + (isEffectNode ? 0 : 14),
+    })
   }
   for (const edge of graphEdges) {
     if (edge.from !== edge.to && g.hasNode(edge.from) && g.hasNode(edge.to)) {
@@ -5289,12 +5403,14 @@ export function buildNextVGraphLayout(graphNodes, options = {}) {
     }
   }
 
+  applyGraphLayoutPositions(positions, manualPositions)
+
   // ── 4. Extract edge bendpoints ─────────────────────────────────────────────
   const edgeBendpoints = new Map()
   for (const e of g.edges()) {
     const ed = g.edge(e)
     if (ed && Array.isArray(ed.points) && ed.points.length >= 2) {
-      if (movedNodeIds.has(String(e.v)) || movedNodeIds.has(String(e.w))) continue
+      if (movedNodeIds.has(String(e.v)) || movedNodeIds.has(String(e.w)) || manualPositions.has(String(e.v)) || manualPositions.has(String(e.w))) continue
       edgeBendpoints.set(`${e.v}\u0000${e.w}`, ed.points)
     }
   }
@@ -5388,6 +5504,7 @@ import {
   getNextVGraphPadding,
   clampNextVGraphZoom,
   getNextVGraphWheelZoomStep,
+  getNextVGraphRenderScale,
   applyNextVGraphZoom,
   positionNextVGraphPopover,
   centerNextVGraphViewport,
@@ -5431,6 +5548,13 @@ import {
   setStatus,
   appendScriptLogRow
 } from './13_layout.js'
+import {
+  getGraphLayoutScope,
+  loadGraphLayoutPositions,
+  saveGraphLayoutPosition,
+  clearGraphLayoutPositions,
+  getClippedGraphEdgeLine
+} from './graph_layout.js'
 
 function getThemeColorToken(name, fallback) {
   const rootStyle = getComputedStyle(document.body || document.documentElement)
@@ -5452,6 +5576,9 @@ export function renderNextVGraph(data = {}, options = {}) {
   const contractWarnings = Array.isArray(data.contractWarnings) ? data.contractWarnings : []
   const declaredExternals = Array.isArray(data.declaredExternals) ? data.declaredExternals : []
   const entrypointPath = String(data.entrypointPath ?? '')
+  const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
+  const layoutScope = getGraphLayoutScope(workspaceDir, entrypointPath, layoutDirection)
+  const manualPositions = loadGraphLayoutPositions(localStorage, layoutScope)
   const transitionByEvent = buildNextVGraphTransitionLookup(transitions)
   const handlerSourceByEvent = new Map(
     nodes
@@ -5566,7 +5693,114 @@ export function renderNextVGraph(data = {}, options = {}) {
 
   const nodeById = new Map(graphNodes.map((node) => [node.id, node]))
   const nodeClickHandlers = new Map()
+  let suppressNodeClick = false
   let selectedNodeId = ''
+
+  const previewDraggedNode = (nodeId, origin, position, nodeElement) => {
+    const dx = position.x - origin.x
+    const dy = position.y - origin.y
+    nodeElement.setAttribute('transform', `translate(${dx} ${dy})`)
+    nextVGraphState.layoutPositions.set(nodeId, position)
+
+    for (const edgeElement of svg.querySelectorAll('.nextv-graph-edge[data-from][data-to]')) {
+      const from = String(edgeElement?.dataset?.from ?? '')
+      const to = String(edgeElement?.dataset?.to ?? '')
+      if (from !== nodeId && to !== nodeId) continue
+      if (from === to) continue
+
+      const start = nextVGraphState.layoutPositions.get(from)
+      const end = nextVGraphState.layoutPositions.get(to)
+      if (!start || !end) continue
+
+      const line = getClippedGraphEdgeLine(
+        start,
+        end,
+        {
+          shape: edgeElement.dataset.fromShape,
+          width: Number(edgeElement.dataset.fromWidth),
+          height: Number(edgeElement.dataset.fromHeight),
+        },
+        {
+          shape: edgeElement.dataset.toShape,
+          width: Number(edgeElement.dataset.toWidth),
+          height: Number(edgeElement.dataset.toHeight),
+        },
+      )
+      if (!line) continue
+
+      if (edgeElement.tagName.toLowerCase() === 'line') {
+        edgeElement.setAttribute('x1', String(line.x1))
+        edgeElement.setAttribute('y1', String(line.y1))
+        edgeElement.setAttribute('x2', String(line.x2))
+        edgeElement.setAttribute('y2', String(line.y2))
+      } else {
+        edgeElement.setAttribute('d', `M ${line.x1} ${line.y1} L ${line.x2} ${line.y2}`)
+      }
+    }
+
+    positionNextVGraphPopover()
+  }
+
+  const bindNodeDragging = (nodeId, nodeElement, visual) => {
+    nodeElement.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || !event.isPrimary) return
+      const origin = nextVGraphState.layoutPositions.get(nodeId)
+      if (!origin) return
+
+      const startClientX = event.clientX
+      const startClientY = event.clientY
+      const pointerId = event.pointerId
+      let moved = false
+      let position = { x: origin.x, y: origin.y }
+
+      const finishDrag = (commit) => {
+        window.removeEventListener('pointermove', moveNode)
+        window.removeEventListener('pointerup', finishPointerDrag)
+        window.removeEventListener('pointercancel', cancelPointerDrag)
+        nodeElement.classList.remove('is-dragging')
+        if (!moved) return
+
+        suppressNodeClick = true
+        if (commit) {
+          saveGraphLayoutPosition(localStorage, layoutScope, nodeId, position)
+        }
+        const savedViewport = captureNextVGraphViewportState()
+        renderNextVGraph(data, { preserveViewport: true, viewportState: savedViewport })
+        window.setTimeout(() => {
+          suppressNodeClick = false
+        }, 0)
+      }
+
+      const moveNode = (moveEvent) => {
+        if (moveEvent.pointerId !== pointerId) return
+        const renderScale = getNextVGraphRenderScale(nextVGraphState.zoom) || 1
+        const dx = (moveEvent.clientX - startClientX) / renderScale
+        const dy = (moveEvent.clientY - startClientY) / renderScale
+        if (!moved && Math.hypot(dx, dy) < 3) return
+        moved = true
+        position = {
+          x: Math.max((visual.width / 2) + 10, Math.round(origin.x + dx)),
+          y: Math.max((visual.height / 2) + 10, Math.round(origin.y + dy)),
+        }
+        previewDraggedNode(nodeId, origin, position, nodeElement)
+        moveEvent.preventDefault()
+      }
+
+      const finishPointerDrag = (upEvent) => {
+        if (upEvent.pointerId === pointerId) finishDrag(true)
+      }
+      const cancelPointerDrag = (cancelEvent) => {
+        if (cancelEvent.pointerId === pointerId) finishDrag(false)
+      }
+
+      nodeElement.classList.add('is-dragging')
+      window.addEventListener('pointermove', moveNode)
+      window.addEventListener('pointerup', finishPointerDrag)
+      window.addEventListener('pointercancel', cancelPointerDrag)
+      event.stopPropagation()
+      event.preventDefault()
+    })
+  }
 
   const buildSelectedNodeCard = (nodeId) => {
     const normalizedNodeId = String(nodeId ?? '').trim()
@@ -5803,6 +6037,20 @@ export function renderNextVGraph(data = {}, options = {}) {
   resetBtn.title = 'reset zoom'
   resetBtn.addEventListener('click', () => resetNextVGraphZoom())
 
+  const resetLayoutBtn = document.createElement('button')
+  resetLayoutBtn.type = 'button'
+  resetLayoutBtn.className = 'nextv-graph-layout-btn'
+  resetLayoutBtn.textContent = 'auto layout'
+  resetLayoutBtn.title = 'discard manual node positions'
+  resetLayoutBtn.disabled = manualPositions.size === 0
+  resetLayoutBtn.addEventListener('click', () => {
+    clearGraphLayoutPositions(localStorage, layoutScope)
+    renderNextVGraph(data, {
+      preserveViewport: true,
+      viewportState: captureNextVGraphViewportState(),
+    })
+  })
+
   const layoutTbBtn = document.createElement('button')
   layoutTbBtn.type = 'button'
   layoutTbBtn.className = 'nextv-graph-layout-btn'
@@ -5826,7 +6074,8 @@ export function renderNextVGraph(data = {}, options = {}) {
 
   const hint = document.createElement('span')
   hint.className = 'nextv-graph-hint'
-  hint.textContent = 'drag to pan • wheel to zoom'
+  hint.textContent = 'drag nodes'
+  hint.title = 'drag nodes to arrange; drag the background to pan; use the wheel to zoom'
 
   const autoFollowLabel = document.createElement('label')
   autoFollowLabel.className = 'nextv-graph-toolbar-check'
@@ -5868,6 +6117,7 @@ export function renderNextVGraph(data = {}, options = {}) {
   toolbar.appendChild(zoomOutBtn)
   toolbar.appendChild(zoomInBtn)
   toolbar.appendChild(resetBtn)
+  toolbar.appendChild(resetLayoutBtn)
   toolbar.appendChild(zoomLabel)
   toolbar.appendChild(hint)
   toolbar.appendChild(controlBranchesBtn)
@@ -5933,6 +6183,7 @@ export function renderNextVGraph(data = {}, options = {}) {
 
   viewport.addEventListener('mousedown', (event) => {
     if (event.button !== 0) return
+    if (event.target.closest?.('.nextv-graph-node')) return
     isPanning = true
     panStartX = event.clientX
     panStartY = event.clientY
@@ -5964,6 +6215,7 @@ export function renderNextVGraph(data = {}, options = {}) {
     externalNodeIds: externalCandidates,
     graphEdges,
     effectNodeById,
+    manualPositions,
     layoutDirection: nextVGraphState.layoutDirection,
   })
   if (fileCount > 0) {
@@ -6038,9 +6290,7 @@ export function renderNextVGraph(data = {}, options = {}) {
 
   const filesLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g')
   filesLayer.setAttribute('class', 'nextv-graph-files')
-  const containerByKey = new Map()
   for (const box of containers) {
-    containerByKey.set(box.key, box)
     const group = document.createElementNS('http://www.w3.org/2000/svg', 'g')
     group.setAttribute('class', 'nextv-graph-file-box')
 
@@ -6071,50 +6321,6 @@ export function renderNextVGraph(data = {}, options = {}) {
     filesLayer.appendChild(group)
   }
   svg.appendChild(filesLayer)
-
-  const membershipLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g')
-  membershipLayer.setAttribute('class', 'nextv-graph-membership-layer')
-  for (const nodeObj of graphNodes) {
-    const pos = positions.get(nodeObj.id)
-    if (!pos) continue
-
-    const groupKey = nodeGroupById.get(nodeObj.id)
-    if (!groupKey) continue
-
-    const container = containerByKey.get(groupKey)
-    if (!container) continue
-
-    const effectLabel = nodeObj.kind === 'effect' ? String(effectNodeById.get(nodeObj.id)?.label ?? '') : ''
-    const visual = getNextVGraphNodeVisual(nodeObj, effectLabel)
-    const isLeftToRight = layoutDirection === 'LR'
-
-    const anchorX = Math.max(container.x + 12, Math.min(container.x + container.width - 12, pos.x))
-    const anchorY = Math.max(container.y + 12, Math.min(container.y + container.height - 12, pos.y))
-
-    if (nodeObj?.kind === 'event' && externalCandidates.has(nodeObj.id)) {
-      const link = document.createElementNS('http://www.w3.org/2000/svg', 'line')
-      link.setAttribute('class', 'nextv-graph-membership-edge')
-      if (isLeftToRight) {
-        const startX = pos.x + (visual.width / 2)
-        link.setAttribute('x1', String(startX))
-        link.setAttribute('y1', String(pos.y))
-        link.setAttribute('x2', String(container.x))
-        link.setAttribute('y2', String(anchorY))
-      } else {
-        const startY = pos.y + (visual.height / 2)
-        link.setAttribute('x1', String(pos.x))
-        link.setAttribute('y1', String(startY))
-        link.setAttribute('x2', String(anchorX))
-        link.setAttribute('y2', String(container.y))
-      }
-      membershipLayer.appendChild(link)
-      continue
-    }
-
-    // Effect nodes already have explicit effect edges; skip auxiliary membership
-    // connectors here to avoid visual "double arrows".
-  }
-  svg.appendChild(membershipLayer)
 
   const cycleNodes = new Set()
   const cycleEdges = new Set()
@@ -6169,10 +6375,21 @@ export function renderNextVGraph(data = {}, options = {}) {
     // Determine node radii for endpoint clipping.
     const toNode = graphNodes.find((n) => n.id === to)
     const toEffectLabel = toNode?.kind === 'effect' ? String(effectNodeById.get(to)?.label ?? '') : ''
-    const toRadius = toNode ? getNextVGraphNodeVisual(toNode, toEffectLabel).edgeClip : 24
+    const toVisual = toNode ? getNextVGraphNodeVisual(toNode, toEffectLabel) : { shape: 'circle', width: 48, height: 48, edgeClip: 24 }
+    const toRadius = toVisual.edgeClip
     const fromNodeObj = graphNodes.find((n) => n.id === from)
     const fromEffectLabel = fromNodeObj?.kind === 'effect' ? String(effectNodeById.get(from)?.label ?? '') : ''
-    const fromRadius = fromNodeObj ? getNextVGraphNodeVisual(fromNodeObj, fromEffectLabel).edgeClip : 24
+    const fromVisual = fromNodeObj ? getNextVGraphNodeVisual(fromNodeObj, fromEffectLabel) : { shape: 'circle', width: 48, height: 48, edgeClip: 24 }
+    const fromRadius = fromVisual.edgeClip
+
+    const tagEdgeGeometry = (edgeElement) => {
+      edgeElement.dataset.fromShape = String(fromVisual.shape)
+      edgeElement.dataset.fromWidth = String(fromVisual.width)
+      edgeElement.dataset.fromHeight = String(fromVisual.height)
+      edgeElement.dataset.toShape = String(toVisual.shape)
+      edgeElement.dataset.toWidth = String(toVisual.width)
+      edgeElement.dataset.toHeight = String(toVisual.height)
+    }
 
     const getSubscriptionEdgeLabelText = () => {
       if (edgeType === 'collapsed-emit') return String(edge.eventLabel ?? '').trim()
@@ -6209,6 +6426,7 @@ export function renderNextVGraph(data = {}, options = {}) {
       path.dataset.edgeKey = edgeKey
       path.dataset.from = from
       path.dataset.to = to
+      tagEdgeGeometry(path)
       path.setAttribute('d', `M ${start.x} ${start.y - 22} C ${start.x + 42} ${start.y - 60}, ${start.x - 42} ${start.y - 60}, ${start.x} ${start.y - 22}`)
       path.setAttribute('marker-end', isCycleEdge ? 'url(#nextv-graph-arrow-cycle)' : 'url(#nextv-graph-arrow)')
       const title = document.createElementNS('http://www.w3.org/2000/svg', 'title')
@@ -6245,6 +6463,7 @@ export function renderNextVGraph(data = {}, options = {}) {
         pathEl.dataset.edgeKey = edgeKey
         pathEl.dataset.from = from
         pathEl.dataset.to = to
+        tagEdgeGeometry(pathEl)
         // Smooth elbow: cubic bezier from start through waypoint to end.
         pathEl.setAttribute('d',
           `M ${Math.round(sx)} ${Math.round(sy)} ` +
@@ -6273,6 +6492,7 @@ export function renderNextVGraph(data = {}, options = {}) {
       pathEl.dataset.edgeKey = edgeKey
       pathEl.dataset.from = from
       pathEl.dataset.to = to
+      tagEdgeGeometry(pathEl)
       pathEl.setAttribute('d', buildSmoothPath(bendpoints))
       pathEl.setAttribute('marker-end', isCycleEdge ? 'url(#nextv-graph-arrow-cycle)' : 'url(#nextv-graph-arrow)')
       const title = document.createElementNS('http://www.w3.org/2000/svg', 'title')
@@ -6295,19 +6515,16 @@ export function renderNextVGraph(data = {}, options = {}) {
     }
 
     // Straight-line fallback (no dagre bendpoints for this edge).
-    const dx = end.x - start.x
-    const dy = end.y - start.y
-    const distance = Math.hypot(dx, dy) || 1
-    const x1 = start.x + ((dx / distance) * fromRadius)
-    const y1 = start.y + ((dy / distance) * fromRadius)
-    const x2 = end.x - ((dx / distance) * toRadius)
-    const y2 = end.y - ((dy / distance) * toRadius)
+    const clippedLine = getClippedGraphEdgeLine(start, end, fromVisual, toVisual)
+    if (!clippedLine) continue
+    const { x1, y1, x2, y2 } = clippedLine
 
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
     line.setAttribute('class', edgeClass)
     line.dataset.edgeKey = edgeKey
     line.dataset.from = from
     line.dataset.to = to
+    tagEdgeGeometry(line)
     line.setAttribute('x1', String(x1))
     line.setAttribute('y1', String(y1))
     line.setAttribute('x2', String(x2))
@@ -6535,8 +6752,10 @@ export function renderNextVGraph(data = {}, options = {}) {
     nextVGraphState.nodeElements.set(nodeId, group)
     nodeClickHandlers.set(nodeId, () => setSelectedGraphNode(nodeId))
     group.classList.add('clickable')
+    bindNodeDragging(nodeId, group, visual)
     group.addEventListener('click', (event) => {
       event.stopPropagation()
+      if (suppressNodeClick) return
       const onClick = nodeClickHandlers.get(nodeId)
       if (typeof onClick === 'function') onClick()
     })
@@ -6822,6 +7041,9 @@ import {
   nextVWorkspaceDirInput,
   workspace
 } from './state.js'
+import {
+  normalizeWorkspacePath
+} from './workspace_path.js'
 
 export function normalizeRelativePath(pathValue) {
   return String(pathValue ?? '')
@@ -6834,7 +7056,7 @@ export function normalizeRelativePath(pathValue) {
 }
 
 export function normalizeNextVWorkspaceDir(pathValue) {
-  const normalized = normalizeRelativePath(pathValue)
+  const normalized = normalizeWorkspacePath(pathValue)
   if (!normalized || normalized === '.') return ''
   return normalized
 }
@@ -6921,6 +7143,7 @@ export function normalizeGraphSourcePathForEditor(pathValue) {
 
   return normalized
 }
+
 
 // --- Imports (auto-generated by gen-es-modules.js) ---
 import {
@@ -15521,7 +15744,7 @@ export function setupNextVEventsScrollListener() {
   if (!nextVEventsOutput) return
 
   let scrollTimeout = null
-  nextVEventsOutput.addEventListener('scroll', () => {
+  nextVEventsOutput.addEventListener('scroll', (event) => {
     if (scrollTimeout) clearTimeout(scrollTimeout)
 
     scrollTimeout = setTimeout(() => {
@@ -15529,11 +15752,13 @@ export function setupNextVEventsScrollListener() {
       import('./state.js').then(({ nextVEventsLiveMode }) => {
         if (nextVEventsLiveMode === false) return
 
-        const firstGroup = nextVEventsOutput.querySelector('.exec-group')
-        if (!firstGroup) return
+        const executionList = event.target.closest?.('.exec-list')
+        if (!executionList) return
 
-        const firstGroupBottom = firstGroup.offsetHeight
-        if (nextVEventsOutput.scrollTop > firstGroupBottom) {
+        const firstExecution = executionList.firstElementChild
+        if (!firstExecution) return
+
+        if (executionList.scrollTop > firstExecution.offsetHeight) {
           setNextVEventsLiveMode(false)
         }
       })

@@ -6,6 +6,8 @@ import {
   DEFAULT_USER_OUTPUT_CHANNELS,
   _setVisualOutputWindow,
   _setNextVExecutionGroups,
+  _setNextVSelectedExecutionId,
+  _setNextVSelectedEventId,
   _setNextVEventsLiveMode,
   _setNextVEventsPausedBuffer,
   activeScriptAbortController,
@@ -13,6 +15,10 @@ import {
   nextVEventSource,
   nextVRuntimeRunning,
   nextVExecutionGroups,
+  nextVSelectedExecutionId,
+  nextVExpandedExecutionIds,
+  nextVSelectedEventId,
+  nextVExpandedEventIds,
   nextVEventsLiveMode,
   nextVEventsPausedBuffer,
   nextVEventsOutput,
@@ -502,96 +508,190 @@ export function renderExecutionGroups() {
     return
   }
 
-  for (const group of nextVExecutionGroups) {
-    const groupEl = document.createElement('div')
-    groupEl.className = 'exec-group'
-    groupEl.setAttribute('data-group-id', group.id)
+  const selectedGroup = nextVEventsLiveMode
+    ? nextVExecutionGroups[0]
+    : nextVExecutionGroups.find((group) => String(group.id) === String(nextVSelectedExecutionId))
+      ?? nextVExecutionGroups[0]
+  _setNextVSelectedExecutionId(selectedGroup.id)
 
-    // Calculate duration
+  if (!nextVExecutionGroups.some((group) => String(group.id) === String(nextVSelectedExecutionId))) {
+    _setNextVSelectedEventId(null)
+  }
+
+  const getEventId = (group, event, index) => String(event?.id ?? event?.callId ?? `${group.id}:${index}`)
+  const getEventKey = (group, event, index) => `${group.id}:${getEventId(group, event, index)}`
+  const selectedEventIndex = selectedGroup.events.findIndex((event, index) => (
+    getEventKey(selectedGroup, event, index) === String(nextVSelectedEventId)
+  ))
+  const focusedEvent = selectedEventIndex >= 0 ? selectedGroup.events[selectedEventIndex] : null
+
+  const layoutEl = document.createElement('div')
+  layoutEl.className = 'exec-layout'
+
+  const listEl = document.createElement('div')
+  listEl.className = 'exec-list'
+  listEl.setAttribute('role', 'listbox')
+  listEl.setAttribute('aria-label', 'executions')
+
+  for (const group of nextVExecutionGroups) {
     const duration = group.startTs && group.endTs
       ? ((new Date(group.endTs) - new Date(group.startTs)) / 1000).toFixed(3)
       : '0.000'
 
-    // Build summary line
     const summaryEl = document.createElement('div')
-    summaryEl.className = 'exec-group-summary'
-    summaryEl.innerHTML = `
-      <span class="exec-toggle">${group.expanded ? '▼' : '▶'}</span>
+    summaryEl.className = `exec-group-summary${String(group.id) === String(selectedGroup.id) ? ' selected' : ''}`
+    summaryEl.setAttribute('role', 'option')
+    summaryEl.setAttribute('aria-selected', String(group.id) === String(selectedGroup.id) ? 'true' : 'false')
+    summaryEl.tabIndex = 0
+    const toggleButton = document.createElement('button')
+    toggleButton.type = 'button'
+    toggleButton.className = 'exec-chevron'
+    toggleButton.textContent = nextVExpandedExecutionIds.has(String(group.id)) ? '▼' : '▶'
+    toggleButton.setAttribute('aria-label', `${nextVExpandedExecutionIds.has(String(group.id)) ? 'collapse' : 'expand'} query ${group.id}`)
+    toggleButton.setAttribute('aria-expanded', nextVExpandedExecutionIds.has(String(group.id)) ? 'true' : 'false')
+    toggleButton.addEventListener('click', (event) => {
+      event.stopPropagation()
+      const groupId = String(group.id)
+      if (nextVExpandedExecutionIds.has(groupId)) nextVExpandedExecutionIds.delete(groupId)
+      else nextVExpandedExecutionIds.add(groupId)
+      renderExecutionGroups()
+    })
+    summaryEl.appendChild(toggleButton)
+
+    const summaryContent = document.createElement('div')
+    summaryContent.className = 'exec-summary-content'
+    summaryContent.innerHTML = `
       <span class="exec-id">#${group.id}</span>
       <span class="exec-type">type=${group.ingressType}</span>
       <span class="exec-outcome exec-outcome-${group.outcome}">${group.outcome}</span>
       <span class="exec-duration">${duration}s</span>
       <span class="exec-count">${group.events.length} events</span>
     `
-    summaryEl.onclick = () => {
-      group.expanded = !group.expanded
+    summaryEl.appendChild(summaryContent)
+    const selectGroup = () => {
+      if (String(group.id) !== String(nextVExecutionGroups[0].id)) {
+        setNextVEventsLiveMode(false)
+      }
+      _setNextVSelectedExecutionId(group.id)
+      _setNextVSelectedEventId(null)
       renderExecutionGroups()
     }
-    groupEl.appendChild(summaryEl)
-
-    // Build body (collapsed by default)
-    if (group.expanded) {
-      const bodyEl = document.createElement('div')
-      bodyEl.className = 'exec-group-body'
-
-      for (const event of group.events) {
-        const eventEl = document.createElement('div')
-        eventEl.className = `exec-event exec-event-${event.type}`
-
-        const debugPayload = getExecutionEventDebugPayload(event)
-        const timestampEl = document.createElement('span')
-        timestampEl.className = 'exec-event-ts'
-        timestampEl.textContent = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '—'
-        eventEl.appendChild(timestampEl)
-
-        const typeEl = document.createElement('span')
-        typeEl.className = 'exec-event-type'
-        typeEl.textContent = String(event.type ?? '')
-        eventEl.appendChild(typeEl)
-
-        const contentEl = document.createElement('span')
-        contentEl.className = 'exec-event-content'
-        contentEl.appendChild(buildExecutionEventContentFragment(event))
-        eventEl.appendChild(contentEl)
-
-        if (debugPayload !== null) {
-          const toggleBtn = document.createElement('button')
-          toggleBtn.type = 'button'
-          toggleBtn.className = 'exec-event-debug-toggle'
-          toggleBtn.setAttribute('aria-label', 'show payload')
-          toggleBtn.title = 'show payload'
-          toggleBtn.textContent = '\u25B6'
-          eventEl.appendChild(toggleBtn)
-        }
-
-        if (debugPayload !== null) {
-          const toggleBtn = eventEl.querySelector('.exec-event-debug-toggle')
-          const debugEl = document.createElement('pre')
-          debugEl.className = 'exec-event-debug'
-          debugEl.hidden = true
-          debugEl.textContent = toPrettyJson(debugPayload)
-          eventEl.appendChild(debugEl)
-
-          if (toggleBtn) {
-            toggleBtn.addEventListener('click', (e) => {
-              e.stopPropagation()
-              const expanded = !debugEl.hidden
-              debugEl.hidden = expanded
-              toggleBtn.textContent = expanded ? '\u25B6' : '\u25BC'
-              toggleBtn.title = expanded ? 'show payload' : 'hide payload'
-              toggleBtn.setAttribute('aria-label', expanded ? 'show payload' : 'hide payload')
-            })
-          }
-        }
-
-        bodyEl.appendChild(eventEl)
+    summaryEl.addEventListener('click', selectGroup)
+    summaryEl.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        selectGroup()
       }
+    })
+    listEl.appendChild(summaryEl)
 
-      groupEl.appendChild(bodyEl)
+    if (nextVExpandedExecutionIds.has(String(group.id))) {
+      const eventListEl = document.createElement('div')
+      eventListEl.className = 'exec-left-event-list'
+      for (const [index, event] of group.events.entries()) {
+        const eventKey = getEventKey(group, event, index)
+        const eventRow = document.createElement('div')
+        eventRow.className = `exec-left-event${String(nextVSelectedEventId) === eventKey ? ' selected' : ''}`
+        eventRow.tabIndex = 0
+        eventRow.setAttribute('role', 'option')
+        eventRow.setAttribute('aria-selected', String(nextVSelectedEventId) === eventKey ? 'true' : 'false')
+        eventRow.innerHTML = `<span class="exec-event-type">${String(event.type ?? '')}</span><span class="exec-event-preview"></span>`
+        eventRow.querySelector('.exec-event-preview').appendChild(buildExecutionEventContentFragment(event))
+        const selectEvent = () => {
+          if (String(group.id) !== String(nextVExecutionGroups[0].id)) setNextVEventsLiveMode(false)
+          _setNextVSelectedExecutionId(group.id)
+          _setNextVSelectedEventId(eventKey)
+          nextVExpandedEventIds.add(eventKey)
+          renderExecutionGroups()
+        }
+        eventRow.addEventListener('click', selectEvent)
+        eventRow.addEventListener('keydown', (keyboardEvent) => {
+          if (keyboardEvent.key === 'Enter' || keyboardEvent.key === ' ') {
+            keyboardEvent.preventDefault()
+            selectEvent()
+          }
+        })
+        eventListEl.appendChild(eventRow)
+      }
+      listEl.appendChild(eventListEl)
     }
-
-    nextVEventsOutput.appendChild(groupEl)
   }
+
+  const detailEl = document.createElement('div')
+  detailEl.className = 'exec-detail'
+  detailEl.setAttribute('aria-live', 'polite')
+
+  const duration = selectedGroup.startTs && selectedGroup.endTs
+    ? ((new Date(selectedGroup.endTs) - new Date(selectedGroup.startTs)) / 1000).toFixed(3)
+    : '0.000'
+  const headerEl = document.createElement('div')
+  headerEl.className = 'exec-detail-header'
+  headerEl.innerHTML = `
+    <div class="exec-detail-title"><span class="exec-id">#${selectedGroup.id}</span> <span class="exec-type">type=${selectedGroup.ingressType}</span></div>
+    <div class="exec-detail-meta"><span class="exec-outcome exec-outcome-${selectedGroup.outcome}">${selectedGroup.outcome}</span><span>${duration}s</span><span>${selectedGroup.events.length} events</span></div>
+  `
+  detailEl.appendChild(headerEl)
+
+  const detailBodyEl = document.createElement('div')
+  detailBodyEl.className = 'exec-detail-body'
+  const detailEvents = focusedEvent ? [[selectedEventIndex, focusedEvent]] : selectedGroup.events.entries()
+  for (const [index, event] of detailEvents) {
+    const eventKey = getEventKey(selectedGroup, event, index)
+    const expanded = focusedEvent ? true : nextVExpandedEventIds.has(eventKey)
+    const eventEl = document.createElement('div')
+    eventEl.className = `exec-detail-event exec-event-${event.type}${expanded ? ' expanded' : ''}`
+
+    const eventHeader = document.createElement('div')
+    eventHeader.className = 'exec-detail-event-header'
+    const eventToggle = document.createElement('button')
+    eventToggle.type = 'button'
+    eventToggle.className = 'exec-chevron'
+    eventToggle.textContent = expanded ? '▼' : '▶'
+    eventToggle.setAttribute('aria-label', `${expanded ? 'collapse' : 'expand'} ${event.type ?? 'event'}`)
+    eventToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false')
+    eventToggle.addEventListener('click', (clickEvent) => {
+      clickEvent.stopPropagation()
+      if (nextVExpandedEventIds.has(eventKey)) nextVExpandedEventIds.delete(eventKey)
+      else nextVExpandedEventIds.add(eventKey)
+      renderExecutionGroups()
+    })
+    eventHeader.appendChild(eventToggle)
+    const timestampEl = document.createElement('span')
+    timestampEl.className = 'exec-event-ts'
+    timestampEl.textContent = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '—'
+    eventHeader.appendChild(timestampEl)
+    const typeEl = document.createElement('span')
+    typeEl.className = 'exec-event-type'
+    typeEl.textContent = String(event.type ?? '')
+    eventHeader.appendChild(typeEl)
+    const previewEl = document.createElement('span')
+    previewEl.className = 'exec-event-content'
+    previewEl.appendChild(buildExecutionEventContentFragment(event))
+    eventHeader.appendChild(previewEl)
+    eventEl.appendChild(eventHeader)
+
+    if (expanded) {
+      const eventBody = document.createElement('div')
+      eventBody.className = 'exec-detail-event-body'
+      const contentEl = document.createElement('div')
+      contentEl.className = 'exec-event-content'
+      contentEl.appendChild(buildExecutionEventContentFragment(event))
+      eventBody.appendChild(contentEl)
+      const debugPayload = getExecutionEventDebugPayload(event)
+      if (debugPayload !== null) {
+        const debugEl = document.createElement('pre')
+        debugEl.className = 'exec-event-debug'
+        debugEl.textContent = toPrettyJson(debugPayload)
+        eventBody.appendChild(debugEl)
+      }
+      eventEl.appendChild(eventBody)
+    }
+    detailBodyEl.appendChild(eventEl)
+  }
+  detailEl.appendChild(detailBodyEl)
+  layoutEl.appendChild(listEl)
+  layoutEl.appendChild(detailEl)
+  nextVEventsOutput.appendChild(layoutEl)
 }
 
 function parseExecutionToolArgs(value) {

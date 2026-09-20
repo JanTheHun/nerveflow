@@ -4726,6 +4726,231 @@ header label { color: var(--dim); display: flex; align-items: center; gap: 4px; 
   background: color-mix(in srgb, var(--accent) 16%, var(--panel-soft-bg));
 }
 
+.exec-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.38fr) minmax(0, 0.62fr);
+  min-height: 0;
+  height: 100%;
+  gap: 1px;
+  background: var(--border);
+}
+
+.exec-list,
+.exec-detail {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--panel-deep-bg);
+}
+
+.exec-list {
+  padding: 6px;
+}
+
+.exec-list .exec-group-summary {
+  margin-bottom: 4px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 8px 9px;
+}
+
+.exec-chevron {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.exec-chevron:hover,
+.exec-chevron:focus-visible {
+  color: var(--accent);
+}
+
+.exec-summary-content {
+  display: flex;
+  align-items: center;
+  flex: 1 1 calc(100% - 18px);
+  min-width: 0;
+  gap: 6px 10px;
+  flex-wrap: wrap;
+}
+
+.exec-list .exec-group-summary.selected {
+  border-color: color-mix(in srgb, var(--accent) 65%, var(--border));
+  background: color-mix(in srgb, var(--accent) 22%, var(--panel-soft-bg));
+}
+
+.exec-list .exec-group-summary:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.exec-list .exec-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exec-list .exec-count {
+  margin-left: 0;
+}
+
+.exec-left-event-list {
+  margin: -4px 0 6px 20px;
+  padding: 2px 0 2px 8px;
+  border-left: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+}
+
+.exec-left-event {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  padding: 5px 7px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--dim);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.exec-left-event:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text);
+}
+
+.exec-left-event.selected {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text);
+}
+
+.exec-left-event:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.exec-left-event .exec-event-type {
+  flex: 0 0 76px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exec-event-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exec-event-preview .exec-event-token {
+  pointer-events: none;
+}
+
+.exec-detail {
+  display: flex;
+  flex-direction: column;
+}
+
+.exec-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-soft-bg);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.exec-detail-title,
+.exec-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.exec-detail-title .exec-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exec-detail-meta {
+  color: var(--dim);
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.exec-detail-body {
+  min-height: 0;
+}
+
+.exec-detail-event {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.exec-detail-event-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+
+.exec-detail-event-header:hover {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.exec-detail-event-header .exec-event-content {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exec-detail-event-body {
+  margin: 0 12px 8px 40px;
+  padding: 8px 10px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--panel-elevated-bg) 80%, transparent);
+}
+
+.exec-detail-event-body .exec-event-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.exec-detail-event-body .exec-event-debug {
+  margin: 8px 0 0;
+  max-width: 100%;
+}
+
+@media (max-width: 720px) {
+  .exec-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(120px, 0.42fr) minmax(220px, 0.58fr);
+  }
+
+  .exec-detail-header {
+    position: static;
+  }
+}
+
 .exec-toggle {
   color: var(--dim);
   min-width: 16px;

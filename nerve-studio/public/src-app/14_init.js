@@ -266,7 +266,7 @@ export function setupNextVEventsScrollListener() {
   if (!nextVEventsOutput) return
 
   let scrollTimeout = null
-  nextVEventsOutput.addEventListener('scroll', () => {
+  nextVEventsOutput.addEventListener('scroll', (event) => {
     if (scrollTimeout) clearTimeout(scrollTimeout)
 
     scrollTimeout = setTimeout(() => {
@@ -274,11 +274,13 @@ export function setupNextVEventsScrollListener() {
       import('./state.js').then(({ nextVEventsLiveMode }) => {
         if (nextVEventsLiveMode === false) return
 
-        const firstGroup = nextVEventsOutput.querySelector('.exec-group')
-        if (!firstGroup) return
+        const executionList = event.target.closest?.('.exec-list')
+        if (!executionList) return
 
-        const firstGroupBottom = firstGroup.offsetHeight
-        if (nextVEventsOutput.scrollTop > firstGroupBottom) {
+        const firstExecution = executionList.firstElementChild
+        if (!firstExecution) return
+
+        if (executionList.scrollTop > firstExecution.offsetHeight) {
           setNextVEventsLiveMode(false)
         }
       })

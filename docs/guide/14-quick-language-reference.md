@@ -107,6 +107,15 @@ end
 ```
 
 ```nrv
+for item in items
+  output json item
+end
+```
+
+Range loops require integer bounds. Collection loops require an array, evaluate
+the collection once, and visit items in stable array order.
+
+```nrv
 stop
 return value
 ```
@@ -154,12 +163,15 @@ length(x)
 take(list, n)
 find_by(list, key, value)
 remove_by(list, key, value)
-dedupe_by(list, key)
+dedupe_by(list, key_or_keys)
 sort(list, key, desc=false)
 cut(list, key, op, value)
 pick(collection, key_or_index)
 exact_length(n, schema)
 ```
+
+`dedupe_by(items, ["path", "section"])` supports stable deduplication by a
+composite set of flat object keys.
 
 JSON, files, and input:
 

@@ -7,7 +7,9 @@ import {
   normalizeNextVGraphDirection
 } from './03_ui_controls.js'
 import {
-  applyGraphLayoutPositions
+  applyGraphLayoutPositions,
+  applyGraphFileOffsets,
+  getGraphWorkspaceBounds
 } from './graph_layout.js'
 import {
   getNextVGraphViewport,
@@ -1383,6 +1385,7 @@ export function buildNextVGraphLayout(graphNodes, options = {}) {
   const graphEdges = Array.isArray(options.graphEdges) ? options.graphEdges : []
   const effectNodeById = options.effectNodeById instanceof Map ? options.effectNodeById : new Map()
   const manualPositions = options.manualPositions instanceof Map ? options.manualPositions : new Map()
+  const fileOffsets = options.fileOffsets instanceof Map ? options.fileOffsets : new Map()
   const layoutDirection = normalizeNextVGraphDirection(options.layoutDirection)
 
   // ── 1. Build file group membership ────────────────────────────────────────
@@ -1557,13 +1560,16 @@ export function buildNextVGraphLayout(graphNodes, options = {}) {
   }
 
   applyGraphLayoutPositions(positions, manualPositions)
+  applyGraphFileOffsets(positions, nodeGroupById, fileOffsets)
 
   // ── 4. Extract edge bendpoints ─────────────────────────────────────────────
   const edgeBendpoints = new Map()
   for (const e of g.edges()) {
     const ed = g.edge(e)
     if (ed && Array.isArray(ed.points) && ed.points.length >= 2) {
-      if (movedNodeIds.has(String(e.v)) || movedNodeIds.has(String(e.w)) || manualPositions.has(String(e.v)) || manualPositions.has(String(e.w))) continue
+      const fromHasFileOffset = fileOffsets.has(nodeGroupById.get(String(e.v)))
+      const toHasFileOffset = fileOffsets.has(nodeGroupById.get(String(e.w)))
+      if (movedNodeIds.has(String(e.v)) || movedNodeIds.has(String(e.w)) || manualPositions.has(String(e.v)) || manualPositions.has(String(e.w)) || fromHasFileOffset || toHasFileOffset) continue
       edgeBendpoints.set(`${e.v}\u0000${e.w}`, ed.points)
     }
   }
@@ -1602,28 +1608,32 @@ export function buildNextVGraphLayout(graphNodes, options = {}) {
     containers.push(box)
   }
 
-  // Recompute layout bounds after Dagre layout.
-  let maxNodeX = 0
-  let maxNodeY = 0
+  const workspaceRectangles = [...containers]
   for (const nodeObj of graphNodes) {
     const pos = positions.get(nodeObj.id)
     if (!pos) continue
-    const r = nodeObj.kind === 'effect' ? 20 : nodeObj.kind === 'event' ? 18 : 24
-    maxNodeX = Math.max(maxNodeX, pos.x + r)
-    maxNodeY = Math.max(maxNodeY, pos.y + r)
+    const effectLabel = nodeObj.kind === 'effect' ? String(effectNodeById.get(nodeObj.id)?.label ?? '') : ''
+    const visual = getNextVGraphNodeVisual(nodeObj, effectLabel)
+    workspaceRectangles.push({
+      x: pos.x - (visual.width / 2),
+      y: pos.y - (visual.height / 2),
+      width: visual.width,
+      height: visual.height,
+    })
   }
 
-  let maxContainerX = 0
-  let maxContainerY = 0
-  for (const box of containers) {
-    maxContainerX = Math.max(maxContainerX, box.x + box.width)
-    maxContainerY = Math.max(maxContainerY, box.y + box.height)
+  const workspaceBounds = getGraphWorkspaceBounds(workspaceRectangles)
+
+  return {
+    width: workspaceBounds.width,
+    height: workspaceBounds.height,
+    viewBoxX: workspaceBounds.x,
+    viewBoxY: workspaceBounds.y,
+    positions,
+    containers,
+    fileCount,
+    nodeGroupById,
+    edgeBendpoints,
   }
-
-  const graphMeta = g.graph()
-  const width = Math.max(520, (graphMeta.width ?? 520) + 60, maxNodeX + 70, maxContainerX + 40)
-  const height = Math.max(320, (graphMeta.height ?? 320) + 60, maxNodeY + 70, maxContainerY + 40)
-
-  return { width, height, positions, containers, fileCount, nodeGroupById, edgeBendpoints }
 }
 

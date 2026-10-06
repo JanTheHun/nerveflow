@@ -1,4 +1,37 @@
 export const GRAPH_LAYOUT_STORAGE_KEY = 'local-agent.nextv.graphLayoutOverrides'
+const FILE_OFFSETS_KEY = '__fileOffsets'
+
+export function getGraphWorkspaceBounds(rectangles, options = {}) {
+  const marginX = Math.max(0, Number(options.marginX) || 40)
+  const marginY = Math.max(0, Number(options.marginY) || 40)
+  const minimumWidth = Math.max(1, Number(options.minimumWidth) || 520)
+  const minimumHeight = Math.max(1, Number(options.minimumHeight) || 320)
+  let minX = 0
+  let maxX = 0
+  let minY = 0
+  let maxY = 0
+
+  for (const rectangle of rectangles ?? []) {
+    const x = Number(rectangle?.x)
+    const y = Number(rectangle?.y)
+    const width = Number(rectangle?.width)
+    const height = Number(rectangle?.height)
+    if (![x, y, width, height].every(Number.isFinite) || width < 0 || height < 0) continue
+    minX = Math.min(minX, x)
+    maxX = Math.max(maxX, x + width)
+    minY = Math.min(minY, y)
+    maxY = Math.max(maxY, y + height)
+  }
+
+  const x = minX - marginX
+  const y = minY - marginY
+  return {
+    x,
+    y,
+    width: Math.max(minimumWidth, (maxX - minX) + (marginX * 2)),
+    height: Math.max(minimumHeight, (maxY - minY) + (marginY * 2)),
+  }
+}
 
 function normalizeLayoutDirection(value) {
   return String(value ?? '').trim().toUpperCase() === 'LR' ? 'LR' : 'TB'
@@ -40,6 +73,25 @@ export function loadGraphLayoutPositions(storage, scope) {
   return positions
 }
 
+export function loadGraphFileOffsets(storage, scope) {
+  const layouts = readStoredLayouts(storage)
+  const storedPositions = layouts[String(scope ?? '')]
+  const offsets = new Map()
+  const storedOffsets = storedPositions?.[FILE_OFFSETS_KEY]
+  if (!storedOffsets || typeof storedOffsets !== 'object' || Array.isArray(storedOffsets)) {
+    return offsets
+  }
+
+  for (const [fileKey, value] of Object.entries(storedOffsets)) {
+    if (!Array.isArray(value) || value.length < 2) continue
+    const x = Number(value[0])
+    const y = Number(value[1])
+    if (!fileKey || !Number.isFinite(x) || !Number.isFinite(y)) continue
+    offsets.set(fileKey, { x, y })
+  }
+  return offsets
+}
+
 export function saveGraphLayoutPosition(storage, scope, nodeId, position) {
   if (!storage || typeof storage.setItem !== 'function') return false
   const normalizedScope = String(scope ?? '')
@@ -54,6 +106,28 @@ export function saveGraphLayoutPosition(storage, scope, nodeId, position) {
     ? storedPositions
     : {}
   layouts[normalizedScope][normalizedNodeId] = [Math.round(x), Math.round(y)]
+  storage.setItem(GRAPH_LAYOUT_STORAGE_KEY, JSON.stringify(layouts))
+  return true
+}
+
+export function saveGraphFileOffset(storage, scope, fileKey, offset) {
+  if (!storage || typeof storage.setItem !== 'function') return false
+  const normalizedScope = String(scope ?? '')
+  const normalizedFileKey = String(fileKey ?? '').trim()
+  const x = Number(offset?.x)
+  const y = Number(offset?.y)
+  if (!normalizedScope || !normalizedFileKey || !Number.isFinite(x) || !Number.isFinite(y)) return false
+
+  const layouts = readStoredLayouts(storage)
+  const storedPositions = layouts[normalizedScope]
+  layouts[normalizedScope] = storedPositions && typeof storedPositions === 'object' && !Array.isArray(storedPositions)
+    ? storedPositions
+    : {}
+  const storedOffsets = layouts[normalizedScope][FILE_OFFSETS_KEY]
+  layouts[normalizedScope][FILE_OFFSETS_KEY] = storedOffsets && typeof storedOffsets === 'object' && !Array.isArray(storedOffsets)
+    ? storedOffsets
+    : {}
+  layouts[normalizedScope][FILE_OFFSETS_KEY][normalizedFileKey] = [Math.round(x), Math.round(y)]
   storage.setItem(GRAPH_LAYOUT_STORAGE_KEY, JSON.stringify(layouts))
   return true
 }
@@ -76,6 +150,18 @@ export function applyGraphLayoutPositions(positions, overrides) {
   for (const [nodeId, position] of overrides.entries()) {
     if (!positions.has(nodeId)) continue
     positions.set(nodeId, { x: position.x, y: position.y })
+    applied += 1
+  }
+  return applied
+}
+
+export function applyGraphFileOffsets(positions, nodeGroupById, offsets) {
+  if (!(positions instanceof Map) || !(nodeGroupById instanceof Map) || !(offsets instanceof Map)) return 0
+  let applied = 0
+  for (const [nodeId, position] of positions.entries()) {
+    const offset = offsets.get(nodeGroupById.get(nodeId))
+    if (!offset) continue
+    positions.set(nodeId, { x: position.x + offset.x, y: position.y + offset.y })
     applied += 1
   }
   return applied

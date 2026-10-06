@@ -3241,6 +3241,8 @@ export function getNextVGraphBaseMetrics() {
   return {
     width: Number(svg.dataset.baseWidth ?? 0),
     height: Number(svg.dataset.baseHeight ?? 0),
+    originX: Number(svg.dataset.baseOriginX ?? 0),
+    originY: Number(svg.dataset.baseOriginY ?? 0),
     padding: Number(svg.dataset.padding ?? 0),
   }
 }
@@ -3343,8 +3345,9 @@ export function positionNextVGraphPopover() {
   const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
   const renderScale = getNextVGraphRenderScale(zoom)
   const scaledPadding = getNextVGraphScaledPadding(zoom, viewport)
-  const nodeX = scaledPadding.x + (pos.x * renderScale)
-  const nodeY = scaledPadding.y + (pos.y * renderScale)
+  const { originX, originY } = getNextVGraphBaseMetrics()
+  const nodeX = scaledPadding.x + ((pos.x - originX) * renderScale)
+  const nodeY = scaledPadding.y + ((pos.y - originY) * renderScale)
   const margin = 14
   const gap = 28
 
@@ -3456,15 +3459,17 @@ export function captureNextVGraphViewportState(viewport = getNextVGraphViewport(
   if (!viewport || viewport.clientWidth < 2 || viewport.clientHeight < 2) {
     return { zoom }
   }
-  const { width: baseWidth, height: baseHeight } = getNextVGraphBaseMetrics()
+  const { width: baseWidth, height: baseHeight, originX, originY } = getNextVGraphBaseMetrics()
 
   const scaledPadding = getNextVGraphScaledPadding(zoom, viewport)
   const centerX = viewport.clientWidth / 2
   const centerY = viewport.clientHeight / 2
-  const graphCenterX = (viewport.scrollLeft + centerX - scaledPadding.x) / renderScale
-  const graphCenterY = (viewport.scrollTop + centerY - scaledPadding.y) / renderScale
-  const graphCenterRatioX = baseWidth > 0 ? (graphCenterX / baseWidth) : 0.5
-  const graphCenterRatioY = baseHeight > 0 ? (graphCenterY / baseHeight) : 0.5
+  const graphCenterLocalX = (viewport.scrollLeft + centerX - scaledPadding.x) / renderScale
+  const graphCenterLocalY = (viewport.scrollTop + centerY - scaledPadding.y) / renderScale
+  const graphCenterX = graphCenterLocalX + originX
+  const graphCenterY = graphCenterLocalY + originY
+  const graphCenterRatioX = baseWidth > 0 ? (graphCenterLocalX / baseWidth) : 0.5
+  const graphCenterRatioY = baseHeight > 0 ? (graphCenterLocalY / baseHeight) : 0.5
 
   return {
     zoom,
@@ -3483,35 +3488,35 @@ export function restoreNextVGraphViewportState(viewportState, viewport = getNext
   const renderScale = getNextVGraphRenderScale(zoom)
   if (!Number.isFinite(renderScale) || renderScale <= 0) return false
 
-  const { width: baseWidth, height: baseHeight } = getNextVGraphBaseMetrics()
+  const { width: baseWidth, height: baseHeight, originX, originY } = getNextVGraphBaseMetrics()
   const ratioX = Number(viewportState.graphCenterRatioX)
   const ratioY = Number(viewportState.graphCenterRatioY)
   const absoluteX = Number(viewportState.graphCenterX)
   const absoluteY = Number(viewportState.graphCenterY)
 
-  const preferredCenterX = Number.isFinite(ratioX) && baseWidth > 0
-    ? (ratioX * baseWidth)
-    : absoluteX
-  const preferredCenterY = Number.isFinite(ratioY) && baseHeight > 0
-    ? (ratioY * baseHeight)
-    : absoluteY
+  const preferredCenterX = Number.isFinite(absoluteX)
+    ? absoluteX
+    : originX + ((Number.isFinite(ratioX) && baseWidth > 0) ? (ratioX * baseWidth) : 0)
+  const preferredCenterY = Number.isFinite(absoluteY)
+    ? absoluteY
+    : originY + ((Number.isFinite(ratioY) && baseHeight > 0) ? (ratioY * baseHeight) : 0)
 
   if (!Number.isFinite(preferredCenterX) || !Number.isFinite(preferredCenterY)) {
     return false
   }
 
   const graphCenterX = baseWidth > 0
-    ? Math.max(0, Math.min(baseWidth, preferredCenterX))
-    : Math.max(0, preferredCenterX)
+    ? Math.max(originX, Math.min(originX + baseWidth, preferredCenterX))
+    : preferredCenterX
   const graphCenterY = baseHeight > 0
-    ? Math.max(0, Math.min(baseHeight, preferredCenterY))
-    : Math.max(0, preferredCenterY)
+    ? Math.max(originY, Math.min(originY + baseHeight, preferredCenterY))
+    : preferredCenterY
 
   const scaledPadding = getNextVGraphScaledPadding(zoom, viewport)
   const centerX = viewport.clientWidth / 2
   const centerY = viewport.clientHeight / 2
-  const nextScrollLeft = (graphCenterX * renderScale) + scaledPadding.x - centerX
-  const nextScrollTop = (graphCenterY * renderScale) + scaledPadding.y - centerY
+  const nextScrollLeft = ((graphCenterX - originX) * renderScale) + scaledPadding.x - centerX
+  const nextScrollTop = ((graphCenterY - originY) * renderScale) + scaledPadding.y - centerY
 
   const maxScrollLeft = Math.max(0, viewport.scrollWidth - viewport.clientWidth)
   const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight)
@@ -3545,6 +3550,7 @@ export function setNextVGraphZoom(value, options = {}) {
   const nextRenderScale = getNextVGraphRenderScale(nextZoom)
   const previousPadding = getNextVGraphScaledPadding(previousZoom, viewport)
   const nextPadding = getNextVGraphScaledPadding(nextZoom, viewport)
+  const { originX, originY } = getNextVGraphBaseMetrics()
 
   let nextScrollLeft = null
   let nextScrollTop = null
@@ -3557,10 +3563,10 @@ export function setNextVGraphZoom(value, options = {}) {
     const rect = viewport.getBoundingClientRect()
     const pointerX = anchorClientX - rect.left
     const pointerY = anchorClientY - rect.top
-    const graphX = (viewport.scrollLeft + pointerX - previousPadding.x) / previousRenderScale
-    const graphY = (viewport.scrollTop + pointerY - previousPadding.y) / previousRenderScale
-    nextScrollLeft = (graphX * nextRenderScale) + nextPadding.x - pointerX
-    nextScrollTop = (graphY * nextRenderScale) + nextPadding.y - pointerY
+    const graphX = ((viewport.scrollLeft + pointerX - previousPadding.x) / previousRenderScale) + originX
+    const graphY = ((viewport.scrollTop + pointerY - previousPadding.y) / previousRenderScale) + originY
+    nextScrollLeft = ((graphX - originX) * nextRenderScale) + nextPadding.x - pointerX
+    nextScrollTop = ((graphY - originY) * nextRenderScale) + nextPadding.y - pointerY
   }
 
   nextVGraphState.zoom = nextZoom
@@ -3854,7 +3860,9 @@ import {
   normalizeNextVGraphDirection
 } from './03_ui_controls.js'
 import {
-  applyGraphLayoutPositions
+  applyGraphLayoutPositions,
+  applyGraphFileOffsets,
+  getGraphWorkspaceBounds
 } from './graph_layout.js'
 import {
   getNextVGraphViewport,
@@ -5230,6 +5238,7 @@ export function buildNextVGraphLayout(graphNodes, options = {}) {
   const graphEdges = Array.isArray(options.graphEdges) ? options.graphEdges : []
   const effectNodeById = options.effectNodeById instanceof Map ? options.effectNodeById : new Map()
   const manualPositions = options.manualPositions instanceof Map ? options.manualPositions : new Map()
+  const fileOffsets = options.fileOffsets instanceof Map ? options.fileOffsets : new Map()
   const layoutDirection = normalizeNextVGraphDirection(options.layoutDirection)
 
   // ── 1. Build file group membership ────────────────────────────────────────
@@ -5404,13 +5413,16 @@ export function buildNextVGraphLayout(graphNodes, options = {}) {
   }
 
   applyGraphLayoutPositions(positions, manualPositions)
+  applyGraphFileOffsets(positions, nodeGroupById, fileOffsets)
 
   // ── 4. Extract edge bendpoints ─────────────────────────────────────────────
   const edgeBendpoints = new Map()
   for (const e of g.edges()) {
     const ed = g.edge(e)
     if (ed && Array.isArray(ed.points) && ed.points.length >= 2) {
-      if (movedNodeIds.has(String(e.v)) || movedNodeIds.has(String(e.w)) || manualPositions.has(String(e.v)) || manualPositions.has(String(e.w))) continue
+      const fromHasFileOffset = fileOffsets.has(nodeGroupById.get(String(e.v)))
+      const toHasFileOffset = fileOffsets.has(nodeGroupById.get(String(e.w)))
+      if (movedNodeIds.has(String(e.v)) || movedNodeIds.has(String(e.w)) || manualPositions.has(String(e.v)) || manualPositions.has(String(e.w)) || fromHasFileOffset || toHasFileOffset) continue
       edgeBendpoints.set(`${e.v}\u0000${e.w}`, ed.points)
     }
   }
@@ -5449,29 +5461,33 @@ export function buildNextVGraphLayout(graphNodes, options = {}) {
     containers.push(box)
   }
 
-  // Recompute layout bounds after Dagre layout.
-  let maxNodeX = 0
-  let maxNodeY = 0
+  const workspaceRectangles = [...containers]
   for (const nodeObj of graphNodes) {
     const pos = positions.get(nodeObj.id)
     if (!pos) continue
-    const r = nodeObj.kind === 'effect' ? 20 : nodeObj.kind === 'event' ? 18 : 24
-    maxNodeX = Math.max(maxNodeX, pos.x + r)
-    maxNodeY = Math.max(maxNodeY, pos.y + r)
+    const effectLabel = nodeObj.kind === 'effect' ? String(effectNodeById.get(nodeObj.id)?.label ?? '') : ''
+    const visual = getNextVGraphNodeVisual(nodeObj, effectLabel)
+    workspaceRectangles.push({
+      x: pos.x - (visual.width / 2),
+      y: pos.y - (visual.height / 2),
+      width: visual.width,
+      height: visual.height,
+    })
   }
 
-  let maxContainerX = 0
-  let maxContainerY = 0
-  for (const box of containers) {
-    maxContainerX = Math.max(maxContainerX, box.x + box.width)
-    maxContainerY = Math.max(maxContainerY, box.y + box.height)
+  const workspaceBounds = getGraphWorkspaceBounds(workspaceRectangles)
+
+  return {
+    width: workspaceBounds.width,
+    height: workspaceBounds.height,
+    viewBoxX: workspaceBounds.x,
+    viewBoxY: workspaceBounds.y,
+    positions,
+    containers,
+    fileCount,
+    nodeGroupById,
+    edgeBendpoints,
   }
-
-  const graphMeta = g.graph()
-  const width = Math.max(520, (graphMeta.width ?? 520) + 60, maxNodeX + 70, maxContainerX + 40)
-  const height = Math.max(320, (graphMeta.height ?? 320) + 60, maxNodeY + 70, maxContainerY + 40)
-
-  return { width, height, positions, containers, fileCount, nodeGroupById, edgeBendpoints }
 }
 
 
@@ -5551,7 +5567,9 @@ import {
 import {
   getGraphLayoutScope,
   loadGraphLayoutPositions,
+  loadGraphFileOffsets,
   saveGraphLayoutPosition,
+  saveGraphFileOffset,
   clearGraphLayoutPositions,
   getClippedGraphEdgeLine
 } from './graph_layout.js'
@@ -5579,6 +5597,7 @@ export function renderNextVGraph(data = {}, options = {}) {
   const workspaceDir = normalizeNextVWorkspaceDir(nextVWorkspaceDirInput?.value ?? '')
   const layoutScope = getGraphLayoutScope(workspaceDir, entrypointPath, layoutDirection)
   const manualPositions = loadGraphLayoutPositions(localStorage, layoutScope)
+  const manualFileOffsets = loadGraphFileOffsets(localStorage, layoutScope)
   const transitionByEvent = buildNextVGraphTransitionLookup(transitions)
   const handlerSourceByEvent = new Map(
     nodes
@@ -5693,19 +5712,22 @@ export function renderNextVGraph(data = {}, options = {}) {
 
   const nodeById = new Map(graphNodes.map((node) => [node.id, node]))
   const nodeClickHandlers = new Map()
+  const fileBoxElements = new Map()
   let suppressNodeClick = false
   let selectedNodeId = ''
 
-  const previewDraggedNode = (nodeId, origin, position, nodeElement) => {
-    const dx = position.x - origin.x
-    const dy = position.y - origin.y
-    nodeElement.setAttribute('transform', `translate(${dx} ${dy})`)
-    nextVGraphState.layoutPositions.set(nodeId, position)
+  const previewDraggedNodes = (moves) => {
+    for (const [nodeId, move] of moves.entries()) {
+      const dx = move.position.x - move.origin.x
+      const dy = move.position.y - move.origin.y
+      move.nodeElement.setAttribute('transform', `translate(${dx} ${dy})`)
+      nextVGraphState.layoutPositions.set(nodeId, move.position)
+    }
 
     for (const edgeElement of svg.querySelectorAll('.nextv-graph-edge[data-from][data-to]')) {
       const from = String(edgeElement?.dataset?.from ?? '')
       const to = String(edgeElement?.dataset?.to ?? '')
-      if (from !== nodeId && to !== nodeId) continue
+      if (!moves.has(from) && !moves.has(to)) continue
       if (from === to) continue
 
       const start = nextVGraphState.layoutPositions.get(from)
@@ -5739,6 +5761,10 @@ export function renderNextVGraph(data = {}, options = {}) {
     }
 
     positionNextVGraphPopover()
+  }
+
+  const previewDraggedNode = (nodeId, origin, position, nodeElement) => {
+    previewDraggedNodes(new Map([[nodeId, { origin, position, nodeElement }]]))
   }
 
   const bindNodeDragging = (nodeId, nodeElement, visual) => {
@@ -5795,6 +5821,73 @@ export function renderNextVGraph(data = {}, options = {}) {
 
       nodeElement.classList.add('is-dragging')
       window.addEventListener('pointermove', moveNode)
+      window.addEventListener('pointerup', finishPointerDrag)
+      window.addEventListener('pointercancel', cancelPointerDrag)
+      event.stopPropagation()
+      event.preventDefault()
+    })
+  }
+
+  const bindFileDragging = (fileKey, fileElement) => {
+    fileElement.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || !event.isPrimary) return
+      const memberMoves = new Map()
+      for (const [nodeId, groupKey] of nodeGroupById.entries()) {
+        if (groupKey !== fileKey) continue
+        const origin = nextVGraphState.layoutPositions.get(nodeId)
+        const nodeElement = nextVGraphState.nodeElements.get(nodeId)
+        if (origin && nodeElement) memberMoves.set(nodeId, { origin, position: origin, nodeElement })
+      }
+      if (memberMoves.size === 0) return
+
+      const startClientX = event.clientX
+      const startClientY = event.clientY
+      const pointerId = event.pointerId
+      const originOffset = manualFileOffsets.get(fileKey) ?? { x: 0, y: 0 }
+      let moved = false
+      let offset = originOffset
+
+      const finishDrag = (commit) => {
+        window.removeEventListener('pointermove', moveFile)
+        window.removeEventListener('pointerup', finishPointerDrag)
+        window.removeEventListener('pointercancel', cancelPointerDrag)
+        fileElement.classList.remove('is-dragging')
+        if (!moved) return
+
+        suppressNodeClick = true
+        if (commit) saveGraphFileOffset(localStorage, layoutScope, fileKey, offset)
+        const savedViewport = captureNextVGraphViewportState()
+        renderNextVGraph(data, { preserveViewport: true, viewportState: savedViewport })
+        window.setTimeout(() => {
+          suppressNodeClick = false
+        }, 0)
+      }
+
+      const moveFile = (moveEvent) => {
+        if (moveEvent.pointerId !== pointerId) return
+        const renderScale = getNextVGraphRenderScale(nextVGraphState.zoom) || 1
+        const dx = Math.round((moveEvent.clientX - startClientX) / renderScale)
+        const dy = Math.round((moveEvent.clientY - startClientY) / renderScale)
+        if (!moved && Math.hypot(dx, dy) < 3) return
+        moved = true
+        offset = { x: originOffset.x + dx, y: originOffset.y + dy }
+        for (const move of memberMoves.values()) {
+          move.position = { x: move.origin.x + dx, y: move.origin.y + dy }
+        }
+        fileElement.setAttribute('transform', `translate(${dx} ${dy})`)
+        previewDraggedNodes(memberMoves)
+        moveEvent.preventDefault()
+      }
+
+      const finishPointerDrag = (upEvent) => {
+        if (upEvent.pointerId === pointerId) finishDrag(true)
+      }
+      const cancelPointerDrag = (cancelEvent) => {
+        if (cancelEvent.pointerId === pointerId) finishDrag(false)
+      }
+
+      fileElement.classList.add('is-dragging')
+      window.addEventListener('pointermove', moveFile)
       window.addEventListener('pointerup', finishPointerDrag)
       window.addEventListener('pointercancel', cancelPointerDrag)
       event.stopPropagation()
@@ -6041,8 +6134,8 @@ export function renderNextVGraph(data = {}, options = {}) {
   resetLayoutBtn.type = 'button'
   resetLayoutBtn.className = 'nextv-graph-layout-btn'
   resetLayoutBtn.textContent = 'auto layout'
-  resetLayoutBtn.title = 'discard manual node positions'
-  resetLayoutBtn.disabled = manualPositions.size === 0
+  resetLayoutBtn.title = 'discard manual node and file positions'
+  resetLayoutBtn.disabled = manualPositions.size === 0 && manualFileOffsets.size === 0
   resetLayoutBtn.addEventListener('click', () => {
     clearGraphLayoutPositions(localStorage, layoutScope)
     renderNextVGraph(data, {
@@ -6074,8 +6167,8 @@ export function renderNextVGraph(data = {}, options = {}) {
 
   const hint = document.createElement('span')
   hint.className = 'nextv-graph-hint'
-  hint.textContent = 'drag nodes'
-  hint.title = 'drag nodes to arrange; drag the background to pan; use the wheel to zoom'
+  hint.textContent = 'drag nodes or files'
+  hint.title = 'drag nodes or file boxes to arrange; drag the background to pan; use the wheel to zoom'
 
   const autoFollowLabel = document.createElement('label')
   autoFollowLabel.className = 'nextv-graph-toolbar-check'
@@ -6205,6 +6298,8 @@ export function renderNextVGraph(data = {}, options = {}) {
   const {
     width,
     height,
+    viewBoxX,
+    viewBoxY,
     positions,
     containers,
     fileCount,
@@ -6216,6 +6311,7 @@ export function renderNextVGraph(data = {}, options = {}) {
     graphEdges,
     effectNodeById,
     manualPositions,
+    fileOffsets: manualFileOffsets,
     layoutDirection: nextVGraphState.layoutDirection,
   })
   if (fileCount > 0) {
@@ -6234,12 +6330,14 @@ export function renderNextVGraph(data = {}, options = {}) {
   nextVGraphState.detailPopoverEl = detailPopover
 
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-  svg.setAttribute('viewBox', `0 0 ${width} ${height}`)
+  svg.setAttribute('viewBox', `${viewBoxX} ${viewBoxY} ${width} ${height}`)
   svg.setAttribute('class', 'nextv-graph-svg')
   svg.setAttribute('role', 'img')
   svg.setAttribute('aria-label', 'nextV event graph')
   svg.dataset.baseWidth = String(width)
   svg.dataset.baseHeight = String(height)
+  svg.dataset.baseOriginX = String(viewBoxX)
+  svg.dataset.baseOriginY = String(viewBoxY)
   svg.dataset.padding = String(padding)
 
   const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs')
@@ -6288,6 +6386,23 @@ export function renderNextVGraph(data = {}, options = {}) {
   defs.appendChild(activeArrow)
   svg.appendChild(defs)
 
+  const appendOriginGuide = (x1, y1, x2, y2) => {
+    const guide = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+    guide.setAttribute('class', 'nextv-graph-origin-guide')
+    guide.setAttribute('x1', String(x1))
+    guide.setAttribute('y1', String(y1))
+    guide.setAttribute('x2', String(x2))
+    guide.setAttribute('y2', String(y2))
+    guide.setAttribute('aria-hidden', 'true')
+    svg.appendChild(guide)
+  }
+  if (viewBoxX <= 0 && viewBoxX + width >= 0) {
+    appendOriginGuide(0, viewBoxY, 0, viewBoxY + height)
+  }
+  if (viewBoxY <= 0 && viewBoxY + height >= 0) {
+    appendOriginGuide(viewBoxX, 0, viewBoxX + width, 0)
+  }
+
   const filesLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g')
   filesLayer.setAttribute('class', 'nextv-graph-files')
   for (const box of containers) {
@@ -6318,6 +6433,7 @@ export function renderNextVGraph(data = {}, options = {}) {
     count.textContent = `${box.memberCount}`
     group.appendChild(count)
 
+    fileBoxElements.set(box.key, group)
     filesLayer.appendChild(group)
   }
   svg.appendChild(filesLayer)
@@ -6761,6 +6877,10 @@ export function renderNextVGraph(data = {}, options = {}) {
     })
 
     svg.appendChild(group)
+  }
+
+  for (const [fileKey, fileElement] of fileBoxElements.entries()) {
+    bindFileDragging(fileKey, fileElement)
   }
 
   svg.addEventListener('click', () => setSelectedGraphNode(''))

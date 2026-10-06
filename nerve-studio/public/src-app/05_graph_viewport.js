@@ -33,6 +33,8 @@ export function getNextVGraphBaseMetrics() {
   return {
     width: Number(svg.dataset.baseWidth ?? 0),
     height: Number(svg.dataset.baseHeight ?? 0),
+    originX: Number(svg.dataset.baseOriginX ?? 0),
+    originY: Number(svg.dataset.baseOriginY ?? 0),
     padding: Number(svg.dataset.padding ?? 0),
   }
 }
@@ -135,8 +137,9 @@ export function positionNextVGraphPopover() {
   const zoom = clampNextVGraphZoom(nextVGraphState.zoom)
   const renderScale = getNextVGraphRenderScale(zoom)
   const scaledPadding = getNextVGraphScaledPadding(zoom, viewport)
-  const nodeX = scaledPadding.x + (pos.x * renderScale)
-  const nodeY = scaledPadding.y + (pos.y * renderScale)
+  const { originX, originY } = getNextVGraphBaseMetrics()
+  const nodeX = scaledPadding.x + ((pos.x - originX) * renderScale)
+  const nodeY = scaledPadding.y + ((pos.y - originY) * renderScale)
   const margin = 14
   const gap = 28
 
@@ -248,15 +251,17 @@ export function captureNextVGraphViewportState(viewport = getNextVGraphViewport(
   if (!viewport || viewport.clientWidth < 2 || viewport.clientHeight < 2) {
     return { zoom }
   }
-  const { width: baseWidth, height: baseHeight } = getNextVGraphBaseMetrics()
+  const { width: baseWidth, height: baseHeight, originX, originY } = getNextVGraphBaseMetrics()
 
   const scaledPadding = getNextVGraphScaledPadding(zoom, viewport)
   const centerX = viewport.clientWidth / 2
   const centerY = viewport.clientHeight / 2
-  const graphCenterX = (viewport.scrollLeft + centerX - scaledPadding.x) / renderScale
-  const graphCenterY = (viewport.scrollTop + centerY - scaledPadding.y) / renderScale
-  const graphCenterRatioX = baseWidth > 0 ? (graphCenterX / baseWidth) : 0.5
-  const graphCenterRatioY = baseHeight > 0 ? (graphCenterY / baseHeight) : 0.5
+  const graphCenterLocalX = (viewport.scrollLeft + centerX - scaledPadding.x) / renderScale
+  const graphCenterLocalY = (viewport.scrollTop + centerY - scaledPadding.y) / renderScale
+  const graphCenterX = graphCenterLocalX + originX
+  const graphCenterY = graphCenterLocalY + originY
+  const graphCenterRatioX = baseWidth > 0 ? (graphCenterLocalX / baseWidth) : 0.5
+  const graphCenterRatioY = baseHeight > 0 ? (graphCenterLocalY / baseHeight) : 0.5
 
   return {
     zoom,
@@ -275,35 +280,35 @@ export function restoreNextVGraphViewportState(viewportState, viewport = getNext
   const renderScale = getNextVGraphRenderScale(zoom)
   if (!Number.isFinite(renderScale) || renderScale <= 0) return false
 
-  const { width: baseWidth, height: baseHeight } = getNextVGraphBaseMetrics()
+  const { width: baseWidth, height: baseHeight, originX, originY } = getNextVGraphBaseMetrics()
   const ratioX = Number(viewportState.graphCenterRatioX)
   const ratioY = Number(viewportState.graphCenterRatioY)
   const absoluteX = Number(viewportState.graphCenterX)
   const absoluteY = Number(viewportState.graphCenterY)
 
-  const preferredCenterX = Number.isFinite(ratioX) && baseWidth > 0
-    ? (ratioX * baseWidth)
-    : absoluteX
-  const preferredCenterY = Number.isFinite(ratioY) && baseHeight > 0
-    ? (ratioY * baseHeight)
-    : absoluteY
+  const preferredCenterX = Number.isFinite(absoluteX)
+    ? absoluteX
+    : originX + ((Number.isFinite(ratioX) && baseWidth > 0) ? (ratioX * baseWidth) : 0)
+  const preferredCenterY = Number.isFinite(absoluteY)
+    ? absoluteY
+    : originY + ((Number.isFinite(ratioY) && baseHeight > 0) ? (ratioY * baseHeight) : 0)
 
   if (!Number.isFinite(preferredCenterX) || !Number.isFinite(preferredCenterY)) {
     return false
   }
 
   const graphCenterX = baseWidth > 0
-    ? Math.max(0, Math.min(baseWidth, preferredCenterX))
-    : Math.max(0, preferredCenterX)
+    ? Math.max(originX, Math.min(originX + baseWidth, preferredCenterX))
+    : preferredCenterX
   const graphCenterY = baseHeight > 0
-    ? Math.max(0, Math.min(baseHeight, preferredCenterY))
-    : Math.max(0, preferredCenterY)
+    ? Math.max(originY, Math.min(originY + baseHeight, preferredCenterY))
+    : preferredCenterY
 
   const scaledPadding = getNextVGraphScaledPadding(zoom, viewport)
   const centerX = viewport.clientWidth / 2
   const centerY = viewport.clientHeight / 2
-  const nextScrollLeft = (graphCenterX * renderScale) + scaledPadding.x - centerX
-  const nextScrollTop = (graphCenterY * renderScale) + scaledPadding.y - centerY
+  const nextScrollLeft = ((graphCenterX - originX) * renderScale) + scaledPadding.x - centerX
+  const nextScrollTop = ((graphCenterY - originY) * renderScale) + scaledPadding.y - centerY
 
   const maxScrollLeft = Math.max(0, viewport.scrollWidth - viewport.clientWidth)
   const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight)
@@ -337,6 +342,7 @@ export function setNextVGraphZoom(value, options = {}) {
   const nextRenderScale = getNextVGraphRenderScale(nextZoom)
   const previousPadding = getNextVGraphScaledPadding(previousZoom, viewport)
   const nextPadding = getNextVGraphScaledPadding(nextZoom, viewport)
+  const { originX, originY } = getNextVGraphBaseMetrics()
 
   let nextScrollLeft = null
   let nextScrollTop = null
@@ -349,10 +355,10 @@ export function setNextVGraphZoom(value, options = {}) {
     const rect = viewport.getBoundingClientRect()
     const pointerX = anchorClientX - rect.left
     const pointerY = anchorClientY - rect.top
-    const graphX = (viewport.scrollLeft + pointerX - previousPadding.x) / previousRenderScale
-    const graphY = (viewport.scrollTop + pointerY - previousPadding.y) / previousRenderScale
-    nextScrollLeft = (graphX * nextRenderScale) + nextPadding.x - pointerX
-    nextScrollTop = (graphY * nextRenderScale) + nextPadding.y - pointerY
+    const graphX = ((viewport.scrollLeft + pointerX - previousPadding.x) / previousRenderScale) + originX
+    const graphY = ((viewport.scrollTop + pointerY - previousPadding.y) / previousRenderScale) + originY
+    nextScrollLeft = ((graphX - originX) * nextRenderScale) + nextPadding.x - pointerX
+    nextScrollTop = ((graphY - originY) * nextRenderScale) + nextPadding.y - pointerY
   }
 
   nextVGraphState.zoom = nextZoom

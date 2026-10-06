@@ -2601,14 +2601,35 @@ body.is-resizing-statediff #nextv-state-diff-splitter {
   display: block;
 }
 
-.nextv-graph-files {
+.nextv-graph-origin-guide {
+  stroke: var(--graph-file-box-stroke);
+  stroke-width: 1;
+  stroke-dasharray: 4 6;
+  opacity: 0.45;
   pointer-events: none;
+}
+
+.nextv-graph-files {
+  pointer-events: auto;
 }
 
 .nextv-graph-file-box rect {
   fill: var(--graph-file-box-fill);
   stroke: var(--graph-file-box-stroke);
   stroke-width: 1.2;
+}
+
+.nextv-graph-file-box {
+  cursor: move;
+  touch-action: none;
+}
+
+.nextv-graph-file-box.is-dragging {
+  cursor: grabbing;
+}
+
+.nextv-graph-file-box.is-dragging rect {
+  filter: brightness(1.12);
 }
 
 .nextv-graph-file-label {

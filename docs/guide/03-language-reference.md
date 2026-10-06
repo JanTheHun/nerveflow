@@ -8,6 +8,17 @@ Execution model summary:
 - deterministic control flow in runtime core
 - host provides integrations (`tool`, `agent`, `script`, `operator`, `input` behavior)
 
+### DSL Design
+
+Nerveflow is an opinionated workflow DSL. It favors explicit control flow
+and bounded data transformation over unrestricted general-purpose
+programming.
+
+Collections are transformed through a small set of deterministic helpers,
+such as `take`, `find_by`, `remove_by`, `dedupe_by`, `sort`, `cut`, `length`,
+and concatenation. The language intentionally keeps mutation and arbitrary
+array manipulation limited so workflows remain inspectable and predictable.
+
 ## 1. Statements
 
 Supported statements:
@@ -21,7 +32,8 @@ Supported statements:
 - event subscription: `on "event_type" ... end`
 - external event subscription: `on external "event_type" ... end`
 - conditionals: `if ... else if ... else ... end`
-- bounded iteration: `for i in start..end ... end`
+- bounded range iteration: `for i in start..end ... end`
+- bounded collection iteration: `for item in collection ... end`
 - stop: `stop`
 - return: `return expr`
 - expression statement: function call only
@@ -86,7 +98,7 @@ Core built-ins:
 - `take(list, n)`
 - `find_by(list,key,value)`
 - `remove_by(list,key,value)`
-- `dedupe_by(list,key)`
+- `dedupe_by(list,keyOrKeys)`
 - `sort(list,key,desc=false)`
 - `cut(list,key,op,value)`
 - `exact_length(n, schema)`
@@ -142,9 +154,44 @@ Collection helper semantics:
 - `take`: returns first `n` rows from a list; non-positive `n` returns `[]`
 - `find_by`: returns first row where `row[key] == value`, else `null`
 - `remove_by`: returns a new list excluding rows where `row[key] == value`
-- `dedupe_by`: returns a new list where first occurrence of each `row[key]` is kept (stable order)
+- `dedupe_by`: returns a new list where the first occurrence of each key value is kept (stable order); `keyOrKeys` may be one flat key name or a non-empty array of flat key names for composite deduplication
 - `sort`: returns a new list sorted by `row[key]` ascending; `desc=true` reverses order; numeric values use numeric comparison, others use lexicographic order; stable within ties
 - `cut`: returns the longest prefix where `row[key] op value` is true; supported operators are `>`, `>=`, `<`, `<=`; stops at the first failure, excludes the failing item, and preserves input order; intended for meaningfully ordered lists
+
+Collection iteration semantics:
+
+- `for item in collection ... end` requires `collection` to evaluate to an array
+- the collection expression is evaluated once before the first iteration
+- items are visited in array order; an empty array skips the body
+- the loop uses a stable collection reference even if the source variable is reassigned inside the loop
+- `stop` and `return` retain their normal behavior inside collection loops
+
+Composite deduplication example:
+
+```
+state.rag = dedupe_by(state.rag + newRagResults, ["path", "section"])
+```
+
+Each key in the array is read as a flat object field. Missing fields participate
+in the composite key as `undefined`. The helper keeps the first row for each
+distinct key combination and does not mutate the input list.
+
+Example:
+
+```
+for item in newRagResults
+  state.rag = state.rag + [item]
+end
+```
+
+This replaces the equivalent indexed form:
+
+```
+for i in 0..length(newRagResults) - 1
+  item = pick(newRagResults, i)
+  state.rag = state.rag + [item]
+end
+```
 
 Current key support for collection helpers is flat key names (no dotted key traversal).
 
@@ -334,6 +381,91 @@ Each transport entry requires a `provider` field (non-empty string). All other f
 ```
 
 Loading precedence: `nerve.json#transports` → `nextv.json#transports` → `nerve.json#transportsConfig`/`nextv.json#transportsConfig` (external file reference) → `transports.json` (auto-discovered in workspace root).
+
+### Experimental System One Decision Transport
+
+`experimental.systemone` is an opt-in transport for TypeSafe/Jev-compatible decision APIs. It supports Ollama 0.35+ decision models including Tev1, Nimble, and Clef Flash through `POST /v1/systemone`.
+
+The transport supports the existing scalar `decide=[...]` shorthand and the typed multi-question `system_one={...}` contract. It is not a chat transport and never falls back to chat completion behavior.
+
+```json
+{
+  "transports": {
+    "local-decisions": {
+      "provider": "experimental.systemone",
+      "baseUrl": "http://127.0.0.1:11434"
+    }
+  },
+  "models": {
+    "ticket-router": {
+      "model": "tev1:4b",
+      "transport": "local-decisions"
+    }
+  }
+}
+```
+
+For Ollaya, point the same transport at `http://127.0.0.1:11435`, choose an Ollaya decision model, and optionally provide `apiKey` when the server requires authentication.
+
+```json
+{
+  "transports": {
+    "local-decisions": {
+      "provider": "experimental.systemone",
+      "baseUrl": "http://127.0.0.1:11435",
+      "apiKey": "${env:OLLAYA_API_KEY}"
+    }
+  }
+}
+```
+
+Scalar calls require a non-empty prompt, explicit instructions, and 2 to 26 `decide` options. Their selected option is validated by the normal `decide` contract.
+
+Typed calls use named questions, with 1 to 64 questions per request. `choice` and `score` questions take 2 to 26 criteria; `noul` returns the probability that a boolean condition is true. Nerveflow validates provider answer types, declared choice membership, score ranges, and probability ranges before returning the typed result.
+
+```nrv
+assessment = agent(
+  "ticket-router",
+  event.value,
+  system_one={
+    state: { ticket: event.value },
+    questions: {
+      team: {
+        type: "choice",
+        instructions: "Which team should handle this ticket?",
+        criteria: { billing: "Payments and refunds", technical: "Outages and integrations", other: "No match" }
+      },
+      refund_requested: {
+        type: "noul",
+        instructions: "Does the customer explicitly request a refund?"
+      },
+      urgency: {
+        type: "score",
+        instructions: "How urgent is this ticket?",
+        criteria: ["Routine", "Soon", "Urgent"]
+      }
+    }
+  }
+)
+```
+
+`assessment` is an object keyed by question name. A `choice` answer contains `choice`, `probabilities`, and `confidence`; a `noul` answer contains `noul`; a `score` answer contains `score`, `legend`, `probabilities`, and `confidence`. Provider usage, resolved model, request ID, raw answers, and per-question metadata remain attached to call metadata.
+
+Clef Flash accepts shared base64-encoded images. Enable this explicitly on the transport because Tev1 and Nimble are text-only:
+
+```json
+{
+  "transports": {
+    "local-decisions": {
+      "provider": "experimental.systemone",
+      "baseUrl": "http://127.0.0.1:11434",
+      "systemOneImages": true
+    }
+  }
+}
+```
+
+The transport rejects `returns`, `format`, `validate`, `decide` on the same call, multi-turn `messages`, event images, governed tools, retries, and contract-failure handlers rather than silently changing execution semantics. Decision models remain experimental; evaluate choices and calibration on your own data before high-stakes use.
 
 ### Models Registry
 

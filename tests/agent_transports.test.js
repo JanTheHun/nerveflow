@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createLlamaCppTransport, createOpenAICompatTransport, createOllamaTransport } from '../src/host_core/agent_transports/index.js'
+import { createLlamaCppTransport, createOpenAICompatTransport, createOllamaTransport, createSystemOneTransport } from '../src/host_core/agent_transports/index.js'
 
 function withFetchMock(mockFn, run) {
   const originalFetch = globalThis.fetch
@@ -300,6 +300,208 @@ test('createOllamaTransport.load sends empty messages and returns ok', async () 
     assert.equal(result.model, 'llama3.2')
     assert.deepEqual(capturedBody.messages, [])
     assert.equal(capturedBody.model, 'llama3.2')
+  })
+})
+
+// ── experimental System One transport ──────────────────────────────────────
+
+test('createSystemOneTransport maps a bounded decision to the System One choice API', async () => {
+  let capturedUrl = null
+  let capturedHeaders = null
+  let capturedBody = null
+  await withFetchMock(async (url, opts = {}) => {
+    capturedUrl = url
+    capturedHeaders = opts.headers
+    capturedBody = JSON.parse(opts.body ?? 'null')
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: (name) => name === 'x-typesafe-request-id' ? 'request-123' : null },
+      json: async () => ({
+        model: 'tev1:4b',
+        answers: {
+          decision: {
+            type: 'choice',
+            choice: 'refund',
+            confidence: 0.9801,
+            probabilities: { invoice: 0.002, refund: 0.986, other: 0.012 },
+          },
+        },
+        usage: { input_tokens: 42, output_tokens: 0 },
+      }),
+      text: async () => '',
+    }
+  }, async () => {
+    const callAgent = createSystemOneTransport({ timeoutMs: 5000 })
+    const result = await callAgent({
+      model: 'tev1:4b',
+      transport: { baseUrl: 'http://127.0.0.1:11434/', apiKey: 'local', keep_alive: -1 },
+      systemOne: {
+        state: 'Can I get an invoice for last month?',
+        instructions: 'What does the customer want?',
+        options: ['invoice', 'refund', 'other'],
+      },
+    })
+
+    assert.equal(capturedUrl, 'http://127.0.0.1:11434/v1/systemone')
+    assert.equal(capturedHeaders.Authorization, 'Bearer local')
+    assert.deepEqual(capturedBody, {
+      model: 'tev1:4b',
+      state: 'Can I get an invoice for last month?',
+      questions: {
+        decision: {
+          type: 'choice',
+          instructions: 'What does the customer want?',
+          criteria: { invoice: null, refund: null, other: null },
+        },
+      },
+      keep_alive: -1,
+    })
+    assert.equal(result.text, 'refund')
+    assert.equal(result.metadata.provider, 'experimental.systemone')
+    assert.equal(result.metadata.model, 'tev1:4b')
+    assert.equal(result.metadata.requestId, 'request-123')
+    assert.equal(result.metadata.usage.totalTokens, 42)
+    assert.equal(result.metadata.decision.confidence, 0.9801)
+    assert.deepEqual(result.metadata.decision.probabilities, { invoice: 0.002, refund: 0.986, other: 0.012 })
+  })
+})
+
+test('createSystemOneTransport maps typed multi-question decisions and images', async () => {
+  let capturedBody = null
+  await withFetchMock(async (_url, opts = {}) => {
+    capturedBody = JSON.parse(opts.body ?? 'null')
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({
+        model: 'clef-flash:9b',
+        answers: {
+          team: { type: 'choice', choice: 'technical', probabilities: { billing: 0.01, technical: 0.99 }, confidence: 0.98 },
+          urgent: { type: 'noul', noul: 0.95 },
+          severity: { type: 'score', score: 1.8, legend: { 0: 'Low', 1: 'High', 2: 'Critical' }, probabilities: { 0: 0.05, 1: 0.2, 2: 0.75 }, confidence: 0.65 },
+        },
+        usage: { input_tokens: 20, output_tokens: 3 },
+      }),
+      text: async () => '',
+    }
+  }, async () => {
+    const callAgent = createSystemOneTransport({ timeoutMs: 5000 })
+    const result = await callAgent({
+      model: 'clef-flash:9b',
+      systemOne: {
+        state: { ticket: 'Checkout has failed for an hour.' },
+        images: ['base64-image'],
+        questions: {
+          team: { type: 'choice', instructions: 'Which team?', criteria: { billing: null, technical: null } },
+          urgent: { type: 'noul', instructions: 'Is it urgent?' },
+          severity: { type: 'score', instructions: 'How severe?', criteria: ['Low', 'High', 'Critical'] },
+        },
+      },
+    })
+
+    assert.deepEqual(capturedBody.questions, {
+      team: { type: 'choice', instructions: 'Which team?', criteria: { billing: null, technical: null } },
+      urgent: { type: 'noul', instructions: 'Is it urgent?' },
+      severity: { type: 'score', instructions: 'How severe?', criteria: ['Low', 'High', 'Critical'] },
+    })
+    assert.deepEqual(capturedBody.images, ['base64-image'])
+    assert.equal(result.value.team.choice, 'technical')
+    assert.equal(result.value.urgent.noul, 0.95)
+    assert.equal(result.value.severity.score, 1.8)
+    assert.equal(result.metadata.decisions.severity.legend['2'], 'Critical')
+  })
+})
+
+test('createSystemOneTransport rejects typed answers outside declared criteria', async () => {
+  await withFetchMock(async () => ({
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    json: async () => ({ answers: { route: { type: 'choice', choice: 'unknown' } } }),
+    text: async () => '',
+  }), async () => {
+    const callAgent = createSystemOneTransport({ timeoutMs: 5000 })
+    await assert.rejects(
+      () => callAgent({
+        model: 'nimble:9b',
+        systemOne: { state: 'route me', questions: { route: { type: 'choice', instructions: 'Route?', criteria: { billing: null, other: null } } } },
+      }),
+      (err) => {
+        assert.equal(err.code, 'SYSTEMONE_INVALID_RESPONSE')
+        assert.match(err.message, /not a declared criterion/)
+        return true
+      },
+    )
+  })
+})
+
+test('createSystemOneTransport surfaces provider errors', async () => {
+  await withFetchMock(async () => ({
+    ok: false,
+    status: 422,
+    statusText: 'Unprocessable Entity',
+    text: async () => '{"error":"state is too long","code":"STATE_TRUNCATED"}',
+  }), async () => {
+    const callAgent = createSystemOneTransport({ timeoutMs: 5000 })
+    await assert.rejects(
+      () => callAgent({
+        model: 'tev1:4b',
+        systemOne: { state: 'request', instructions: 'Classify it.', options: ['yes', 'no'] },
+      }),
+      (err) => {
+        assert.equal(err.code, 'SYSTEMONE_HTTP_ERROR')
+        assert.equal(err.status, 422)
+        assert.match(err.message, /STATE_TRUNCATED/)
+        return true
+      },
+    )
+  })
+})
+
+test('createSystemOneTransport rejects malformed successful responses', async () => {
+  await withFetchMock(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ model: 'tev1:4b', answers: { decision: { type: 'choice' } } }),
+    text: async () => '',
+  }), async () => {
+    const callAgent = createSystemOneTransport({ timeoutMs: 5000 })
+    await assert.rejects(
+      () => callAgent({
+        model: 'tev1:4b',
+        systemOne: { state: 'request', instructions: 'Classify it.', options: ['yes', 'no'] },
+      }),
+      (err) => {
+        assert.equal(err.code, 'SYSTEMONE_INVALID_RESPONSE')
+        assert.match(err.message, /answers\.decision\.choice/)
+        return true
+      },
+    )
+  })
+})
+
+test('createSystemOneTransport times out with AGENT_TRANSPORT_TIMEOUT', async () => {
+  await withFetchMock((_url, options = {}) => new Promise((resolve, reject) => {
+    options.signal?.addEventListener('abort', () => {
+      const err = new Error('aborted')
+      err.name = 'AbortError'
+      reject(err)
+    }, { once: true })
+  }), async () => {
+    const callAgent = createSystemOneTransport({ timeoutMs: 5 })
+    await assert.rejects(
+      () => callAgent({
+        model: 'tev1:4b',
+        systemOne: { state: 'request', instructions: 'Classify it.', options: ['yes', 'no'] },
+      }),
+      (err) => {
+        assert.equal(err.code, 'AGENT_TRANSPORT_TIMEOUT')
+        assert.match(err.message, /timed out/i)
+        return true
+      },
+    )
   })
 })
 

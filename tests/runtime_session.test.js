@@ -1029,6 +1029,177 @@ test('callAgent resolves transport config from transports.map and passes it to c
   assert.deepEqual(calls[0].transport, { provider: 'ollama', base_url: 'http://localhost:11434' })
 })
 
+test('callAgent builds an experimental System One descriptor from a decide contract', async () => {
+  const calls = []
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { router: { model: 'ticket-router' } } },
+      models: { map: { 'ticket-router': { model: 'tev1:4b', transport: 'decisions' } } },
+      transports: { map: { decisions: { provider: 'experimental.systemone', baseUrl: 'http://localhost:11434' } } },
+      operators: { map: {} },
+    },
+    callAgent: async (payload) => {
+      calls.push(payload)
+      return { text: 'refund', metadata: { provider: 'experimental.systemone' } }
+    },
+    defaultModel: '',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+    buildDecideGuidance: () => 'Return only a declared option.',
+    validateDecideOutput: (value) => value,
+  })
+
+  const result = await adapter.callAgent({
+    agent: 'router',
+    prompt: 'Third charge this year. Refund it today.',
+    instructions: 'Which support intent best matches the customer message?',
+    decide: ['invoice', 'refund', 'other'],
+    event: {},
+  })
+
+  assert.equal(result.value, 'refund')
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].systemOne, {
+    state: 'Third charge this year. Refund it today.',
+    instructions: 'Which support intent best matches the customer message?',
+    options: ['invoice', 'refund', 'other'],
+  })
+  assert.equal(calls[0].messages.some((message) => /Return only a declared option/.test(message.content)), true)
+})
+
+test('callAgent forwards a typed System One descriptor and returns its structured value', async () => {
+  const calls = []
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { router: { model: 'decision-model' } } },
+      models: { map: { 'decision-model': { model: 'nimble:9b', transport: 'decisions' } } },
+      transports: { map: { decisions: { provider: 'experimental.systemone', baseUrl: 'http://localhost:11434' } } },
+      operators: { map: {} },
+    },
+    callAgent: async (payload) => {
+      calls.push(payload)
+      return {
+        text: '',
+        value: { intent: { type: 'choice', choice: 'refund' }, refund: { type: 'noul', noul: 0.99 } },
+        metadata: { provider: 'experimental.systemone' },
+      }
+    },
+    defaultModel: '',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  const result = await adapter.callAgent({
+    agent: 'router',
+    prompt: 'ignored by System One state',
+    system_one: {
+      state: { ticket: 'Please refund the duplicate charge.' },
+      questions: {
+        intent: { type: 'choice', instructions: 'Which intent?', criteria: { refund: null, other: null } },
+        refund: { type: 'noul', instructions: 'Is a refund requested?' },
+      },
+    },
+    event: {},
+  })
+
+  assert.deepEqual(result.value, { intent: { type: 'choice', choice: 'refund' }, refund: { type: 'noul', noul: 0.99 } })
+  assert.deepEqual(calls[0].systemOne, {
+    state: { ticket: 'Please refund the duplicate charge.' },
+    questions: {
+      intent: { type: 'choice', instructions: 'Which intent?', criteria: { refund: null, other: null } },
+      refund: { type: 'noul', instructions: 'Is a refund requested?' },
+    },
+  })
+})
+
+test('callAgent rejects typed System One images without explicit transport capability', async () => {
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { router: { model: 'decision-model' } } },
+      models: { map: { 'decision-model': { model: 'nimble:9b', transport: 'decisions' } } },
+      transports: { map: { decisions: { provider: 'experimental.systemone' } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => 'unused',
+    defaultModel: '',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  await assert.rejects(
+    () => adapter.callAgent({
+      agent: 'router',
+      prompt: 'check the image',
+      system_one: {
+        state: 'check the image',
+        images: ['base64-image'],
+        questions: { complete: { type: 'noul', instructions: 'Is it complete?' } },
+      },
+      event: {},
+    }),
+    (err) => {
+      assert.equal(err.code, 'SYSTEMONE_UNSUPPORTED_CALL_CONFIG')
+      assert.match(err.message, /systemOneImages=true/)
+      return true
+    },
+  )
+})
+
+test('callAgent rejects multi-turn calls for experimental System One transports', async () => {
+  const adapter = createHostAdapter({
+    workspaceDir: { absolutePath: '/workspace', relativePath: '.' },
+    workspaceConfig: {
+      tools: { allow: null, aliases: {} },
+      agents: { profiles: { router: { model: 'ticket-router' } } },
+      models: { map: { 'ticket-router': { model: 'tev1:4b', transport: 'decisions' } } },
+      transports: { map: { decisions: { provider: 'experimental.systemone' } } },
+      operators: { map: {} },
+    },
+    callAgent: async () => 'unused',
+    defaultModel: '',
+    resolvePathFromBaseDirectory: (baseDir, pathRaw) => ({ absolutePath: `${baseDir}/${pathRaw}`, relativePath: pathRaw }),
+    existsSync: () => false,
+    runNextVScriptFromFile: async () => ({ returnValue: undefined }),
+    validateOutputContract: () => {},
+    appendAgentFormatInstructions: (prompt) => prompt,
+    normalizeAgentFormattedOutput: (value) => value,
+  })
+
+  await assert.rejects(
+    () => adapter.callAgent({
+      agent: 'router',
+      prompt: 'Route this request.',
+      instructions: 'Which intent matches?',
+      messages: [{ role: 'user', content: 'Earlier request.' }],
+      decide: ['support', 'other'],
+      event: {},
+    }),
+    (err) => {
+      assert.equal(err.code, 'SYSTEMONE_UNSUPPORTED_CALL_CONFIG')
+      assert.match(err.message, /messages/)
+      return true
+    },
+  )
+})
+
 test('callAgent omits transport field when no transports.map entry exists', async () => {
   const calls = []
   const adapter = createHostAdapter({

@@ -23,6 +23,7 @@ import {
 
 import {
   createOpenAICompatTransport,
+  createSystemOneTransport,
 } from '../../src/host_core/agent_transports/index.js'
 
 import {
@@ -121,7 +122,16 @@ function loadWorkspaceEnv(workspaceAbsolutePath) {
 }
 
 const port = parseInt(process.env.PORT || '4190', 10)
-const callAgent = createOpenAICompatTransport()
+const chatCallAgent = createOpenAICompatTransport()
+const systemOneCallAgent = createSystemOneTransport()
+
+const callAgent = async (payload) => {
+  const provider = String(payload?.transport?.provider ?? '').trim().toLowerCase()
+  if (provider === 'experimental.systemone') {
+    return systemOneCallAgent(payload)
+  }
+  return chatCallAgent(payload)
+}
 
 async function main() {
   const cliOptions = parseCliOptions(process.argv.slice(2))

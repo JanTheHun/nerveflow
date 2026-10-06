@@ -141,7 +141,7 @@ function cloneEventForViolation(event) {
 
 function normalizeAgentTransportResult(result) {
   if (typeof result === 'string') {
-    return { text: result, metadata: null }
+    return { text: result, value: result, metadata: null }
   }
 
   if (result && typeof result === 'object' && !Array.isArray(result)) {
@@ -157,11 +157,16 @@ function normalizeAgentTransportResult(result) {
       ? result.metadata
       : null
 
-    return { text, metadata }
+    return {
+      text,
+      value: Object.prototype.hasOwnProperty.call(result, 'value') ? result.value : text,
+      metadata,
+    }
   }
 
   return {
     text: String(result ?? '').trim(),
+    value: result,
     metadata: null,
   }
 }
@@ -644,7 +649,7 @@ export function createHostAdapter({
       throw new Error(`Tool "${toolName}" is not available in this host yet.`)
     },
 
-    callAgent: async ({ agent, model: modelRaw, prompt, instructions, messages, tools, format, returns, validate, decide, retry_on_contract_violation, on_contract_violation, state, locals, event, line, statement, sourcePath, sourceLine, onGovernedToolEvent }) => {
+    callAgent: async ({ agent, model: modelRaw, prompt, instructions, messages, tools, format, returns, validate, decide, system_one, retry_on_contract_violation, on_contract_violation, state, locals, event, line, statement, sourcePath, sourceLine, onGovernedToolEvent }) => {
       const agentName = String(agent ?? '').trim()
       const directModel = String(modelRaw ?? '').trim()
 
@@ -753,6 +758,14 @@ export function createHostAdapter({
       const basePromptText = joinComposedTextParts(promptResolved.segments.map((text) => ({ type: 'text', text })))
       const formattedPrompt = format ? appendAgentFormatInstructions(basePromptText, format) : basePromptText
       const inputMessages = Array.isArray(messages) ? messages : []
+      const transportProvider = String(resolvedTransportConfig?.provider ?? '').trim().toLowerCase()
+      const isExperimentalSystemOne = transportProvider === 'experimental.systemone'
+
+      if (system_one != null && !isExperimentalSystemOne) {
+        const err = new Error(`${callLabel} system_one requires an experimental.systemone transport.`)
+        err.code = 'SYSTEMONE_UNSUPPORTED_CALL_CONFIG'
+        throw err
+      }
 
       const retryLimit = Number.isInteger(retry_on_contract_violation) ? Math.max(0, retry_on_contract_violation) : 0
       const requestedToolsPolicy = normalizeRequestedToolsPolicy(tools)
@@ -806,6 +819,58 @@ export function createHostAdapter({
       const governedToolDefinitions = governedToolDefinitionsResult.definitions
       const governedToolSchemaSourceByName = governedToolDefinitionsResult.schemaSourceByName
       const governedToolWireToCanonical = governedToolDefinitionsResult.wireToCanonical
+
+      let systemOne = null
+      if (isExperimentalSystemOne) {
+        const unsupported = []
+        if (returns != null) unsupported.push('returns')
+        if (format) unsupported.push('format')
+        if (inputMessages.length > 0) unsupported.push('messages')
+        if (governedToolsEnabled) unsupported.push('tools')
+        if (retryLimit > 0) unsupported.push('retry_on_contract_violation')
+        if (extractEventImages(event).length > 0) unsupported.push('event images')
+
+        if (unsupported.length > 0) {
+          const err = new Error(`${callLabel} uses unsupported System One fields: ${unsupported.join(', ')}.`)
+          err.code = 'SYSTEMONE_UNSUPPORTED_CALL_CONFIG'
+          throw err
+        }
+        if (decide == null && system_one == null) {
+          const err = new Error(`${callLabel} with experimental.systemone requires decide=[...] or system_one={...}.`)
+          err.code = 'SYSTEMONE_UNSUPPORTED_CALL_CONFIG'
+          throw err
+        }
+        if (decide != null && !basePromptText.trim()) {
+          const err = new Error(`${callLabel} with experimental.systemone requires a non-empty prompt.`)
+          err.code = 'SYSTEMONE_UNSUPPORTED_CALL_CONFIG'
+          throw err
+        }
+        if (decide != null && !baseInstructions.trim()) {
+          const err = new Error(`${callLabel} with experimental.systemone requires explicit instructions.`)
+          err.code = 'SYSTEMONE_UNSUPPORTED_CALL_CONFIG'
+          throw err
+        }
+        if (decide != null && (decide.length < 2 || decide.length > 26)) {
+          const err = new Error(`${callLabel} with experimental.systemone requires 2 to 26 decide options.`)
+          err.code = 'SYSTEMONE_UNSUPPORTED_CALL_CONFIG'
+          throw err
+        }
+
+        if (system_one != null) {
+          if (Array.isArray(system_one.images) && system_one.images.length > 0 && resolvedTransportConfig?.systemOneImages !== true) {
+            const err = new Error(`${callLabel} system_one images require transport.systemOneImages=true.`)
+            err.code = 'SYSTEMONE_UNSUPPORTED_CALL_CONFIG'
+            throw err
+          }
+          systemOne = system_one
+        } else {
+          systemOne = {
+            state: basePromptText,
+            instructions: baseInstructions,
+            options: [...decide],
+          }
+        }
+      }
 
       let lastViolation = null
       let previousViolationKey = null
@@ -911,6 +976,7 @@ export function createHostAdapter({
                 messages: chatMessages,
                 ...(governedToolsEnabled ? { tools: governedToolDefinitions } : {}),
                 ...(resolvedTransportConfig !== null ? { transport: resolvedTransportConfig } : {}),
+                ...(systemOne ? { systemOne } : {}),
               },
             }
           : null
@@ -983,6 +1049,9 @@ export function createHostAdapter({
             const callPayload = { model: resolvedModel, messages: chatMessages }
             if (resolvedTransportConfig !== null) {
               callPayload.transport = resolvedTransportConfig
+            }
+            if (systemOne) {
+              callPayload.systemOne = systemOne
             }
             transportResult = await callAgent(callPayload)
             resolvedOutput = normalizeAgentTransportResult(transportResult)
@@ -1174,7 +1243,7 @@ export function createHostAdapter({
         }
 
         const elapsedMs = Math.max(0, Date.now() - callStartedAt)
-        const { text: raw, metadata } = resolvedOutput
+        const { text: raw, value: transportValue, metadata } = resolvedOutput
         const shouldAttachToolsSummary = governedToolsEnabled
         const hasBaseMetadata = metadata && typeof metadata === 'object'
         const metadataWithTiming = (hasBaseMetadata || slowWarningEmitted || shouldAttachToolsSummary)
@@ -1204,6 +1273,17 @@ export function createHostAdapter({
               request: requestDebugPayload,
             }
           : metadataWithTiming
+        if (system_one != null) {
+          appendAttemptLineage({
+            ...attemptLineageBase,
+            status: 'success',
+            contract: 'system_one_validated',
+          })
+          return {
+            value: transportValue,
+            metadata: withRetryLineageMetadata(metadataWithDebug),
+          }
+        }
         if (returns != null) {
           if (validate === 'none') {
             appendAttemptLineage({

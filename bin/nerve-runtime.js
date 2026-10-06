@@ -10,6 +10,7 @@ import {
   createLlamaCppFileDebugLogger,
   createOpenAICompatTransport,
   createOpenAICompatFileDebugLogger,
+  createSystemOneTransport,
 } from '../src/host_core/agent_transports/index.js'
 
 import {
@@ -182,6 +183,10 @@ const openAICompatCallAgent = createOpenAICompatTransport({
   timeoutMs: AGENT_TRANSPORT_TIMEOUT_MS,
 })
 
+const systemOneCallAgent = createSystemOneTransport({
+  timeoutMs: AGENT_TRANSPORT_TIMEOUT_MS,
+})
+
 function parseModelRouteHint(modelRaw) {
   const model = String(modelRaw ?? '').trim()
   const localMatch = model.match(/^(?:local|llama(?:\.cpp)?):\s*(.+)$/i)
@@ -206,24 +211,26 @@ function normalizeForcedRoute(rawTransport) {
 
 const forcedRoute = normalizeForcedRoute(AGENT_TRANSPORT)
 
-callAgent = async ({ model, messages, transport: callTransportConfig }) => {
+callAgent = async ({ model, messages, systemOne, transport: callTransportConfig }) => {
   const hint = parseModelRouteHint(model)
   const selectedRoute = forcedRoute || hint.route || (AGENT_ROUTING_DEFAULT === 'local' ? 'local' : 'external')
   const selectedModel = hint.model || String(model ?? '').trim()
+  const provider = String(callTransportConfig?.provider ?? '').trim().toLowerCase()
   const strategy = forcedRoute
     ? 'forced-transport'
-    : (hint.route ? hint.strategy : 'default-route')
+    : (provider === 'experimental.systemone' ? 'transport-provider' : (hint.route ? hint.strategy : 'default-route'))
 
-  const provider = String(callTransportConfig?.provider ?? '').trim().toLowerCase()
   let transport
-  if (provider === 'openai_compat') {
+  if (provider === 'experimental.systemone') {
+    transport = systemOneCallAgent
+  } else if (provider === 'openai_compat') {
     transport = openAICompatCallAgent
   } else if (selectedRoute === 'local') {
     transport = localCallAgent
   } else {
     transport = externalCallAgent
   }
-  const transportResult = await transport({ model: selectedModel, messages, transport: callTransportConfig })
+  const transportResult = await transport({ model: selectedModel, messages, systemOne, transport: callTransportConfig })
 
   if (typeof transportResult === 'string') {
     return {
@@ -273,12 +280,21 @@ callAgent.capabilities = {
     id: 'ollama',
     locality: 'external',
   },
+  systemOne: {
+    id: 'experimental.systemone',
+    experimental: true,
+    supports_preload: false,
+  },
 }
 
 callAgent.load = async ({ model, transport: callTransportConfig }) => {
   const hint = parseModelRouteHint(model)
   const selectedRoute = forcedRoute || hint.route || (AGENT_ROUTING_DEFAULT === 'local' ? 'local' : 'external')
   const selectedModel = hint.model || String(model ?? '').trim()
+  const provider = String(callTransportConfig?.provider ?? '').trim().toLowerCase()
+  if (provider === 'experimental.systemone') {
+    return { ok: false, model: selectedModel, reason: 'transport does not support preload' }
+  }
   const selectedTransport = selectedRoute === 'local' ? localCallAgent : externalCallAgent
   if (typeof selectedTransport.load !== 'function' || !selectedTransport.capabilities?.supports_preload) {
     return { ok: false, model: selectedModel, reason: 'transport does not support preload' }

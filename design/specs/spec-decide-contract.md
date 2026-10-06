@@ -208,7 +208,6 @@ No new opcode required in v1.
 - Semantic similarity
 - Alias or synonym tables
 - Automatic fallback to `"other"`
-- Multi-field decisions
 - Non-literal `decide` expressions
 - Structured object or array outputs
 
@@ -254,6 +253,8 @@ end
 ## One-Line Summary
 
 `decide` is a scalar binding contract for `model(...)` or `agent(...)` that constrains plain text output to a declared option set, producing a bounded scalar string through runtime-authoritative validation.
+
+For named multi-question System One decisions, use the separate `system_one` contract specified in `spec-system-one-decision-contract.md`. It does not change `decide` syntax, normalization, retry behavior, or scalar return semantics.
 
 ---
 

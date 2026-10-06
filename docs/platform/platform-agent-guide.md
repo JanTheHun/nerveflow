@@ -40,6 +40,16 @@ Platform engineering agents should preserve and evolve:
 6. Syntax convenience should not weaken inspectability or IR clarity.
 7. Language features should map cleanly to explicit lowering behavior.
 
+## Experimental System One Decisions
+
+The `experimental.systemone` transport is a host-level experiment for TypeSafe/Jev-compatible decision services, including Ollama 0.35+ decision models such as Tev1, Nimble, and Clef Flash. It maps scalar `decide=[...]` calls to one `choice` question and maps `system_one={ state, questions, images? }` calls directly to the named typed-question protocol at `/v1/systemone`.
+
+The experiment preserves explicit DSL lowering, contract validation, bounded-control provenance, and failure routing. The host adapter retains Nerveflow's exact-literal `decide` validation and validates `system_one` response types, criteria membership, score ranges, and probabilities before returning typed results. The compiler marks static typed calls as `contract_kind: "system_one"` for graph inspection.
+
+The shared typed envelope permits 1 to 64 named questions. `choice` and `score` accept 2 to 26 criteria; `noul` accepts optional true/false descriptions. `state` may be text, an object, or an array. Images are only accepted when the configured transport declares `systemOneImages: true`; the runtime does not infer model capabilities from a model name. Provider confidence, probabilities, usage, resolved model, request ID, raw answers, and typed answer metadata remain observable.
+
+The transport explicitly rejects chat-only or conflicting behavior (`messages`, event images, tools, free-form output, structured `returns`, `validate`, retries, and contract-failure handlers) rather than emulating those capabilities. `decide` and `system_one` are mutually exclusive.
+
 ## Typical platform work areas
 
 Platform engineering may involve:

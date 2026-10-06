@@ -759,6 +759,17 @@ function buildResolvedCallSummary({
     const compactTransport = transport
       ? Object.fromEntries(Object.entries(transport).filter(([, value]) => value !== undefined && value !== ''))
       : null
+    const systemOne = wirePayload.systemOne && typeof wirePayload.systemOne === 'object'
+      ? {
+          questionCount: wirePayload.systemOne.questions && typeof wirePayload.systemOne.questions === 'object'
+            ? Object.keys(wirePayload.systemOne.questions).length
+            : 1,
+          questions: wirePayload.systemOne.questions && typeof wirePayload.systemOne.questions === 'object'
+            ? Object.fromEntries(Object.entries(wirePayload.systemOne.questions).map(([name, question]) => [name, String(question?.type ?? '')]))
+            : { decision: 'choice' },
+          ...(Array.isArray(wirePayload.systemOne.images) ? { imageCount: wirePayload.systemOne.images.length } : {}),
+        }
+      : null
 
     return {
       model: String(wirePayload.model ?? resolvedModel ?? '').trim(),
@@ -766,6 +777,7 @@ function buildResolvedCallSummary({
       messages: finalMessages,
       ...(toolNames.length > 0 ? { toolNames } : {}),
       ...(compactTransport && Object.keys(compactTransport).length > 0 ? { transport: compactTransport } : {}),
+      ...(systemOne ? { systemOne } : {}),
     }
   }
 

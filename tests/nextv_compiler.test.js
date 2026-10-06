@@ -11,6 +11,39 @@ test('compiler lowers assignment call into call opcode with dst', () => {
   assert.deepEqual(ir[0].dst, ['x'])
 })
 
+test('compiler annotates literal System One decision calls', () => {
+  const statements = parseNextVScript('result = agent("router", "q", system_one={ state: "q", questions: { route: { type: "choice", instructions: "Route?", criteria: { yes: null, no: null } } } })')
+  const ir = compileAST(statements)
+
+  assert.equal(ir[0].op, 'agent_call')
+  assert.equal(ir[0].contract_kind, 'system_one')
+  assert.deepEqual(ir[0].system_one_questions, {
+    route: { type: 'choice', instructions: 'Route?', criteria: { yes: null, no: null } },
+  })
+})
+
+test('compiler annotates literal System One model calls without changing their opcode', () => {
+  const statements = parseNextVScript('result = model("decision-model", "q", system_one={ state: "q", questions: { sufficient: { type: "noul", instructions: "Enough?" } } })')
+  const ir = compileAST(statements)
+
+  assert.equal(ir[0].op, 'call')
+  assert.equal(ir[0].name, 'model')
+  assert.equal(ir[0].contract_kind, 'system_one')
+  assert.deepEqual(ir[0].system_one_questions, {
+    sufficient: { type: 'noul', instructions: 'Enough?' },
+  })
+})
+
+test('compiler annotates literal System One questions when state is dynamic', () => {
+  const statements = parseNextVScript('result = model("decision-model", "q", system_one={ state: { question: event.value }, questions: { sufficient: { type: "noul", instructions: "Enough?" } } })')
+  const ir = compileAST(statements)
+
+  assert.equal(ir[0].contract_kind, 'system_one')
+  assert.deepEqual(ir[0].system_one_questions, {
+    sufficient: { type: 'noul', instructions: 'Enough?' },
+  })
+})
+
 test('compiler lowers standalone call with null dst', () => {
   const statements = parseNextVScript('tool("get_time")')
   const ir = compileAST(statements)
@@ -99,6 +132,22 @@ test('compiler lowers for loop with frozen end bound and back-jump', () => {
   const ir = compileAST(statements)
 
   assert.equal(ir.some((instr) => instr.op === 'call' && instr.name === '__nextv_for_validate_range'), true)
+  assert.equal(ir.some((instr) => instr.op === 'branch'), true)
+  assert.equal(ir.some((instr) => instr.op === 'jump'), true)
+})
+
+test('compiler lowers for-each loop with collection validation and back-jump', () => {
+  const statements = parseNextVScript([
+    'items = [1, 2]',
+    'for item in items',
+    'output text item',
+    'end',
+  ].join('\n'))
+
+  const ir = compileAST(statements)
+
+  assert.equal(ir.some((instr) => instr.op === 'call' && instr.name === '__nextv_for_validate_collection'), true)
+  assert.equal(ir.some((instr) => instr.op === 'call' && instr.name === '__nextv_for_validate_range'), false)
   assert.equal(ir.some((instr) => instr.op === 'branch'), true)
   assert.equal(ir.some((instr) => instr.op === 'jump'), true)
 })

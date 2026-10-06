@@ -193,6 +193,54 @@ test('for loop iterates deterministically', async () => {
   assert.equal(result.locals.sum, 6)
 })
 
+test('for-each loop iterates array items in order', async () => {
+  const result = await runNextVScript([
+    'items = [1, 2, 3]',
+    'sum = 0',
+    'for item in items',
+    'sum = sum + item',
+    'end',
+  ].join('\n'))
+
+  assert.equal(result.locals.sum, 6)
+})
+
+test('for-each loop evaluates the collection once and skips empty arrays', async () => {
+  const result = await runNextVScript([
+    'items = []',
+    'visited = 0',
+    'for item in items',
+    'visited = visited + 1',
+    'end',
+  ].join('\n'))
+
+  assert.equal(result.locals.visited, 0)
+})
+
+test('for-each loop keeps iterating after source reassignment', async () => {
+  const result = await runNextVScript([
+    'items = [1, 2, 3]',
+    'seen = []',
+    'for item in items',
+    'seen = seen + [item]',
+    'items = []',
+    'end',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.seen, [1, 2, 3])
+})
+
+test('for-each loop rejects non-array collections', async () => {
+  await assert.rejects(
+    () => runNextVScript('for item in "not an array"\nend'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_FOR_COLLECTION')
+      return true
+    },
+  )
+})
+
 test('input() can read from event payload by default', async () => {
   const result = await runNextVScript([
     'message = input()',
@@ -854,6 +902,45 @@ test('dedupe_by() keeps first occurrence for each key value', async () => {
     { id: 1, title: 'first' },
     { id: 2, title: 'alpha' },
   ])
+})
+
+test('dedupe_by() supports stable composite keys', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"path\\":\\"a\\",\\"section\\":\\"b\\",\\"kind\\":\\"x\\"},{\\"path\\":\\"a\\",\\"section\\":\\"b\\",\\"kind\\":\\"duplicate\\"},{\\"path\\":\\"a\\",\\"section\\":\\"c\\",\\"kind\\":\\"y\\"},{\\"path\\":\\"a\\",\\"section\\":\\"c\\",\\"kind\\":\\"duplicate-2\\"}]")',
+    'deduped = dedupe_by(items, ["path", "section"])',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.deduped, [
+    { path: 'a', section: 'b', kind: 'x' },
+    { path: 'a', section: 'c', kind: 'y' },
+  ])
+})
+
+test('dedupe_by() preserves distinct composite values and missing-field identity', async () => {
+  const result = await runNextVScript([
+    'items = from_json("[{\\"path\\":\\"a\\",\\"section\\":\\"bc\\"},{\\"path\\":\\"ab\\",\\"section\\":\\"c\\"},{\\"path\\":\\"a\\"},{\\"path\\":\\"a\\"},{\\"path\\":\\"a\\",\\"section\\":null},{\\"path\\":\\"a\\",\\"section\\":null}]")',
+    'deduped = dedupe_by(items, ["path", "section"])',
+  ].join('\n'))
+
+  assert.deepEqual(result.locals.deduped, [
+    { path: 'a', section: 'bc' },
+    { path: 'ab', section: 'c' },
+    { path: 'a' },
+    { path: 'a', section: null },
+  ])
+})
+
+test('dedupe_by() rejects invalid composite key arrays', async () => {
+  for (const keyExpression of ['[]', '["path", ""]', '["path", 1]']) {
+    await assert.rejects(
+      () => runNextVScript(`dedupe_by(from_json("[{\\"path\\":\\"a\\"}]"), ${keyExpression})`),
+      (err) => {
+        assert.equal(err instanceof NextVError, true)
+        assert.equal(err.code, 'INVALID_COLLECTION_ARGUMENT')
+        return true
+      },
+    )
+  }
 })
 
 test('sort() returns a new list sorted by key ascending by default', async () => {
@@ -3606,5 +3693,67 @@ test('model() with decide throws AGENT_RETURN_CONTRACT_VIOLATION on mismatch aft
       return true
     },
   )
+})
+
+test('agent() validates and forwards a typed System One decision descriptor', async () => {
+  const calls = []
+  const result = await runNextVScript([
+    'result = agent("router", "classify this", system_one={',
+    '  state: { ticket: "refund me" },',
+    '  questions: {',
+    '    intent: { type: "choice", instructions: "Which intent?", criteria: { refund: null, other: "No match" } },',
+    '    refund: { type: "noul", instructions: "Is a refund requested?" },',
+    '    urgency: { type: "score", instructions: "How urgent?", criteria: ["Low", "High"] }',
+    '  }',
+    '})',
+  ].join('\n'), {
+    callAgent: async (payload) => {
+      calls.push(payload)
+      return { intent: { type: 'choice', choice: 'refund' }, refund: { type: 'noul', noul: 1 }, urgency: { type: 'score', score: 1 } }
+    },
+  })
+
+  assert.deepEqual(result.locals.result.intent, { type: 'choice', choice: 'refund' })
+  assert.deepEqual(calls[0].system_one, {
+    state: { ticket: 'refund me' },
+    questions: {
+      intent: { type: 'choice', instructions: 'Which intent?', criteria: { refund: null, other: 'No match' } },
+      refund: { type: 'noul', instructions: 'Is a refund requested?' },
+      urgency: { type: 'score', instructions: 'How urgent?', criteria: ['Low', 'High'] },
+    },
+  })
+})
+
+test('agent() rejects System One descriptors combined with decide', async () => {
+  await assert.rejects(
+    () => runNextVScript('result = agent("router", "q", decide=["yes", "no"], system_one={ state: "q", questions: { answer: { type: "noul", instructions: "Yes?" } } })'),
+    (err) => {
+      assert.equal(err instanceof NextVError, true)
+      assert.equal(err.code, 'INVALID_CALL_CONFIG')
+      assert.match(err.message, /system_one.*decide/i)
+      return true
+    },
+  )
+})
+
+test('model() validates and forwards a typed System One decision descriptor', async () => {
+  const calls = []
+  const result = await runNextVScript([
+    'result = model("decision-model", "classify this", system_one={',
+    '  state: { ticket: "refund me" },',
+    '  questions: { sufficient: { type: "noul", instructions: "Is it sufficient?" } }',
+    '})',
+  ].join('\n'), {
+    callAgent: async (payload) => {
+      calls.push(payload)
+      return { sufficient: { type: 'noul', noul: 0.9 } }
+    },
+  })
+
+  assert.deepEqual(result.locals.result, { sufficient: { type: 'noul', noul: 0.9 } })
+  assert.deepEqual(calls[0].system_one, {
+    state: { ticket: 'refund me' },
+    questions: { sufficient: { type: 'noul', instructions: 'Is it sufficient?' } },
+  })
 })
 

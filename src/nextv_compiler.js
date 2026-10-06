@@ -30,6 +30,42 @@ function getStaticDecideOptions(args) {
   return null
 }
 
+function getStaticExpressionValue(expr) {
+  if (!expr || typeof expr !== 'object') return undefined
+  if (['string', 'number', 'boolean', 'null'].includes(expr.type)) return expr.value
+  if (expr.type === 'array') {
+    const values = []
+    for (const element of expr.elements ?? []) {
+      const value = getStaticExpressionValue(element)
+      if (value === undefined) return undefined
+      values.push(value)
+    }
+    return values
+  }
+  if (expr.type === 'object') {
+    const value = {}
+    for (const entry of expr.entries ?? []) {
+      const entryValue = getStaticExpressionValue(entry.valueExpr)
+      if (entryValue === undefined) return undefined
+      value[entry.key] = entryValue
+    }
+    return value
+  }
+  return undefined
+}
+
+function getStaticSystemOneDescriptor(args) {
+  for (const arg of args ?? []) {
+    if (arg?.kind !== 'named' || String(arg.name ?? '').trim() !== 'system_one') continue
+    if (arg.expr?.type !== 'object') return null
+    const questionsEntry = (arg.expr.entries ?? []).find((entry) => entry.key === 'questions')
+    const questions = getStaticExpressionValue(questionsEntry?.valueExpr)
+    if (!questions || typeof questions !== 'object' || Array.isArray(questions)) return null
+    return { questions }
+  }
+  return null
+}
+
 function makeCallInstruction(callExpr, line, statement, dst) {
   const base = {
     args: callExpr.args,
@@ -44,10 +80,20 @@ function makeCallInstruction(callExpr, line, statement, dst) {
   if (callExpr.name === 'agent') {
     const unbound = hasStaticValidateNoneArg(callExpr.args)
     const decideOptions = getStaticDecideOptions(callExpr.args)
+    const systemOne = getStaticSystemOneDescriptor(callExpr.args)
     if (decideOptions != null) {
       return { op: 'agent_call', contract_kind: 'decide', decide_options: decideOptions, normalization: 'decide_v1', ...base }
     }
+    if (systemOne != null) {
+      return { op: 'agent_call', contract_kind: 'system_one', system_one_questions: systemOne.questions, ...base }
+    }
     return unbound ? { op: 'agent_call', unbound: true, ...base } : { op: 'agent_call', ...base }
+  }
+  if (callExpr.name === 'model') {
+    const systemOne = getStaticSystemOneDescriptor(callExpr.args)
+    if (systemOne != null) {
+      return { op: 'call', name: 'model', contract_kind: 'system_one', system_one_questions: systemOne.questions, ...base }
+    }
   }
   if (callExpr.name === 'script') {
     return { op: 'script_call', ...base }
@@ -106,6 +152,55 @@ function forIncrementExpr(variable) {
       {
         type: 'number',
         value: 1,
+      },
+    ],
+  }
+}
+
+function forEachSlotName(kind, statementIndex) {
+  return `__nextv_for_each_${kind}_${statementIndex}`
+}
+
+function forEachContinueCondition(indexSlot, collectionSlot) {
+  return {
+    type: 'compare',
+    operator: '<',
+    left: {
+      type: 'path',
+      path: [indexSlot],
+    },
+    right: {
+      type: 'call',
+      name: 'length',
+      args: [{
+        kind: 'positional',
+        expr: {
+          type: 'path',
+          path: [collectionSlot],
+        },
+      }],
+    },
+  }
+}
+
+function forEachItemExpr(collectionSlot, indexSlot) {
+  return {
+    type: 'call',
+    name: 'pick',
+    args: [
+      {
+        kind: 'positional',
+        expr: {
+          type: 'path',
+          path: [collectionSlot],
+        },
+      },
+      {
+        kind: 'positional',
+        expr: {
+          type: 'path',
+          path: [indexSlot],
+        },
       },
     ],
   }
@@ -422,6 +517,61 @@ export function compileAST(statements, options = {}) {
       continue
     }
 
+    if (stmt.type === 'for_each') {
+      const collectionSlot = forEachSlotName('collection', i)
+      const indexSlot = forEachSlotName('index', i)
+
+      pushInstr(withSourceMeta({
+        op: 'assign',
+        dst: [collectionSlot],
+        src: stmt.collectionExpr,
+        line: stmt.line,
+        statement: stmt.statement,
+      }, stmt))
+
+      pushInstr(withSourceMeta({
+        op: 'call',
+        name: '__nextv_for_validate_collection',
+        args: [{
+          kind: 'positional',
+          expr: {
+            type: 'path',
+            path: [collectionSlot],
+          },
+        }],
+        dst: null,
+        line: stmt.line,
+        statement: stmt.statement,
+      }, stmt))
+
+      pushInstr(withSourceMeta({
+        op: 'assign',
+        dst: [indexSlot],
+        src: { type: 'number', value: 0 },
+        line: stmt.line,
+        statement: stmt.statement,
+      }, stmt))
+
+      const branchIndex = pushInstr(withSourceMeta({
+        op: 'branch',
+        cond: forEachContinueCondition(indexSlot, collectionSlot),
+        ifFalse: -1,
+        line: stmt.line,
+        statement: stmt.statement,
+      }, stmt))
+      patchStmtIndex(branchIndex, 'ifFalse', stmt.endIndex + 1, stmt.line, stmt.statement)
+      forBranchByStmtIndex.set(i, branchIndex)
+
+      pushInstr(withSourceMeta({
+        op: 'assign',
+        dst: [stmt.variable],
+        src: forEachItemExpr(collectionSlot, indexSlot),
+        line: stmt.line,
+        statement: stmt.statement,
+      }, stmt))
+      continue
+    }
+
     if (stmt.type === 'end') {
       const owner = statements[stmt.startIndex]
       if (owner?.type === 'for') {
@@ -445,6 +595,31 @@ export function compileAST(statements, options = {}) {
             code: 'INVALID_IR_JUMP_TARGET',
             statement: stmt.statement,
             message: 'For loop jump target could not be resolved.',
+          })
+        }
+      }
+      if (owner?.type === 'for_each') {
+        const indexSlot = forEachSlotName('index', stmt.startIndex)
+        pushInstr(withSourceMeta({
+          op: 'assign',
+          dst: [indexSlot],
+          src: forIncrementExpr(indexSlot),
+          line: stmt.line,
+          statement: stmt.statement,
+        }, stmt))
+        const jumpIndex = pushInstr(withSourceMeta({
+          op: 'jump',
+          target: forBranchByStmtIndex.get(stmt.startIndex),
+          line: stmt.line,
+          statement: stmt.statement,
+        }, stmt))
+        if (typeof instructions[jumpIndex].target !== 'number') {
+          throw errorFactory({
+            line: stmt.line,
+            kind: 'validation',
+            code: 'INVALID_IR_JUMP_TARGET',
+            statement: stmt.statement,
+            message: 'For-each loop jump target could not be resolved.',
           })
         }
       }

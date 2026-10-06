@@ -145,7 +145,7 @@ When starting, this host attempts to load `.env` from the target workspace direc
 
 This allows workspace config entries like `${env:OPENAI_BASE_URL}` to resolve without requiring a separate shell export step.
 
-This host uses the OpenAI-compatible transport by default for `agent()` / `model()` calls. The resolved transport configuration from workspace `transports` and `models` is passed through to the request layer.
+This host uses the OpenAI-compatible transport by default for `agent()` / `model()` calls. It additionally dispatches `provider: "experimental.systemone"` to the TypeSafe-compatible System One decision transport. The resolved transport configuration from workspace `transports` and `models` is passed through to the request layer.
 
 ## Notes
 

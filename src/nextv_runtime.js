@@ -25,6 +25,7 @@ const AGENT_NAMED_ARG_ALLOWLIST = new Set([
   'returns',
   'validate',
   'decide',
+  'system_one',
   'retry_on_contract_violation',
   'on_contract_violation',
 ])
@@ -38,6 +39,7 @@ const MODEL_NAMED_ARG_ALLOWLIST = new Set([
   'returns',
   'validate',
   'decide',
+  'system_one',
   'retry_on_contract_violation',
   'on_contract_violation',
 ])
@@ -942,25 +944,37 @@ export function parseNextVScript(source, options = {}) {
     }
 
     if (trimmed.startsWith('for ')) {
-      const match = /^for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([\s\S]+?)\.\.([\s\S]+)$/.exec(trimmed)
-      if (!match) {
+      const rangeMatch = /^for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([\s\S]+?)\.\.([\s\S]+)$/.exec(trimmed)
+      const collectionMatch = /^for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([\s\S]+)$/.exec(trimmed)
+      if (!rangeMatch && !collectionMatch) {
         throw nextvError({
           line,
           kind: 'parse',
           code: 'INVALID_FOR_SYNTAX',
           statement,
-          message: 'Invalid for syntax. Expected: for <var> in <start>..<end>.',
+          message: 'Invalid for syntax. Expected: for <var> in <start>..<end> or for <var> in <collection>.',
         })
       }
-      statements.push({
-        type: 'for',
-        line,
-        statement,
-        ...sourceMeta,
-        variable: match[1],
-        startExpr: parseExpression(match[2].trim(), line, statement),
-        endExpr: parseExpression(match[3].trim(), line, statement),
-      })
+      if (rangeMatch) {
+        statements.push({
+          type: 'for',
+          line,
+          statement,
+          ...sourceMeta,
+          variable: rangeMatch[1],
+          startExpr: parseExpression(rangeMatch[2].trim(), line, statement),
+          endExpr: parseExpression(rangeMatch[3].trim(), line, statement),
+        })
+      } else {
+        statements.push({
+          type: 'for_each',
+          line,
+          statement,
+          ...sourceMeta,
+          variable: collectionMatch[1],
+          collectionExpr: parseExpression(collectionMatch[2].trim(), line, statement),
+        })
+      }
       continue
     }
 
@@ -1053,7 +1067,7 @@ export function parseNextVScript(source, options = {}) {
   const stack = []
   for (let i = 0; i < statements.length; i++) {
     const stmt = statements[i]
-    if (stmt.type === 'if' || stmt.type === 'for') {
+    if (stmt.type === 'if' || stmt.type === 'for' || stmt.type === 'for_each') {
       stack.push({ index: i, type: stmt.type, hasElse: false, lastBranchIndex: i })
       continue
     }
@@ -1420,6 +1434,94 @@ function normalizeAgentReturnsValue(value, context) {
     })
   }
   return value
+}
+
+function normalizeSystemOneDescriptor(value) {
+  if (!isPlainObject(value)) {
+    const err = new Error('system_one must be an object with state and questions fields.')
+    err.code = 'INVALID_CALL_CONFIG'
+    throw err
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(value, 'state') || value.state == null || (typeof value.state !== 'string' && !Array.isArray(value.state) && !isPlainObject(value.state))) {
+    const err = new Error('system_one.state is required and must be a string, object, or array.')
+    err.code = 'INVALID_CALL_CONFIG'
+    throw err
+  }
+
+  if (!isPlainObject(value.questions)) {
+    const err = new Error('system_one.questions must be an object of named questions.')
+    err.code = 'INVALID_CALL_CONFIG'
+    throw err
+  }
+
+  const questionEntries = Object.entries(value.questions)
+  if (questionEntries.length < 1 || questionEntries.length > 64) {
+    const err = new Error('system_one.questions must contain 1 to 64 named questions.')
+    err.code = 'INVALID_CALL_CONFIG'
+    throw err
+  }
+
+  const questions = {}
+  for (const [nameRaw, question] of questionEntries) {
+    const name = String(nameRaw).trim()
+    if (!name || !isPlainObject(question)) {
+      const err = new Error(`system_one question "${nameRaw}" must be a non-empty named object.`)
+      err.code = 'INVALID_CALL_CONFIG'
+      throw err
+    }
+
+    const type = String(question.type ?? '').trim().toLowerCase()
+    const instructions = String(question.instructions ?? '').trim()
+    if (!['choice', 'noul', 'score'].includes(type) || !instructions) {
+      const err = new Error(`system_one question "${name}" requires a supported type and non-empty instructions.`)
+      err.code = 'INVALID_CALL_CONFIG'
+      throw err
+    }
+
+    const normalizedQuestion = { type, instructions }
+    if (type === 'choice') {
+      if (!isPlainObject(question.criteria)) {
+        const err = new Error(`system_one choice question "${name}" requires an object criteria map.`)
+        err.code = 'INVALID_CALL_CONFIG'
+        throw err
+      }
+      const criteria = Object.entries(question.criteria)
+      if (criteria.length < 2 || criteria.length > 26 || criteria.some(([key, description]) => !String(key).trim() || (description !== null && typeof description !== 'string'))) {
+        const err = new Error(`system_one choice question "${name}" requires 2 to 26 non-empty option names with string or null descriptions.`)
+        err.code = 'INVALID_CALL_CONFIG'
+        throw err
+      }
+      normalizedQuestion.criteria = Object.fromEntries(criteria)
+    } else if (type === 'score') {
+      if (!Array.isArray(question.criteria) || question.criteria.length < 2 || question.criteria.length > 26 || question.criteria.some((level) => typeof level !== 'string' || !level.trim())) {
+        const err = new Error(`system_one score question "${name}" requires 2 to 26 non-empty string levels.`)
+        err.code = 'INVALID_CALL_CONFIG'
+        throw err
+      }
+      normalizedQuestion.criteria = [...question.criteria]
+    } else if (question.criteria != null) {
+      const criteriaKeys = isPlainObject(question.criteria) ? Object.keys(question.criteria) : []
+      if (!isPlainObject(question.criteria) || criteriaKeys.length !== 2 || !Object.prototype.hasOwnProperty.call(question.criteria, 'true') || !Object.prototype.hasOwnProperty.call(question.criteria, 'false') || Object.values(question.criteria).some((description) => typeof description !== 'string' || !description.trim())) {
+        const err = new Error(`system_one noul question "${name}" criteria must be a true/false description map.`)
+        err.code = 'INVALID_CALL_CONFIG'
+        throw err
+      }
+      normalizedQuestion.criteria = { ...question.criteria }
+    }
+    questions[name] = normalizedQuestion
+  }
+
+  const descriptor = { state: value.state, questions }
+  if (value.images != null) {
+    if (!Array.isArray(value.images) || value.images.some((image) => typeof image !== 'string' || !image.trim())) {
+      const err = new Error('system_one.images must be an array of non-empty base64 image strings.')
+      err.code = 'INVALID_CALL_CONFIG'
+      throw err
+    }
+    descriptor.images = [...value.images]
+  }
+  return descriptor
 }
 
 function normalizeAgentToolsPolicy(value, context, usageLabel = 'agent()') {
@@ -2122,6 +2224,14 @@ function buildFunctions(options, runtimeContext) {
     return keyName
   }
 
+  const requireDedupeKeyNames = (value) => {
+    if (!Array.isArray(value)) return [requireKeyName(value, 'dedupe_by')]
+    if (value.length === 0 || value.some((entry) => typeof entry !== 'string' || !entry.trim())) {
+      collectionError('INVALID_COLLECTION_ARGUMENT', 'dedupe_by() requires a non-empty string key or array of non-empty string keys.')
+    }
+    return value.map((entry) => entry.trim())
+  }
+
     const requireCutOperator = (value) => {
       const operator = String(value ?? '').trim()
       if (operator === '>' || operator === '>=' || operator === '<' || operator === '<=') {
@@ -2170,13 +2280,25 @@ function buildFunctions(options, runtimeContext) {
     },
     dedupe_by: ({ positional }) => {
       const list = requireArray(positional[0], 'dedupe_by')
-      const keyName = requireKeyName(positional[1], 'dedupe_by')
-      const seen = new Set()
+      const keyNames = requireDedupeKeyNames(positional[1])
+      const terminal = {}
+      const seen = new Map()
       const out = []
       for (const entry of list) {
-        const keyValue = readKey(entry, keyName)
-        if (seen.has(keyValue)) continue
-        seen.add(keyValue)
+        let branch = seen
+        let duplicate = true
+        for (const keyName of keyNames) {
+          const keyValue = readKey(entry, keyName)
+          let nextBranch = branch.get(keyValue)
+          if (!nextBranch) {
+            nextBranch = new Map()
+            branch.set(keyValue, nextBranch)
+            duplicate = false
+          }
+          branch = nextBranch
+        }
+        if (duplicate && branch.has(terminal)) continue
+        branch.set(terminal, true)
         out.push(entry)
       }
       return out
@@ -2398,6 +2520,18 @@ function buildFunctions(options, runtimeContext) {
       }
       return true
     },
+    __nextv_for_validate_collection: ({ positional }) => {
+      if (!Array.isArray(positional[0])) {
+        throw nextvError({
+          line: runtimeContext.line,
+          kind: 'runtime',
+          code: 'INVALID_FOR_COLLECTION',
+          statement: runtimeContext.statement,
+          message: 'For-each collection must be an array.',
+        })
+      }
+      return true
+    },
     tool: async ({ positional, named, state, event, locals, line, statement }) => {
       const toolName = String(positional[0] ?? named?.name ?? '').trim()
       if (!toolName) {
@@ -2453,7 +2587,7 @@ function buildFunctions(options, runtimeContext) {
           kind: 'runtime',
           code: 'INVALID_AGENT_ARGUMENT',
           statement,
-          message: `agent() received unsupported named argument "${key}". Use: agent, prompt, instructions, messages, tools, format, returns, validate, decide, retry_on_contract_violation, on_contract_violation.`,
+          message: `agent() received unsupported named argument "${key}". Use: agent, prompt, instructions, messages, tools, format, returns, validate, decide, system_one, retry_on_contract_violation, on_contract_violation.`,
         })
       }
 
@@ -2495,6 +2629,12 @@ function buildFunctions(options, runtimeContext) {
 
       const returns = normalizeAgentReturnsValue(named?.returns ?? null, context)
       const decideOptions = named?.decide ?? null
+      let systemOne = null
+      try {
+        systemOne = named?.system_one == null ? null : normalizeSystemOneDescriptor(named.system_one)
+      } catch (err) {
+        throw nextvError({ line, kind: 'runtime', code: err.code ?? 'INVALID_CALL_CONFIG', statement, message: err.message })
+      }
 
       if (decideOptions != null) {
         if (returns != null) {
@@ -2526,6 +2666,16 @@ function buildFunctions(options, runtimeContext) {
             message: String(err.message ?? 'Invalid decide options.'),
           })
         }
+      }
+
+      if (systemOne != null && (returns != null || decideOptions != null || format || named?.validate != null || named?.retry_on_contract_violation != null || named?.on_contract_violation != null || messages.length > 0 || toolsPolicy.mode !== 'disabled')) {
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_CALL_CONFIG',
+          statement,
+          message: 'agent() system_one is incompatible with returns, decide, format, validate, retries, contract handlers, messages, and tools.',
+        })
       }
 
       const validateRaw = String(named?.validate ?? '').trim().toLowerCase()
@@ -2594,6 +2744,7 @@ function buildFunctions(options, runtimeContext) {
           returns,
           validate,
           decide: decideOptions,
+          system_one: systemOne,
           retry_on_contract_violation: retryCount,
         },
       }, {
@@ -2614,6 +2765,7 @@ function buildFunctions(options, runtimeContext) {
           returns,
           validate,
           decide: decideOptions,
+          system_one: systemOne,
           retry_on_contract_violation: retryCount,
           on_contract_violation: onViolationExpr,
           state,
@@ -2732,7 +2884,7 @@ function buildFunctions(options, runtimeContext) {
           kind: 'runtime',
           code: 'INVALID_MODEL_ARGUMENT',
           statement,
-          message: `model() received unsupported named argument "${key}". Use: model, prompt, instructions, messages, tools, format, returns, validate, decide, retry_on_contract_violation, on_contract_violation.`,
+          message: `model() received unsupported named argument "${key}". Use: model, prompt, instructions, messages, tools, format, returns, validate, decide, system_one, retry_on_contract_violation, on_contract_violation.`,
         })
       }
 
@@ -2774,6 +2926,12 @@ function buildFunctions(options, runtimeContext) {
 
       const returns = normalizeAgentReturnsValue(named?.returns ?? null, context)
       const decideOptions = named?.decide ?? null
+      let systemOne = null
+      try {
+        systemOne = named?.system_one == null ? null : normalizeSystemOneDescriptor(named.system_one)
+      } catch (err) {
+        throw nextvError({ line, kind: 'runtime', code: err.code ?? 'INVALID_CALL_CONFIG', statement, message: err.message })
+      }
 
       if (decideOptions != null) {
         if (returns != null) {
@@ -2805,6 +2963,16 @@ function buildFunctions(options, runtimeContext) {
             message: String(err.message ?? 'Invalid decide options.'),
           })
         }
+      }
+
+      if (systemOne != null && (returns != null || decideOptions != null || format || named?.validate != null || named?.retry_on_contract_violation != null || named?.on_contract_violation != null || messages.length > 0 || toolsPolicy.mode !== 'disabled')) {
+        throw nextvError({
+          line,
+          kind: 'runtime',
+          code: 'INVALID_CALL_CONFIG',
+          statement,
+          message: 'model() system_one is incompatible with returns, decide, format, validate, retries, contract handlers, messages, and tools.',
+        })
       }
 
       const validateRaw = String(named?.validate ?? '').trim().toLowerCase()
@@ -2873,6 +3041,7 @@ function buildFunctions(options, runtimeContext) {
           returns,
           validate,
           decide: decideOptions,
+          system_one: systemOne,
           retry_on_contract_violation: retryCount,
         },
       }, {
@@ -2893,6 +3062,7 @@ function buildFunctions(options, runtimeContext) {
           returns,
           validate,
           decide: decideOptions,
+          system_one: systemOne,
           retry_on_contract_violation: retryCount,
           on_contract_violation: onViolationExpr,
           state,

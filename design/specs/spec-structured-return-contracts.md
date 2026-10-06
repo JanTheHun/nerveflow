@@ -35,6 +35,7 @@ Related boundary mode:
 - `decide=[...]` is supported as scalar bounded-decision shorthand for single-value routing decisions.
 - `returns={...}` remains the structured object/array contract mode.
 - `decide` and `returns` are mutually exclusive for the same call.
+- `system_one={...}` is a separate typed decision-protocol contract for compatible `experimental.systemone` transports; it is specified in `spec-system-one-decision-contract.md` and is mutually exclusive with `returns` and `decide`.
 
 ---
 
